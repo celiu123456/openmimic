@@ -74,6 +74,41 @@ process env vars. To enable `persona_speak`, users must add
 `LLM_API_KEY: !!js process.env.LLM_API_KEY` to the env block and export the
 key in their shell, or hardcode it.
 
+## Test 4: persona_speak with LLM env vars (PASSED)
+
+The `!!js process.env.VAR` approach works -- the key is that the env vars
+must be exported in the launching shell before calling dsh. The previous
+failure (Test 3) was because the env vars were not set.
+
+```
+$ cd /home/liuce/code/openmimic-wt/e-shells && \
+  export $(grep -E '^(LLM_BASE_URL|LLM_API_KEY|LLM_MODEL)=' /path/to/.env | xargs) && \
+  DSH_HOME=/tmp/openmimic-dsh-test DSH_PERMISSION_MODE=danger-full-access \
+  dsh --profile openmimic-test \
+  "Use the mcp__openmimic__persona_speak tool with subjectId 'limo' and message '最近什么打算'. Report the persona's reply verbatim."
+
+The persona `limo` replied verbatim:
+
+> 先歇着。没想那么远。
+```
+
+**Config used** (`cordis.patch.yml` env block):
+```yaml
+env:
+  OPENMIMIC_DB: /tmp/openmimic-dsh-test/openmimic.db
+  LLM_BASE_URL: !!js process.env.LLM_BASE_URL
+  LLM_API_KEY: !!js process.env.LLM_API_KEY
+  LLM_MODEL: !!js process.env.LLM_MODEL
+```
+
+**Model**: deepseek-flash (via LLM_MODEL env var, forwarded to OpenMimic's
+OpenAI-compatible client which calls `https://api.deepseek.com/v1`).
+
+**Important**: All three `!!js` env vars must resolve to strings at YAML
+parse time. If any is undefined (not exported), the config fails schema
+validation with `expected { ... env?: { [key: string]: string } ... }`.
+Export all three before running dsh.
+
 ## Pitfall discovered: `- insert:` is required for new entries
 
 The cordis patch format distinguishes between patching existing entries (bare

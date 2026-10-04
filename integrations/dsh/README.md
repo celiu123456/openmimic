@@ -56,19 +56,42 @@ namespace: `persona_list`, `persona_context`, `persona_speak`,
 | `OPENMIMIC_DB` | no       | Database path; defaults to `data/openmimic.db`     |
 | `LLM_BASE_URL` | no       | OpenAI-compatible endpoint for `persona_speak`     |
 | `LLM_API_KEY`  | no       | API key for the upstream model                     |
-| `LLM_MODEL`    | no       | Model name (e.g. `deepseek-chat`)                  |
+| `LLM_MODEL`    | no       | Model name (e.g. `deepseek-flash`)                 |
 
 Without LLM env vars the server still starts. `persona_list`,
 `persona_context`, and `room_run` (with demo data) work without a model;
 only `persona_speak` returns an error when no key is configured.
 
+To enable `persona_speak`, add LLM env vars to the `env` block using
+`!!js` tags that read from your shell environment:
+
+```yaml
+        env:
+          OPENMIMIC_DB: /absolute/path/to/openmimic/data/openmimic.db
+          LLM_BASE_URL: !!js process.env.LLM_BASE_URL
+          LLM_API_KEY: !!js process.env.LLM_API_KEY
+          LLM_MODEL: !!js process.env.LLM_MODEL
+```
+
+Then export the values before running dsh:
+
+```sh
+export LLM_BASE_URL=https://api.deepseek.com/v1
+export LLM_API_KEY=sk-xxx
+export LLM_MODEL=deepseek-flash
+```
+
+**Important**: all `!!js` env vars must resolve to strings. If any is
+undefined (not exported), dsh fails with a schema validation error.
+
 ## Usage
 
 ```sh
-# headless one-shot
+# headless one-shot (no LLM needed)
 dsh --profile headless "Use mcp__openmimic__persona_list to list available personas"
 
-# ask a persona to speak (requires LLM env vars)
+# ask a persona to speak (requires LLM env vars exported)
+export LLM_BASE_URL=https://api.deepseek.com/v1 LLM_API_KEY=sk-xxx LLM_MODEL=deepseek-flash
 dsh --profile headless "Use mcp__openmimic__persona_speak with subjectId 'limo' and message '最近什么打算'"
 ```
 

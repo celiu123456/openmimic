@@ -25,7 +25,12 @@
         env:
           OPENMIMIC_DB: /path/to/openmimic/data/openmimic.db  # <-- or any writable path
           # Optional: provide an OpenAI-compatible endpoint for persona_speak.
-          # The key must resolve at YAML parse time; use !!js to read an env var:
-          #   LLM_BASE_URL: https://api.deepseek.com/v1
-          #   LLM_API_KEY: !!js process.env.LLM_API_KEY
-          #   LLM_MODEL: deepseek-chat
+          # All three !!js values must resolve to non-empty strings at YAML
+          # parse time, so export them in your shell before running dsh:
+          #   export LLM_BASE_URL=https://api.deepseek.com/v1
+          #   export LLM_API_KEY=sk-xxx
+          #   export LLM_MODEL=deepseek-flash
+          # Then uncomment the lines below:
+          # LLM_BASE_URL: !!js process.env.LLM_BASE_URL
+          # LLM_API_KEY: !!js process.env.LLM_API_KEY
+          # LLM_MODEL: !!js process.env.LLM_MODEL
