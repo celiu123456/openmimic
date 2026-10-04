@@ -1,8 +1,11 @@
 import type {
   Claim,
+  CorpusItem,
   CourtEvent,
   CourtReport,
   CourtSession,
+  Divergence,
+  Episode,
   Room,
   RoomUtterance,
   Subject,
@@ -452,6 +455,11 @@ export const DEMO_CLAIMS: readonly Claim[] = [
     evidence: ['t-faxiao', 't-mother', 't-subordinate'],
     status: 'surviving',
     courtSessionId: DEMO_COURT_SESSION_ID,
+    kind: 'pattern',
+    domain: 'observable',
+    context: { situation: '遇到压力时' },
+    witnessIds: ['w-faxiao', 'w-mother', 'w-subordinate'],
+    episodeIds: ['ep-faxiao-1', 'ep-mother-2', 'ep-subordinate-2'],
   },
   {
     id: 'c-limo-2',
@@ -461,6 +469,10 @@ export const DEMO_CLAIMS: readonly Claim[] = [
     evidence: ['t-subordinate', 't-faxiao'],
     status: 'surviving',
     courtSessionId: DEMO_COURT_SESSION_ID,
+    kind: 'pattern',
+    domain: 'observable',
+    witnessIds: ['w-subordinate', 'w-faxiao'],
+    episodeIds: ['ep-subordinate-1', 'ep-faxiao-2'],
   },
   {
     id: 'c-limo-3',
@@ -471,6 +483,11 @@ export const DEMO_CLAIMS: readonly Claim[] = [
     qualifiers: ['只在他觉得被逼到墙角、又不愿让家人担心的时候'],
     status: 'surviving',
     courtSessionId: DEMO_COURT_SESSION_ID,
+    kind: 'pattern',
+    domain: 'observable',
+    context: { situation: '面临重大决定时' },
+    witnessIds: ['w-boss', 'w-ex'],
+    episodeIds: ['ep-boss-3', 'ep-ex-1'],
   },
   {
     id: 'c-limo-4',
@@ -481,6 +498,11 @@ export const DEMO_CLAIMS: readonly Claim[] = [
     qualifiers: ['只在亲密关系里成立'],
     status: 'surviving',
     courtSessionId: DEMO_COURT_SESSION_ID,
+    kind: 'observation',
+    domain: 'observable',
+    context: { audience: '对亲密的人' },
+    witnessIds: ['w-faxiao', 'w-ex'],
+    episodeIds: ['ep-faxiao-3', 'ep-ex-2'],
   },
   {
     id: 'c-limo-5',
@@ -488,8 +510,25 @@ export const DEMO_CLAIMS: readonly Claim[] = [
     text: '林默情绪稳定、很少发火。',
     conviction: 0,
     evidence: ['t-mother'],
-    status: 'retired',
+    status: 'contested',
     courtSessionId: DEMO_COURT_SESSION_ID,
+    kind: 'observation',
+    domain: 'observable',
+    witnessIds: ['w-mother'],
+  },
+  {
+    id: 'c-limo-5b',
+    subjectId: DEMO_SUBJECT_ID,
+    text: '林默生气时不表现在外,而是冷处理或事后一条条反驳。',
+    conviction: 0,
+    evidence: ['t-boss', 't-faxiao'],
+    status: 'contested',
+    courtSessionId: DEMO_COURT_SESSION_ID,
+    kind: 'pattern',
+    domain: 'observable',
+    context: { situation: '生气时' },
+    witnessIds: ['w-boss', 'w-faxiao'],
+    episodeIds: ['ep-boss-1'],
   },
   {
     id: 'c-limo-6',
@@ -499,7 +538,290 @@ export const DEMO_CLAIMS: readonly Claim[] = [
     evidence: ['t-netizen', 't-boss'],
     status: 'surviving',
     courtSessionId: DEMO_COURT_SESSION_ID,
+    kind: 'pattern',
+    domain: 'internal',
+    witnessIds: ['w-netizen', 'w-boss'],
+    episodeIds: ['ep-netizen-1', 'ep-netizen-2'],
   },
+];
+
+/* ------------------------------------------------------------------ */
+/* Episodes: verbatim substrings of testimony answers                  */
+/* ------------------------------------------------------------------ */
+
+export const DEMO_EPISODES: readonly Episode[] = [
+  // 发小 (3 episodes)
+  {
+    id: 'ep-faxiao-1',
+    subjectId: DEMO_SUBJECT_ID,
+    witnessId: 'w-faxiao',
+    testimonyId: 't-faxiao',
+    qid: 'q6',
+    text: '手机不回,微信不看,一个人开车去郊区绕',
+    elicited: false,
+    situation: '压力大时',
+  },
+  {
+    id: 'ep-faxiao-2',
+    subjectId: DEMO_SUBJECT_ID,
+    witnessId: 'w-faxiao',
+    testimonyId: 't-faxiao',
+    qid: 'q7',
+    text: '他请了三天假,在医院陪我,还替我签的字',
+    elicited: false,
+    situation: '朋友住院',
+  },
+  {
+    id: 'ep-faxiao-3',
+    subjectId: DEMO_SUBJECT_ID,
+    witnessId: 'w-faxiao',
+    testimonyId: 't-faxiao',
+    qid: 'q1',
+    text: '跟我吃饭从来没让我买过单,有一回我抢着付,他脸都拉下来了',
+    elicited: false,
+    situation: '朋友聚餐',
+  },
+  // 前上司 (3 episodes)
+  {
+    id: 'ep-boss-1',
+    subjectId: DEMO_SUBJECT_ID,
+    witnessId: 'w-boss',
+    testimonyId: 't-boss',
+    qid: 'q2',
+    text: '他直接来找我,一条一条把我说的驳回',
+    elicited: false,
+    situation: '评审被否决后',
+  },
+  {
+    id: 'ep-boss-2',
+    subjectId: DEMO_SUBJECT_ID,
+    witnessId: 'w-boss',
+    testimonyId: 't-boss',
+    qid: 'q8',
+    text: '他站中间把话揽到自己身上,说是他传的,白挨了一顿骂',
+    elicited: false,
+    situation: '同事纠纷',
+  },
+  {
+    id: 'ep-boss-3',
+    subjectId: DEMO_SUBJECT_ID,
+    witnessId: 'w-boss',
+    testimonyId: 't-boss',
+    qid: 'q10',
+    text: '他说"苏总,我二十八了,我不想三十五岁的时候还在跟您解释同一件事"',
+    elicited: false,
+    situation: '提离职',
+  },
+  // 前任 (3 episodes)
+  {
+    id: 'ep-ex-1',
+    subjectId: DEMO_SUBJECT_ID,
+    witnessId: 'w-ex',
+    testimonyId: 't-ex',
+    qid: 'q3',
+    text: '买房、见家长、结婚,每一个我提起来他就说"再等等"',
+    elicited: false,
+    situation: '谈论未来规划',
+  },
+  {
+    id: 'ep-ex-2',
+    subjectId: DEMO_SUBJECT_ID,
+    witnessId: 'w-ex',
+    testimonyId: 't-ex',
+    qid: 'q1',
+    text: '看电影他买票,我买爆米花,他会记下来,下次让我买票',
+    elicited: false,
+    situation: '日常消费',
+    audience: '对女朋友',
+  },
+  {
+    id: 'ep-ex-3',
+    subjectId: DEMO_SUBJECT_ID,
+    witnessId: 'w-ex',
+    testimonyId: 't-ex',
+    qid: 'q10',
+    text: '他说"许岚,我不是不爱你,我是一想到结婚,就觉得我这个人配不上任何确定的东西"',
+    elicited: false,
+    situation: '分手',
+  },
+  // 母亲 (3 episodes)
+  {
+    id: 'ep-mother-1',
+    subjectId: DEMO_SUBJECT_ID,
+    witnessId: 'w-mother',
+    testimonyId: 't-mother',
+    qid: 'q10',
+    text: '他喝了点酒,说"妈,我有时候觉得挺没意思的"',
+    elicited: false,
+    situation: '生日',
+  },
+  {
+    id: 'ep-mother-2',
+    subjectId: DEMO_SUBJECT_ID,
+    witnessId: 'w-mother',
+    testimonyId: 't-mother',
+    qid: 'q6',
+    text: '他一个人把事全办了,我都没见他掉眼泪',
+    elicited: false,
+    situation: '爷爷去世',
+  },
+  {
+    id: 'ep-mother-3',
+    subjectId: DEMO_SUBJECT_ID,
+    witnessId: 'w-mother',
+    testimonyId: 't-mother',
+    qid: 'q2',
+    text: '我把他那件旧毛衣给扔了,他找了一晚上,脸憋得通红',
+    elicited: false,
+    situation: '家庭日常',
+  },
+  // 前下属 (3 episodes)
+  {
+    id: 'ep-subordinate-1',
+    subjectId: DEMO_SUBJECT_ID,
+    witnessId: 'w-subordinate',
+    testimonyId: 't-subordinate',
+    qid: 'q7',
+    text: '我犯过一次大错,把客户数据导错了,是他连夜帮我恢复,还跟总监说是他没审核',
+    elicited: false,
+    situation: '下属犯错',
+  },
+  {
+    id: 'ep-subordinate-2',
+    subjectId: DEMO_SUBJECT_ID,
+    witnessId: 'w-subordinate',
+    testimonyId: 't-subordinate',
+    qid: 'q3',
+    text: '他陪我改 PPT 改到凌晨一点,第二天还替我挡了大老板两个刁钻的问题',
+    elicited: false,
+    situation: '转正答辩',
+  },
+  {
+    id: 'ep-subordinate-3',
+    subjectId: DEMO_SUBJECT_ID,
+    witnessId: 'w-subordinate',
+    testimonyId: 't-subordinate',
+    qid: 'q10',
+    text: '他喝多了,拉着我说"李想,你别学我"',
+    elicited: false,
+    situation: '离职聚餐',
+  },
+  // 网友 (3 episodes)
+  {
+    id: 'ep-netizen-1',
+    subjectId: DEMO_SUBJECT_ID,
+    witnessId: 'w-netizen',
+    testimonyId: 't-netizen',
+    qid: 'q9',
+    text: '他喝多了,给我发了一张工位的照片,晚上十一点,屏幕上全是表格,他说"你看,这才是我"',
+    elicited: false,
+    situation: '深夜倾诉',
+  },
+  {
+    id: 'ep-netizen-2',
+    subjectId: DEMO_SUBJECT_ID,
+    witnessId: 'w-netizen',
+    testimonyId: 't-netizen',
+    qid: 'q10',
+    text: '他说"青柠,你在网上认识的我,可能比我本人好"',
+    elicited: false,
+    situation: '线下见面',
+  },
+  {
+    id: 'ep-netizen-3',
+    subjectId: DEMO_SUBJECT_ID,
+    witnessId: 'w-netizen',
+    testimonyId: 't-netizen',
+    qid: 'q6',
+    text: '他说他睡不着,我就陪他聊',
+    elicited: false,
+    situation: '深夜聊天',
+    timeHint: '一两点、三四点',
+  },
+];
+
+/* ------------------------------------------------------------------ */
+/* Divergences: perspective and factual disagreements                   */
+/* ------------------------------------------------------------------ */
+
+export const DEMO_DIVERGENCES: readonly Divergence[] = [
+  {
+    id: 'div-limo-1',
+    subjectId: DEMO_SUBJECT_ID,
+    courtSessionId: DEMO_COURT_SESSION_ID,
+    topic: '情绪表达',
+    type: 'factual',
+    positions: [
+      { witnessId: 'w-mother', claimId: 'c-limo-5', summary: '情绪稳定、很少发火' },
+      { witnessId: 'w-boss', claimId: 'c-limo-5b', summary: '生气时冷处理或事后反驳' },
+    ],
+    resolution: 'unresolved',
+  },
+  {
+    id: 'div-limo-2',
+    subjectId: DEMO_SUBJECT_ID,
+    courtSessionId: DEMO_COURT_SESSION_ID,
+    topic: '消费态度',
+    type: 'perspective',
+    positions: [
+      { witnessId: 'w-faxiao', claimId: 'c-limo-4', summary: '对朋友慷慨,从不让人买单' },
+      { witnessId: 'w-ex', claimId: 'c-limo-4', summary: '跟女朋友 AA 精确到小数点' },
+    ],
+    resolution: 'kept_both',
+  },
+  {
+    id: 'div-limo-3',
+    subjectId: DEMO_SUBJECT_ID,
+    courtSessionId: DEMO_COURT_SESSION_ID,
+    topic: '守约能力',
+    type: 'perspective',
+    positions: [
+      { witnessId: 'w-faxiao', claimId: 'c-limo-1', summary: '答应的事基本都做到,做不到的时候硬拖' },
+      { witnessId: 'w-ex', claimId: 'c-limo-3', summary: '大事全拖:买房、见家长、结婚,每个都说再等等' },
+    ],
+    resolution: 'kept_both',
+  },
+  {
+    id: 'div-limo-4',
+    subjectId: DEMO_SUBJECT_ID,
+    courtSessionId: DEMO_COURT_SESSION_ID,
+    topic: '沟通方式',
+    type: 'perspective',
+    positions: [
+      { witnessId: 'w-subordinate', claimId: 'c-limo-2', summary: '讲事情清楚,也爱开玩笑,但重要决定只通知不商量' },
+      { witnessId: 'w-netizen', claimId: 'c-limo-6', summary: '网上话特别多,线下话少得尴尬' },
+    ],
+    resolution: 'kept_both',
+  },
+  {
+    id: 'div-limo-5',
+    subjectId: DEMO_SUBJECT_ID,
+    courtSessionId: DEMO_COURT_SESSION_ID,
+    topic: '当前生活状态',
+    type: 'factual',
+    positions: [
+      { witnessId: 'w-mother', claimId: 'c-limo-1', summary: '公司器重他,可能要升职' },
+      { witnessId: 'w-faxiao', claimId: 'c-limo-1', summary: '已辞职,半夜借过两万' },
+    ],
+    resolution: 'unresolved',
+  },
+];
+
+/* ------------------------------------------------------------------ */
+/* Corpus: 林默 himself (subject's own words)                          */
+/* ------------------------------------------------------------------ */
+
+export const DEMO_CORPUS: readonly CorpusItem[] = [
+  { id: 'corpus-limo-1', subjectId: DEMO_SUBJECT_ID, text: '太累了,想歇一段时间。', source: 'pasted', createdAt: DEMO_CREATED_AT },
+  { id: 'corpus-limo-2', subjectId: DEMO_SUBJECT_ID, text: '钱花在人身上才叫钱。', source: 'pasted', createdAt: DEMO_CREATED_AT },
+  { id: 'corpus-limo-3', subjectId: DEMO_SUBJECT_ID, text: '答应你的事。', source: 'pasted', createdAt: DEMO_CREATED_AT },
+  { id: 'corpus-limo-4', subjectId: DEMO_SUBJECT_ID, text: '我不是不想干,我是每天早上醒来,一想到要去那个楼里,胃就疼。', source: 'pasted', createdAt: DEMO_CREATED_AT },
+  { id: 'corpus-limo-5', subjectId: DEMO_SUBJECT_ID, text: '你可别跟我妈说。', source: 'pasted', createdAt: DEMO_CREATED_AT },
+  { id: 'corpus-limo-6', subjectId: DEMO_SUBJECT_ID, text: '没事,喝多了。', source: 'pasted', createdAt: DEMO_CREATED_AT },
+  { id: 'corpus-limo-7', subjectId: DEMO_SUBJECT_ID, text: '你少来这套。', source: 'pasted', createdAt: DEMO_CREATED_AT },
+  { id: 'corpus-limo-8', subjectId: DEMO_SUBJECT_ID, text: '我好像除了上班不会干别的了。', source: 'pasted', createdAt: DEMO_CREATED_AT },
+  { id: 'corpus-limo-9', subjectId: DEMO_SUBJECT_ID, text: '说了你们也帮不上。', source: 'pasted', createdAt: DEMO_CREATED_AT },
+  { id: 'corpus-limo-10', subjectId: DEMO_SUBJECT_ID, text: '你看,这才是我。', source: 'pasted', createdAt: DEMO_CREATED_AT },
 ];
 
 const at = (offsetSeconds: number): string =>
@@ -882,15 +1204,25 @@ export function demoCourtReport(): CourtReport {
   const qualified = DEMO_CLAIMS.filter(
     (claim) => claim.status === 'surviving' && (claim.qualifiers?.length ?? 0) > 0,
   ).length;
-  const rejected = DEMO_CLAIMS.filter((claim) => claim.status === 'retired').length;
+  const contested = DEMO_CLAIMS.filter((claim) => claim.status === 'contested').length;
+  const retired = DEMO_CLAIMS.filter((claim) => claim.status === 'retired').length;
   const withEvidence = DEMO_CLAIMS.filter((claim) => claim.evidence.length > 0).length;
+  const claimsWithEpisode = DEMO_CLAIMS.filter(
+    (claim) => claim.episodeIds && claim.episodeIds.length > 0,
+  ).length;
+  const factualConflicts = DEMO_DIVERGENCES.filter((d) => d.type === 'factual').length;
   return {
     totalClaims: DEMO_CLAIMS.length,
     surviving,
     qualified,
-    rejected,
+    contested,
+    retired,
     challengeCount: DEMO_COURT_TRANSCRIPT.filter((event) => event.type === 'challenge').length,
     evidenceCoverage: DEMO_CLAIMS.length === 0 ? 1 : withEvidence / DEMO_CLAIMS.length,
+    divergences: DEMO_DIVERGENCES.length,
+    factualConflicts,
+    episodeCount: DEMO_EPISODES.length,
+    claimsWithEpisode,
   };
 }
 
@@ -932,7 +1264,10 @@ export function seedDemo(store: Store): boolean {
   store.putSubject(demoSubject());
   for (const witness of demoWitnesses()) store.putWitness(witness);
   for (const testimony of demoTestimonies()) store.addTestimony(testimony);
+  for (const episode of DEMO_EPISODES) store.putEpisode({ ...episode });
   for (const claim of DEMO_CLAIMS) store.putClaim({ ...claim });
+  for (const divergence of DEMO_DIVERGENCES) store.putDivergence({ ...divergence });
+  for (const corpus of DEMO_CORPUS) store.putCorpusItem({ ...corpus });
   store.putCourtSession(demoCourtSession());
   store.putRoom(demoRoom());
   return true;
