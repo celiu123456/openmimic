@@ -5,6 +5,7 @@ import {
   ClaimSchema,
   CourtSessionSchema,
   InviteSchema,
+  RoomSchema,
   SubjectSchema,
   TestimonySchema,
   WitnessSchema,
@@ -12,6 +13,8 @@ import {
   type ConsentLevel,
   type CourtSession,
   type Invite,
+  type Room,
+  type RoomUtterance,
   type Subject,
   type Testimony,
   type ViewerScope,
@@ -19,7 +22,7 @@ import {
 } from '@openmimic/shared';
 import { EventBus } from './events';
 import { AuthorizationGate } from './gate';
-import { NoEvidenceError, UnknownTestimonyError } from './errors';
+import { NoEvidenceError, UnknownRoomError, UnknownTestimonyError } from './errors';
 
 /** Store configuration. Defaults to an ephemeral in-memory database. */
 export interface StoreOptions {
@@ -79,6 +82,16 @@ interface InviteRow {
   subject_id: string;
   created_at: string;
   expires_at: string;
+}
+
+interface RoomRow {
+  id: string;
+  subject_id: string;
+  topic_seed: string;
+  status: string;
+  behind_transcript: string;
+  front_transcript: string | null;
+  created_at: string;
 }
 
 const SCHEMA_SQL = `
@@ -158,6 +171,23 @@ CREATE TABLE IF NOT EXISTS invites (
 );
 
 CREATE INDEX IF NOT EXISTS idx_invites_subject ON invites (subject_id);
+
+-- Rooms are AI-generated artifacts, not evidence. They deliberately have no
+-- append-only triggers: unlike testimonies, a room is allowed to grow a
+-- front_transcript and move to door_opened (see updateRoomFront). The
+-- source material a room quotes from is still the append-only testimonies
+-- table, which stays untouched.
+CREATE TABLE IF NOT EXISTS rooms (
+  id                TEXT PRIMARY KEY,
+  subject_id        TEXT NOT NULL,
+  topic_seed        TEXT NOT NULL,
+  status            TEXT NOT NULL CHECK (status IN ('behind_only', 'door_opened')),
+  behind_transcript TEXT NOT NULL,
+  front_transcript  TEXT,
+  created_at        TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_rooms_subject ON rooms (subject_id);
 `;
 
 /**
@@ -205,6 +235,13 @@ export class Store {
       .prepare<[string], SubjectRow>('SELECT * FROM subjects WHERE id = ?')
       .get(id);
     return row ? SubjectSchema.parse(this.rowToSubject(row)) : undefined;
+  }
+
+  listSubjects(): Subject[] {
+    return this.db
+      .prepare<[], SubjectRow>('SELECT * FROM subjects ORDER BY rowid ASC')
+      .all()
+      .map((row) => SubjectSchema.parse(this.rowToSubject(row)));
   }
 
   putWitness(witness: Witness): Witness {
@@ -287,6 +324,87 @@ export class Store {
       )
       .all(subjectId)
       .map((row) => this.rowToInvite(row));
+  }
+
+  /* ---------------------------------------------------------------- */
+  /* Rooms — generated artifacts, deliberately mutable                 */
+  /* ---------------------------------------------------------------- */
+
+  /**
+   * Persist a room.
+   *
+   * Rooms are generated from testimony but are not testimony themselves, so
+   * they sit outside the append-only ledger and a plain upsert is fine. The
+   * evidence a room was generated from is never duplicated here: only the
+   * resulting transcript is stored.
+   */
+  putRoom(room: Room): Room {
+    const parsed = RoomSchema.parse(room);
+    this.db
+      .prepare<
+        [string, string, string, string, string, string | null, string]
+      >(
+        `INSERT INTO rooms
+           (id, subject_id, topic_seed, status, behind_transcript, front_transcript, created_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?)
+         ON CONFLICT(id) DO UPDATE SET
+           subject_id        = excluded.subject_id,
+           topic_seed        = excluded.topic_seed,
+           status            = excluded.status,
+           behind_transcript = excluded.behind_transcript,
+           front_transcript  = excluded.front_transcript,
+           created_at        = excluded.created_at`,
+      )
+      .run(
+        parsed.id,
+        parsed.subjectId,
+        parsed.topicSeed,
+        parsed.status,
+        JSON.stringify(parsed.behindTranscript),
+        parsed.frontTranscript ? JSON.stringify(parsed.frontTranscript) : null,
+        parsed.createdAt,
+      );
+    return parsed;
+  }
+
+  getRoom(id: string): Room | undefined {
+    const row = this.db
+      .prepare<[string], RoomRow>('SELECT * FROM rooms WHERE id = ?')
+      .get(id);
+    return row ? this.rowToRoom(row) : undefined;
+  }
+
+  listRoomsBySubject(subjectId: string): Room[] {
+    return this.db
+      .prepare<[string], RoomRow>(
+        'SELECT * FROM rooms WHERE subject_id = ? ORDER BY created_at ASC, rowid ASC',
+      )
+      .all(subjectId)
+      .map((row) => this.rowToRoom(row));
+  }
+
+  /**
+   * Attach the "door open" transcript to an existing room.
+   *
+   * This is the one sanctioned in-place update in the store, and it exists
+   * precisely because a room is not evidence: opening the door must not
+   * rewrite any testimony. Unknown ids fail loudly rather than silently
+   * creating a half-room.
+   */
+  updateRoomFront(roomId: string, frontTranscript: RoomUtterance[]): Room {
+    const existing = this.getRoom(roomId);
+    if (!existing) throw new UnknownRoomError(`room not found: ${roomId}`);
+    const updated = RoomSchema.parse({
+      ...existing,
+      status: 'door_opened',
+      frontTranscript,
+    });
+    this.db
+      .prepare<[string, string, string]>(
+        'UPDATE rooms SET status = ?, front_transcript = ? WHERE id = ?',
+      )
+      .run(updated.status, JSON.stringify(updated.frontTranscript), roomId);
+    return updated;
   }
 
   /* ---------------------------------------------------------------- */
@@ -541,6 +659,20 @@ export class Store {
       finishedAt: row.finished_at ?? undefined,
       transcript: JSON.parse(row.transcript) as unknown,
       report: row.report ? (JSON.parse(row.report) as unknown) : undefined,
+    });
+  }
+
+  private rowToRoom(row: RoomRow): Room {
+    return RoomSchema.parse({
+      id: row.id,
+      subjectId: row.subject_id,
+      topicSeed: row.topic_seed,
+      status: row.status,
+      behindTranscript: JSON.parse(row.behind_transcript) as unknown,
+      frontTranscript: row.front_transcript
+        ? (JSON.parse(row.front_transcript) as unknown)
+        : undefined,
+      createdAt: row.created_at,
     });
   }
 }

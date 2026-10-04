@@ -112,9 +112,15 @@ describe('append-only testimony ledger', () => {
     expect(store.listBySubject('s1')).toHaveLength(1);
   });
 
-  it('exposes no update/delete/remove mutator on the Store surface', () => {
+  it('exposes no update/delete/remove mutator for the testimony ledger', () => {
     const methods = Object.getOwnPropertyNames(Object.getPrototypeOf(store) as object);
-    const mutators = methods.filter((name) => /^(update|delete|remove|edit)/i.test(name));
+    // The ledger itself has no mutators. `updateRoomFront` is the one
+    // sanctioned exception on the Store surface: a room is a generated
+    // artifact, not evidence, so opening its door may update it in place
+    // without ever touching the append-only testimonies table.
+    const mutators = methods.filter(
+      (name) => /^(update|delete|remove|edit)/i.test(name) && name !== 'updateRoomFront',
+    );
     expect(mutators).toEqual([]);
   });
 

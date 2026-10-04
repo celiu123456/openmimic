@@ -20,3 +20,6 @@ export class UnknownTestimonyError extends OpenMimicError {}
 
 /** Raised when a plugin is registered twice or with an invalid manifest. */
 export class PluginRegistrationError extends OpenMimicError {}
+
+/** Raised when code references a room that does not exist. */
+export class UnknownRoomError extends OpenMimicError {}
