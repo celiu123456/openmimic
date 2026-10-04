@@ -13,6 +13,7 @@ export const router = createRouter({
       name: 'interview',
       component: () => import('./views/InterviewView.vue'),
     },
+    { path: '/room/:id', name: 'room', component: () => import('./views/RoomView.vue') },
     { path: '/:pathMatch(.*)*', redirect: '/' },
   ],
   scrollBehavior: () => ({ top: 0 }),

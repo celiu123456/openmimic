@@ -44,6 +44,33 @@ export interface ProgressPayload {
   witnessCount: number;
 }
 
+/** `speech` is a spoken turn; `stage` is a stage direction (a silence, a look). */
+export type RoomUtteranceKind = 'speech' | 'stage';
+
+export interface RoomUtterance {
+  witnessId: string;
+  displayLabel: string;
+  text: string;
+  kind: RoomUtteranceKind;
+  at: string;
+}
+
+export type RoomStatus = 'behind_only' | 'door_opened';
+
+/**
+ * One generated room. The room is a generated artifact, never evidence: the
+ * page shows what was said, never the testimony it was generated from.
+ */
+export interface RoomPayload {
+  id: string;
+  subjectId: string;
+  topicSeed: string;
+  status: RoomStatus;
+  behindTranscript: RoomUtterance[];
+  frontTranscript?: RoomUtterance[];
+  createdAt: string;
+}
+
 export interface SubmitPayload {
   relation: string;
   consentLevel: ConsentLevel;
@@ -81,6 +108,12 @@ export interface ApiClient {
   createSubject(displayName: string): Promise<SubjectPayload>;
   createInvite(subjectId: string): Promise<CreatedInvitePayload>;
   getProgress(subjectId: string): Promise<ProgressPayload>;
+  /** Rooms for one subject, oldest first (the API's own order). */
+  getSubjectRooms(subjectId: string): Promise<RoomPayload[]>;
+  getRoom(roomId: string): Promise<RoomPayload>;
+  createRoom(subjectId: string, topicSeed?: string): Promise<RoomPayload>;
+  /** Opens the door; idempotent server-side, so a repeat never re-generates. */
+  openDoor(roomId: string): Promise<RoomPayload>;
   submitTestimony(token: string, payload: SubmitPayload): Promise<SubmitResult>;
 }
 
@@ -163,6 +196,24 @@ export function createApiClient(options: ApiClientOptions = {}): ApiClient {
 
     getProgress: (subjectId) =>
       request<ProgressPayload>(`/api/subjects/${encodeURIComponent(subjectId)}/progress`),
+
+    async getSubjectRooms(subjectId) {
+      const result = await request<{ rooms?: RoomPayload[] }>(
+        `/api/subjects/${encodeURIComponent(subjectId)}/rooms`,
+      );
+      return Array.isArray(result.rooms) ? result.rooms : [];
+    },
+
+    getRoom: (roomId) => request<RoomPayload>(`/api/rooms/${encodeURIComponent(roomId)}`),
+
+    createRoom: (subjectId, topicSeed) =>
+      request<RoomPayload>(
+        `/api/subjects/${encodeURIComponent(subjectId)}/rooms`,
+        jsonInit('POST', topicSeed === undefined ? {} : { topicSeed }),
+      ),
+
+    openDoor: (roomId) =>
+      request<RoomPayload>(`/api/rooms/${encodeURIComponent(roomId)}/door`, { method: 'POST' }),
 
     submitTestimony: (token, payload) =>
       request<SubmitResult>(

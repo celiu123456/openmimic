@@ -195,7 +195,264 @@ html, body {
 }
 .progress-line { color: var(--muted); font-size: 0.9rem; }
 .row { display: flex; flex-wrap: wrap; align-items: center; gap: 0.8rem; }
+.small { font-size: 0.82rem; }
 @media (min-width: 40rem) {
   .room { padding-top: 4.5rem; }
   .prompt { font-size: 1.6rem; }
+}
+
+/* ------------------------------------------------------------------ */
+/* Inviter page: demo card and the room panel                          */
+/* ------------------------------------------------------------------ */
+
+.demo-card {
+  padding: 1.25rem 1.3rem 1.35rem;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: linear-gradient(180deg, rgba(215, 168, 110, 0.08), rgba(215, 168, 110, 0.02));
+}
+.demo-title { margin: 0.2rem 0 0.5rem; font-size: 1.3rem; font-weight: 600; }
+.demo-note { margin: 0 0 1rem; color: var(--muted); }
+.room-panel { margin-top: 2.6rem; padding-top: 1.6rem; border-top: 1px solid var(--line); }
+.room-panel-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.8rem;
+  margin-bottom: 0.9rem;
+}
+.room-list { display: flex; flex-direction: column; gap: 0.6rem; margin: 0.9rem 0 0; padding: 0; list-style: none; }
+.room-list-item {
+  display: block;
+  width: 100%;
+  padding: 0.85rem 1rem;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--panel);
+  color: var(--text);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+  transition: border-color 0.18s ease, background 0.18s ease;
+}
+.room-list-item:hover { border-color: var(--accent); background: var(--accent-soft); }
+.room-list-title { display: block; margin-bottom: 0.3rem; }
+.room-list-meta { display: block; color: var(--muted); font-size: 0.8rem; }
+
+/* ------------------------------------------------------------------ */
+/* Room page: the pinned line, the replayed transcript, the door       */
+/* ------------------------------------------------------------------ */
+
+.room-page { min-height: 100vh; }
+.room-topline {
+  position: sticky;
+  top: 0;
+  z-index: 20;
+  padding: 0.85rem 1.4rem;
+  border-bottom: 1px solid var(--line);
+  background: rgba(12, 14, 17, 0.92);
+  backdrop-filter: blur(8px);
+  transition: color 0.4s ease;
+}
+.room-topline p {
+  max-width: 34rem;
+  margin: 0 auto;
+  color: var(--muted);
+  font-size: 0.86rem;
+  letter-spacing: 0.02em;
+  text-align: center;
+  transition: color 0.4s ease;
+}
+.room-topline.warm p { color: var(--accent); }
+
+.room-stage { padding-top: 1.1rem; }
+.topic-seed {
+  margin: 0 0 1.2rem;
+  color: var(--muted);
+  font-size: 0.78rem;
+  letter-spacing: 0.1em;
+  text-align: center;
+}
+.transcript { display: flex; flex-direction: column; gap: 0.75rem; }
+.feed-end { height: 1px; }
+
+.bubble,
+.contrast-line {
+  --tone: #7fa8d8;
+  align-self: flex-start;
+  max-width: 90%;
+  padding: 0.7rem 0.95rem 0.75rem;
+  border: 1px solid var(--line);
+  border-left: 3px solid var(--tone);
+  border-radius: 4px 14px 14px 4px;
+  background: var(--panel);
+}
+
+/* One hue per witness, reused on both sides of the door. */
+.tone-0 { --tone: #7fa8d8; }
+.tone-1 { --tone: #86c4ad; }
+.tone-2 { --tone: #b6a0da; }
+.tone-3 { --tone: #d8b489; }
+.tone-4 { --tone: #d79aa8; }
+.tone-5 { --tone: #a9c98c; }
+
+.speaker {
+  display: block;
+  margin-bottom: 0.25rem;
+  color: var(--tone);
+  font-size: 0.76rem;
+  letter-spacing: 0.08em;
+}
+.bubble-text { margin: 0; font-size: 0.98rem; line-height: 1.78; }
+
+/* Behind is cool and flat; face-to-face is the same words, warmed up. */
+.mode-behind { background: #13161b; }
+.mode-front {
+  background: linear-gradient(180deg, rgba(215, 168, 110, 0.09), rgba(215, 168, 110, 0.02)),
+    #17161a;
+  border-color: rgba(215, 168, 110, 0.24);
+}
+.bubble { animation: bubble-in 0.28s ease; }
+@keyframes bubble-in {
+  from { opacity: 0; transform: translateY(7px); }
+}
+
+.stage-line {
+  align-self: center;
+  max-width: 26rem;
+  margin: 0.35rem 0;
+  color: var(--muted);
+  font-size: 0.86rem;
+  font-style: italic;
+  text-align: center;
+}
+.stage-line.small { font-size: 0.8rem; }
+
+.typing {
+  --tone: var(--muted);
+  display: flex;
+  align-items: center;
+  gap: 0.55rem;
+  margin: 0;
+  color: var(--muted);
+  font-size: 0.8rem;
+}
+.typing-label { color: var(--tone); letter-spacing: 0.06em; }
+.typing-dots { display: inline-flex; gap: 0.25rem; }
+.typing-dots i {
+  width: 4px;
+  height: 4px;
+  border-radius: 50%;
+  background: currentColor;
+  animation: typing-blink 1.1s infinite ease-in-out;
+}
+.typing-dots i:nth-child(2) { animation-delay: 0.18s; }
+.typing-dots i:nth-child(3) { animation-delay: 0.36s; }
+@keyframes typing-blink {
+  0%, 60%, 100% { opacity: 0.25; }
+  30% { opacity: 0.9; }
+}
+
+.room-actions {
+  position: fixed;
+  inset: auto 0 0 0;
+  z-index: 30;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.6rem;
+  padding: 1.1rem 1.4rem calc(1.1rem + env(safe-area-inset-bottom));
+  background: linear-gradient(180deg, rgba(12, 14, 17, 0), rgba(12, 14, 17, 0.94) 42%);
+}
+.room-actions .door-btn {
+  width: min(22rem, 100%);
+  padding: 1rem 2rem;
+  font-size: 1.04rem;
+  box-shadow: 0 0 0 6px rgba(215, 168, 110, 0.08);
+}
+
+/* The door: two dark panels close from the edges, then open again.
+   Pure CSS; the view only flips `closing` / `opening`. */
+.door { position: fixed; inset: 0; z-index: 60; overflow: hidden; pointer-events: none; }
+.door-panel {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 50.5%;
+  background: linear-gradient(90deg, #05060a, #101319 70%, #171b23);
+  transition: transform 0.46s cubic-bezier(0.4, 0, 0.2, 1), opacity 0.3s ease;
+}
+.door-panel.right { background: linear-gradient(270deg, #05060a, #101319 70%, #171b23); }
+.door-panel.left { left: 0; transform: translateX(-101%); }
+.door-panel.right { right: 0; transform: translateX(101%); }
+.door.closing .door-panel { transform: translateX(0); }
+.door.opening .door-panel.left { transform: translateX(-101%); opacity: 0; }
+.door.opening .door-panel.right { transform: translateX(101%); opacity: 0; }
+.door-hint {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  margin: 0;
+  color: var(--muted);
+  font-size: 0.9rem;
+  letter-spacing: 0.08em;
+  opacity: 0;
+  transform: translate(-50%, -50%);
+  transition: opacity 0.35s ease;
+  text-align: center;
+}
+.door.closing .door-hint { opacity: 1; transition-delay: 0.3s; }
+.door.opening .door-hint { opacity: 0; transition-delay: 0s; }
+
+/* Reduced motion: no panels sliding — the door becomes a plain fade. */
+@media (prefers-reduced-motion: reduce) {
+  .door-panel {
+    transform: none !important;
+    opacity: 0;
+    transition: opacity 0.24s ease;
+  }
+  .door.closing .door-panel { opacity: 1; }
+  .door.opening .door-panel { opacity: 0; }
+  .door-hint { transition: opacity 0.2s ease; }
+  .door.closing .door-hint { transition-delay: 0.2s; }
+  .bubble { animation: none; }
+  .typing-dots i { animation: none; opacity: 0.6; }
+}
+
+/* ------------------------------------------------------------------ */
+/* Contrast view: two transcripts, linked by witness                   */
+/* ------------------------------------------------------------------ */
+
+.room-contrast { max-width: 62rem; }
+.contrast-intro { margin-bottom: 1.6rem; }
+.contrast-intro .name { font-size: 1.5rem; }
+.contrast-grid { display: grid; grid-template-columns: 1fr; gap: 1.6rem; }
+.contrast-col { display: flex; flex-direction: column; gap: 0.65rem; min-width: 0; }
+.contrast-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 0.6rem;
+  padding-bottom: 0.45rem;
+  border-bottom: 1px solid var(--line);
+}
+.col-label { font-size: 0.82rem; letter-spacing: 0.16em; }
+.col-label.cool { color: #7fa8d8; }
+.col-label.warm { color: var(--accent); }
+.col-note { color: var(--muted); font-size: 0.78rem; }
+.contrast-line {
+  max-width: 100%;
+  cursor: pointer;
+  transition: opacity 0.18s ease, border-color 0.18s ease, background 0.18s ease;
+}
+.contrast-line .bubble-text { font-size: 0.9rem; line-height: 1.7; }
+.contrast-line.linked {
+  border-color: var(--tone);
+  box-shadow: inset 0 0 0 1px var(--tone);
+  background: rgba(215, 168, 110, 0.08);
+}
+.contrast-line.dim { opacity: 0.34; }
+.contrast-back { margin-top: 1.8rem; }
+@media (min-width: 46rem) {
+  .contrast-grid { grid-template-columns: 1fr 1fr; gap: 2rem; }
 }
