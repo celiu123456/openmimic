@@ -91,13 +91,46 @@ export function answeredCount(draft: InterviewDraft, questionnaire: Questionnair
     .length;
 }
 
+/** A question is done when it has an answer, or was explicitly skipped. */
+export function isQuestionResolved(draft: InterviewDraft, qid: string): boolean {
+  if (draft.avoidedQids.includes(qid)) return true;
+  return canContinue(answerFor(draft, qid));
+}
+
 export function allResolved(draft: InterviewDraft, questionnaire: Questionnaire): boolean {
-  return questionnaire.questions.every((question) => canContinue(answerFor(draft, question.qid)));
+  return questionnaire.questions.every((question) => isQuestionResolved(draft, question.qid));
+}
+
+/** The explicit "这题跳过": records silence and drops any words on the question. */
+export function skipQuestion(draft: InterviewDraft, qid: string): InterviewDraft {
+  const answers = { ...draft.answers };
+  delete answers[qid];
+  const followups = { ...draft.followups };
+  delete followups[qid];
+  return {
+    ...draft,
+    answers,
+    followups,
+    avoidedQids: draft.avoidedQids.includes(qid)
+      ? draft.avoidedQids
+      : [...draft.avoidedQids, qid],
+  };
+}
+
+/** Store (or clear) the answer to the interviewer's follow-up. */
+export function updateFollowup(
+  draft: InterviewDraft,
+  qid: string,
+  text: string,
+): InterviewDraft {
+  return { ...draft, followups: { ...draft.followups, [qid]: text } };
 }
 
 /**
  * Build the wire payload. Only questions with words are submitted, and a
  * skipped front question is *omitted* rather than sent as an empty string.
+ * A follow-up answer rides in its own field, never appended to `behindText`,
+ * and explicit skips are listed so the silence survives.
  */
 export function buildSubmission(
   draft: InterviewDraft,
@@ -114,6 +147,10 @@ export function buildSubmission(
       if (!answer.frontSkipped && answer.frontText.trim().length > 0) {
         entry.frontText = answer.frontText.trim();
       }
+      const followup = draft.followups[question.qid]?.trim();
+      if (followup !== undefined && followup.length > 0) {
+        entry.followupText = followup;
+      }
       return entry;
     });
 
@@ -121,6 +158,7 @@ export function buildSubmission(
     relation: relationValue(draft),
     consentLevel: draft.consentLevel,
     answers,
+    ...(draft.avoidedQids.length > 0 ? { avoidedQids: [...draft.avoidedQids] } : {}),
   };
 }
 

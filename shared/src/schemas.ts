@@ -60,6 +60,14 @@ export const TestimonyAnswerSchema = z.object({
   behindText: z.string(),
   /** Optional "to their face" variant. */
   frontText: z.string().optional(),
+  /**
+   * What the interviewer's follow-up question drew out.
+   *
+   * Deliberately a separate field rather than text appended to `behindText`:
+   * the raw answer and the answer given under a prompt are different evidence,
+   * and only the first was volunteered unprompted.
+   */
+  followupText: z.string().optional(),
 });
 export type TestimonyAnswer = z.infer<typeof TestimonyAnswerSchema>;
 
@@ -77,6 +85,15 @@ export const TestimonySchema = z.object({
   answers: z.array(TestimonyAnswerSchema),
   freeText: z.string().optional(),
   correctionOf: z.string().min(1).optional(),
+  /**
+   * Question ids the witness explicitly skipped.
+   *
+   * A skip is a silence signal, not an error: the witness pressed "skip this"
+   * rather than leaving the field blank. Later the court can read a cluster of
+   * skips on one question as collective silence. Stored on the testimony so it
+   * survives the append-only ledger alongside the words that *were* given.
+   */
+  avoidedQids: z.array(z.string().min(1)).optional(),
 });
 export type Testimony = z.infer<typeof TestimonySchema>;
 

@@ -40,6 +40,9 @@ export function redact(
       qid: answer.qid,
       behindText: WITHHELD_PLACEHOLDER,
       ...(answer.frontText !== undefined ? { frontText: WITHHELD_PLACEHOLDER } : {}),
+      ...(answer.followupText !== undefined
+        ? { followupText: WITHHELD_PLACEHOLDER }
+        : {}),
     })),
   };
   if (testimony.freeText !== undefined) {

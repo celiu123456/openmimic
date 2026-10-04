@@ -143,6 +143,51 @@ html, body {
 .front .label { color: var(--accent); }
 .front-actions { display: flex; justify-content: flex-end; margin-top: 0.5rem; }
 .skip.active { border-color: var(--accent); color: var(--accent); }
+
+/* The interviewer's follow-up: a low, spoken aside — not another question stem.
+   A soft left rule and a warm label set it apart from the big `.prompt`. */
+.interviewer {
+  margin-top: 1.5rem;
+  padding: 1rem 1.1rem 1.1rem;
+  border: 1px solid var(--line);
+  border-left: 3px solid var(--accent);
+  border-radius: 4px 14px 14px 4px;
+  background: var(--panel);
+  animation: rise 0.22s ease;
+}
+@media (prefers-reduced-motion: reduce) {
+  .interviewer { animation: none; }
+}
+.interviewer-label {
+  display: block;
+  margin-bottom: 0.35rem;
+  color: var(--accent);
+  font-size: 0.74rem;
+  letter-spacing: 0.14em;
+}
+.interviewer-text { margin: 0 0 0.9rem; font-size: 1.05rem; line-height: 1.7; }
+.interviewer .textarea { min-height: 6rem; }
+.interviewer-actions {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.8rem;
+  margin-top: 0.6rem;
+}
+
+/* A quiet, un-emphasised entry for skipping a whole question. */
+.linkish {
+  padding: 0.4rem 0.2rem;
+  border: none;
+  background: none;
+  color: var(--muted);
+  font: inherit;
+  font-size: 0.78rem;
+  cursor: pointer;
+  text-decoration: underline;
+  text-underline-offset: 0.22em;
+}
+.linkish:disabled { cursor: not-allowed; opacity: 0.4; }
 .nav {
   position: fixed;
   inset: auto 0 0 0;

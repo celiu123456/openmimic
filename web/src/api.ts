@@ -74,14 +74,47 @@ export interface RoomPayload {
 export interface SubmitPayload {
   relation: string;
   consentLevel: ConsentLevel;
-  answers: Array<{ qid: string; behindText: string; frontText?: string }>;
+  answers: Array<{
+    qid: string;
+    behindText: string;
+    frontText?: string;
+    /** What the interviewer's follow-up drew out, kept apart from behindText. */
+    followupText?: string;
+  }>;
   freeText?: string;
+  /** Question ids the witness explicitly skipped (silence signal). */
+  avoidedQids?: string[];
 }
 
 export interface SubmitResult {
   witnessId: string;
   testimonyId: string;
   count: number;
+}
+
+/** What opening an interview session hands back. */
+export interface StartedInterviewPayload {
+  sessionId: string;
+  question: WitnessQuestion;
+  total: number;
+}
+
+/**
+ * One step of the question tree: a follow-up to ask, the next question, or
+ * the end of the interview. No model configured means `followup` never comes.
+ */
+export type InterviewStepPayload =
+  | { followup: string }
+  | { question: WitnessQuestion; index: number }
+  | { done: true };
+
+/** One answer turn; `skip` records an explicit silence. */
+export interface InterviewAnswerRequest {
+  qid?: string;
+  text?: string;
+  frontText?: string;
+  frontSkipped?: boolean;
+  skip?: true;
 }
 
 export class ApiError extends Error {
@@ -115,6 +148,20 @@ export interface ApiClient {
   /** Opens the door; idempotent server-side, so a repeat never re-generates. */
   openDoor(roomId: string): Promise<RoomPayload>;
   submitTestimony(token: string, payload: SubmitPayload): Promise<SubmitResult>;
+  /** Open an interview session and get its first question. */
+  startInterview(token: string): Promise<StartedInterviewPayload>;
+  /** Answer (or skip) the current question; may return a follow-up. */
+  answerInterview(
+    sessionId: string,
+    request: InterviewAnswerRequest,
+  ): Promise<InterviewStepPayload>;
+  /** Answer (or skip) the waiting follow-up. */
+  answerInterviewFollowup(
+    sessionId: string,
+    request: { text: string } | { skip: true },
+  ): Promise<InterviewStepPayload>;
+  /** Close the session and append the assembled testimony. */
+  finishInterview(sessionId: string, payload: SubmitPayload): Promise<SubmitResult>;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -218,6 +265,30 @@ export function createApiClient(options: ApiClientOptions = {}): ApiClient {
     submitTestimony: (token, payload) =>
       request<SubmitResult>(
         `/api/invites/${encodeURIComponent(token)}/testimony`,
+        jsonInit('POST', payload),
+      ),
+
+    startInterview: (token) =>
+      request<StartedInterviewPayload>(
+        `/api/invites/${encodeURIComponent(token)}/interview`,
+        { method: 'POST' },
+      ),
+
+    answerInterview: (sessionId, payload) =>
+      request<InterviewStepPayload>(
+        `/api/interview/${encodeURIComponent(sessionId)}/answer`,
+        jsonInit('POST', payload),
+      ),
+
+    answerInterviewFollowup: (sessionId, payload) =>
+      request<InterviewStepPayload>(
+        `/api/interview/${encodeURIComponent(sessionId)}/followup`,
+        jsonInit('POST', payload),
+      ),
+
+    finishInterview: (sessionId, payload) =>
+      request<SubmitResult>(
+        `/api/interview/${encodeURIComponent(sessionId)}/finish`,
         jsonInit('POST', payload),
       ),
   };

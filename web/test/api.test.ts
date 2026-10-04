@@ -105,4 +105,51 @@ describe('api client', () => {
       code: 'network_error',
     });
   });
+
+  it('drives the interview session endpoints', async () => {
+    const { api, calls } = makeClient((call) => {
+      if (call.url.endsWith('/interview')) {
+        return jsonResponse(
+          {
+            sessionId: 'sess-1',
+            question: { qid: 'q1', prompt: '问题一', followupHint: '提示' },
+            total: 10,
+          },
+          201,
+        );
+      }
+      if (call.url.endsWith('/answer')) return jsonResponse({ followup: '哪件事？' });
+      if (call.url.endsWith('/followup')) {
+        return jsonResponse({ question: { qid: 'q2', prompt: '问题二', followupHint: '' }, index: 1 });
+      }
+      return jsonResponse({ witnessId: 'w1', testimonyId: 't1', count: 1 }, 201);
+    });
+
+    const started = await api.startInterview('tok en');
+    expect(started.sessionId).toBe('sess-1');
+    expect(started.total).toBe(10);
+
+    const step = await api.answerInterview('sess-1', { qid: 'q1', text: '他人挺好的。' });
+    expect(step).toEqual({ followup: '哪件事？' });
+
+    const next = await api.answerInterviewFollowup('sess-1', {
+      text: '上个月他帮我搬家。',
+    });
+    expect(next).toMatchObject({ index: 1 });
+
+    const result = await api.finishInterview('sess-1', {
+      relation: '朋友',
+      consentLevel: 'quotable',
+      answers: [{ qid: 'q1', behindText: '他人挺好的。', followupText: '上个月他帮我搬家。' }],
+      avoidedQids: ['q2'],
+    });
+    expect(result.count).toBe(1);
+
+    expect(calls.map((call) => [call.init?.method, call.url])).toEqual([
+      ['POST', 'http://api.test/api/invites/tok%20en/interview'],
+      ['POST', 'http://api.test/api/interview/sess-1/answer'],
+      ['POST', 'http://api.test/api/interview/sess-1/followup'],
+      ['POST', 'http://api.test/api/interview/sess-1/finish'],
+    ]);
+  });
 });

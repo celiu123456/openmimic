@@ -12,6 +12,11 @@ import {
   type LLMClient,
 } from '@openmimic/engine-room';
 import {
+  AnswerFollowupInputSchema,
+  AnswerQuestionInputSchema,
+  FinishInterviewInputSchema,
+  InterviewSessionInvalidError,
+  InterviewStateError,
   InviteInvalidError,
   SubmitTestimonyInputSchema,
   createWitnessCollector,
@@ -101,7 +106,7 @@ function sendAsset(
 }
 
 function buildRouter(store: Store, asr: AsrConfig, llm: LLMClient | undefined): Router {
-  const collector = createWitnessCollector(store);
+  const collector = createWitnessCollector(store, llm ? { llm } : {});
   const router = new Router();
 
   router.get('/api/health', () => ({
@@ -145,6 +150,40 @@ function buildRouter(store: Store, asr: AsrConfig, llm: LLMClient | undefined): 
   router.post('/api/invites/:token/testimony', (context) => {
     const input = SubmitTestimonyInputSchema.parse(context.body);
     const result = collector.submitTestimony(context.params.token ?? '', input);
+    return { status: 201, body: result };
+  });
+
+  /* ---------------------------------------------------------------- */
+  /* Interview sessions: the question tree plus conditional follow-ups */
+  /* ---------------------------------------------------------------- */
+
+  router.post('/api/invites/:token/interview', (context) => {
+    const started = collector.startInterview(context.params.token ?? '');
+    return {
+      status: 201,
+      body: {
+        sessionId: started.sessionId,
+        question: started.question,
+        total: collector.questionnaire.questions.length,
+      },
+    };
+  });
+
+  router.post('/api/interview/:sid/answer', async (context) => {
+    const input = AnswerQuestionInputSchema.parse(context.body);
+    const step = await collector.answerQuestion(context.params.sid ?? '', input);
+    return { status: 200, body: step };
+  });
+
+  router.post('/api/interview/:sid/followup', (context) => {
+    const input = AnswerFollowupInputSchema.parse(context.body);
+    const step = collector.answerFollowup(context.params.sid ?? '', input);
+    return { status: 200, body: step };
+  });
+
+  router.post('/api/interview/:sid/finish', (context) => {
+    const input = FinishInterviewInputSchema.parse(context.body);
+    const result = collector.finishInterview(context.params.sid ?? '', input);
     return { status: 201, body: result };
   });
 
@@ -298,6 +337,10 @@ async function handleRequest(
       sendJson(response, 400, errorBody('validation_error', describeZodError(caught)), store);
     } else if (caught instanceof InviteInvalidError) {
       sendJson(response, 410, errorBody('invite_invalid', caught.message), store);
+    } else if (caught instanceof InterviewSessionInvalidError) {
+      sendJson(response, 410, errorBody('session_invalid', caught.message), store);
+    } else if (caught instanceof InterviewStateError) {
+      sendJson(response, 409, errorBody('interview_state', caught.message), store);
     } else if (caught instanceof RoomRefusedError) {
       sendJson(response, 422, errorBody('room_refused', caught.message), store);
     } else if (caught instanceof UnknownRoomError) {

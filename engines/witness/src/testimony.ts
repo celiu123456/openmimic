@@ -24,6 +24,8 @@ export const SubmitTestimonyInputSchema = z.object({
     .array(TestimonyAnswerSchema.extend({ behindText: z.string().min(1) }))
     .min(1),
   freeText: z.string().min(1).optional(),
+  /** Question ids the witness explicitly skipped (silence signal). */
+  avoidedQids: z.array(z.string().min(1)).optional(),
 });
 export type SubmitTestimonyInput = z.infer<typeof SubmitTestimonyInputSchema>;
 
@@ -79,6 +81,7 @@ export function submitTestimony(
     createdAt,
     answers: parsed.answers.map((answer) => ({ ...answer })),
     ...(parsed.freeText !== undefined ? { freeText: parsed.freeText } : {}),
+    ...(parsed.avoidedQids !== undefined ? { avoidedQids: [...parsed.avoidedQids] } : {}),
   };
   store.addTestimony(testimony);
 

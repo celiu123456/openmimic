@@ -25,6 +25,14 @@ export interface InterviewDraft {
   relationOther: string;
   currentIndex: number;
   answers: Record<string, AnswerDraft>;
+  /** Answers to the interviewer's follow-ups, keyed by qid. */
+  followups: Record<string, string>;
+  /** Questions the witness explicitly skipped (silence signals). */
+  avoidedQids: string[];
+  /** How many questions have been confirmed with the server (the frontier). */
+  committedUpTo: number;
+  /** Server-side interview session id, once one has been opened. */
+  sessionId: string;
   consentLevel: ConsentLevel;
 }
 
@@ -38,6 +46,10 @@ export function emptyDraft(): InterviewDraft {
     relationOther: '',
     currentIndex: 0,
     answers: {},
+    followups: {},
+    avoidedQids: [],
+    committedUpTo: 0,
+    sessionId: '',
     // The private option is the default: silence is not consent to publish.
     consentLevel: 'synthesis_only',
   };
@@ -66,6 +78,17 @@ function normalizeDraft(value: unknown): InterviewDraft {
     }
   }
 
+  const followups: InterviewDraft['followups'] = {};
+  if (typeof raw.followups === 'object' && raw.followups !== null) {
+    for (const [qid, entry] of Object.entries(raw.followups as Record<string, unknown>)) {
+      if (typeof entry === 'string') followups[qid] = entry;
+    }
+  }
+
+  const avoidedQids = Array.isArray(raw.avoidedQids)
+    ? raw.avoidedQids.filter((qid): qid is string => typeof qid === 'string')
+    : [];
+
   return {
     relationChoice: typeof raw.relationChoice === 'string' ? raw.relationChoice : '',
     relationOther: typeof raw.relationOther === 'string' ? raw.relationOther : '',
@@ -74,6 +97,13 @@ function normalizeDraft(value: unknown): InterviewDraft {
         ? Math.max(0, raw.currentIndex)
         : 0,
     answers,
+    followups,
+    avoidedQids,
+    committedUpTo:
+      typeof raw.committedUpTo === 'number' && Number.isInteger(raw.committedUpTo)
+        ? Math.max(0, raw.committedUpTo)
+        : 0,
+    sessionId: typeof raw.sessionId === 'string' ? raw.sessionId : '',
     consentLevel: raw.consentLevel === 'quotable' ? 'quotable' : 'synthesis_only',
   };
 }

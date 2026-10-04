@@ -33,6 +33,26 @@ export interface StoreOptions {
 /** Input accepted by {@link Store.addTestimony}; `createdAt` defaults to now. */
 export type TestimonyInput = Omit<Testimony, 'createdAt'> & { createdAt?: string };
 
+/**
+ * One in-progress interview.
+ *
+ * `state` is opaque JSON owned by whichever collector created the session; the
+ * kernel only persists it. A session is a *process draft*, not evidence: unlike
+ * a testimony it may be rewritten while the witness answers, and it is dropped
+ * once the final testimony has been appended through the append-only ledger.
+ */
+export interface InterviewSessionRecord {
+  id: string;
+  inviteToken: string;
+  state: unknown;
+  createdAt: string;
+}
+
+/** Input accepted by {@link Store.putInterviewSession}; `createdAt` defaults to now. */
+export type InterviewSessionInput = Omit<InterviewSessionRecord, 'createdAt'> & {
+  createdAt?: string;
+};
+
 interface TestimonyRow {
   id: string;
   witness_id: string;
@@ -41,6 +61,7 @@ interface TestimonyRow {
   answers: string;
   free_text: string | null;
   correction_of: string | null;
+  avoided_qids: string | null;
 }
 
 interface ClaimRow {
@@ -94,6 +115,13 @@ interface RoomRow {
   created_at: string;
 }
 
+interface InterviewSessionRow {
+  id: string;
+  invite_token: string;
+  state: string;
+  created_at: string;
+}
+
 const SCHEMA_SQL = `
 CREATE TABLE IF NOT EXISTS subjects (
   id           TEXT PRIMARY KEY,
@@ -116,7 +144,8 @@ CREATE TABLE IF NOT EXISTS testimonies (
   created_at    TEXT NOT NULL,
   answers       TEXT NOT NULL,
   free_text     TEXT,
-  correction_of TEXT
+  correction_of TEXT,
+  avoided_qids  TEXT
 );
 
 CREATE INDEX IF NOT EXISTS idx_testimonies_subject ON testimonies (subject_id, created_at);
@@ -188,6 +217,21 @@ CREATE TABLE IF NOT EXISTS rooms (
 );
 
 CREATE INDEX IF NOT EXISTS idx_rooms_subject ON rooms (subject_id);
+
+-- Interview sessions are in-progress drafts, not evidence. They deliberately
+-- have no append-only triggers: a session is rewritten as the witness answers,
+-- and it is purged once its testimony has been appended. The final product
+-- still exits through addTestimony, which is append-only; this table never
+-- holds the evidence the court will read.
+CREATE TABLE IF NOT EXISTS interview_sessions (
+  id           TEXT PRIMARY KEY,
+  invite_token TEXT NOT NULL,
+  state        TEXT NOT NULL,
+  created_at   TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_interview_sessions_token
+  ON interview_sessions (invite_token);
 `;
 
 /**
@@ -210,7 +254,25 @@ export class Store {
       this.db.pragma('journal_mode = WAL');
     }
     this.db.exec(SCHEMA_SQL);
+    this.migrate();
     this.gate = new AuthorizationGate((witnessId) => this.getConsentLevel(witnessId));
+  }
+
+  /**
+   * Idempotent column migrations for databases created before a column existed.
+   *
+   * `CREATE TABLE IF NOT EXISTS` never adds columns to an existing table, so an
+   * older `data/openmimic.db` needs this to pick up `avoided_qids`. The
+   * append-only triggers on `testimonies` are never touched.
+   */
+  private migrate(): void {
+    const columns = this.db
+      .prepare<[], { name: string }>("SELECT name FROM pragma_table_info('testimonies')")
+      .all()
+      .map((row) => row.name);
+    if (!columns.includes('avoided_qids')) {
+      this.db.exec('ALTER TABLE testimonies ADD COLUMN avoided_qids TEXT');
+    }
   }
 
   /* ---------------------------------------------------------------- */
@@ -408,6 +470,67 @@ export class Store {
   }
 
   /* ---------------------------------------------------------------- */
+  /* Interview sessions — mutable process drafts, not evidence         */
+  /* ---------------------------------------------------------------- */
+
+  /**
+   * Persist an interview session.
+   *
+   * A session is rewritten on every answer, so unlike testimony this is a
+   * plain upsert. Its `state` is opaque to the kernel: the collector that
+   * created it owns the shape. The boundary is deliberate — a session is a
+   * draft on the way to a testimony, and only `addTestimony` ever puts words
+   * into the append-only ledger.
+   */
+  putInterviewSession(input: InterviewSessionInput): InterviewSessionRecord {
+    const record: InterviewSessionRecord = {
+      id: input.id,
+      inviteToken: input.inviteToken,
+      state: input.state,
+      createdAt: input.createdAt ?? new Date().toISOString(),
+    };
+    this.db
+      .prepare<[string, string, string, string]>(
+        `INSERT INTO interview_sessions (id, invite_token, state, created_at)
+         VALUES (?, ?, ?, ?)
+         ON CONFLICT(id) DO UPDATE SET
+           invite_token = excluded.invite_token,
+           state        = excluded.state,
+           created_at   = excluded.created_at`,
+      )
+      .run(
+        record.id,
+        record.inviteToken,
+        JSON.stringify(record.state),
+        record.createdAt,
+      );
+    return record;
+  }
+
+  getInterviewSession(id: string): InterviewSessionRecord | undefined {
+    const row = this.db
+      .prepare<[string], InterviewSessionRow>(
+        'SELECT * FROM interview_sessions WHERE id = ?',
+      )
+      .get(id);
+    return row ? this.rowToInterviewSession(row) : undefined;
+  }
+
+  /**
+   * Drop a finished or expired session.
+   *
+   * Named `purge` rather than `delete` on purpose: the session table is a
+   * draft store, not the ledger, and the ledger's own no-mutator guard keeps
+   * its meaning.
+   */
+  purgeInterviewSession(id: string): boolean {
+    const result = this.db
+      .prepare<[string]>('DELETE FROM interview_sessions WHERE id = ?')
+      .run(id);
+    return result.changes > 0;
+  }
+
+  /* ---------------------------------------------------------------- */
   /* Testimony ledger — append-only, and only these three methods      */
   /* ---------------------------------------------------------------- */
 
@@ -425,10 +548,12 @@ export class Store {
     }
 
     this.db
-      .prepare<[string, string, string, string, string, string | null, string | null]>(
+      .prepare<
+        [string, string, string, string, string, string | null, string | null, string | null]
+      >(
         `INSERT INTO testimonies
-           (id, witness_id, subject_id, created_at, answers, free_text, correction_of)
-         VALUES (?, ?, ?, ?, ?, ?, ?)`,
+           (id, witness_id, subject_id, created_at, answers, free_text, correction_of, avoided_qids)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
       )
       .run(
         testimony.id,
@@ -438,6 +563,7 @@ export class Store {
         JSON.stringify(testimony.answers),
         testimony.freeText ?? null,
         testimony.correctionOf ?? null,
+        testimony.avoidedQids ? JSON.stringify(testimony.avoidedQids) : null,
       );
 
     this.events.emit('testimony.added', testimony);
@@ -635,7 +761,17 @@ export class Store {
       answers: JSON.parse(row.answers) as unknown,
       freeText: row.free_text ?? undefined,
       correctionOf: row.correction_of ?? undefined,
+      avoidedQids: row.avoided_qids ? (JSON.parse(row.avoided_qids) as unknown) : undefined,
     });
+  }
+
+  private rowToInterviewSession(row: InterviewSessionRow): InterviewSessionRecord {
+    return {
+      id: row.id,
+      inviteToken: row.invite_token,
+      state: JSON.parse(row.state) as unknown,
+      createdAt: row.created_at,
+    };
   }
 
   private rowToClaim(row: ClaimRow): Claim {

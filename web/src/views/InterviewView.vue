@@ -1,7 +1,13 @@
 <script setup lang="ts">
 import { computed, onMounted, ref, watch } from 'vue';
 import { useRoute } from 'vue-router';
-import { ApiError, api, type ConsentLevel, type Questionnaire } from '../api';
+import {
+  ApiError,
+  api,
+  type ConsentLevel,
+  type InterviewStepPayload,
+  type Questionnaire,
+} from '../api';
 import {
   clearDraft,
   emptyDraft,
@@ -19,7 +25,9 @@ import {
   isLastQuestion,
   questionAt,
   skipFront,
+  skipQuestion,
   updateBehind,
+  updateFollowup,
   updateFront,
 } from '../interview';
 import MicButton from '../components/MicButton.vue';
@@ -41,8 +49,26 @@ const questionnaire = ref<Questionnaire | null>(null);
 const draft = ref<InterviewDraft>(emptyDraft());
 const asrReady = ref(false);
 const submitting = ref(false);
+const busy = ref(false);
 const submitError = ref('');
+const stepError = ref('');
 const finalCount = ref(0);
+
+/**
+ * The interviewer's follow-up currently on screen, if any. It is deliberately
+ * separate from the question: the witness must answer it or skip it before the
+ * interview moves on.
+ */
+const followup = ref('');
+const followupQid = ref('');
+const followupDraft = ref('');
+
+/**
+ * True when the session API is unavailable (an older server). The interview
+ * then runs the plain question tree and submits through the direct endpoint —
+ * exactly the W2b behaviour, with no follow-ups.
+ */
+const legacy = ref(false);
 
 const questions = computed(() => questionnaire.value?.questions ?? []);
 const index = computed(() =>
@@ -55,6 +81,16 @@ const last = computed(() =>
 );
 const readyToSubmit = computed(() =>
   questionnaire.value ? allResolved(draft.value, questionnaire.value) : false,
+);
+const hasAnswers = computed(() =>
+  Object.values(draft.value.answers).some(
+    (answer) => answer.behindText.trim().length > 0,
+  ),
+);
+const canSubmit = computed(() => readyToSubmit.value && hasAnswers.value);
+/** The question skip is offered only on the question not yet committed. */
+const canSkipQuestion = computed(
+  () => !followup.value && index.value >= draft.value.committedUpTo,
 );
 
 watch(
@@ -90,6 +126,41 @@ async function load(): Promise<void> {
   }
 }
 
+/** Open a server session once, tolerating a server that does not have the route. */
+async function ensureSession(): Promise<void> {
+  if (legacy.value || draft.value.sessionId !== '') return;
+  try {
+    const started = await api.startInterview(token.value);
+    draft.value = { ...draft.value, sessionId: started.sessionId };
+  } catch (caught) {
+    if (
+      caught instanceof ApiError &&
+      (caught.status === 404 || caught.status === 405 || caught.status === 501)
+    ) {
+      legacy.value = true;
+      return;
+    }
+    throw caught;
+  }
+}
+
+/** Run one session call, reopening the session once if it has gone stale. */
+async function withSession<T>(call: (sessionId: string) => Promise<T>): Promise<T> {
+  await ensureSession();
+  if (legacy.value || draft.value.sessionId === '') throw new ApiError(0, 'legacy', '降级模式');
+  const sessionId = draft.value.sessionId;
+  try {
+    return await call(sessionId);
+  } catch (caught) {
+    if (caught instanceof ApiError && caught.status === 410) {
+      draft.value = { ...draft.value, sessionId: '' };
+      await ensureSession();
+      if (draft.value.sessionId !== '') return await call(draft.value.sessionId);
+    }
+    throw caught;
+  }
+}
+
 function chooseRelation(relation: string): void {
   draft.value = { ...draft.value, relationChoice: relation };
 }
@@ -98,10 +169,15 @@ function chooseConsent(level: ConsentLevel): void {
   draft.value = { ...draft.value, consentLevel: level };
 }
 
-function startInterview(): void {
+async function startInterview(): Promise<void> {
   if (!canStart(draft.value)) return;
   draft.value = { ...draft.value, currentIndex: 0 };
   phase.value = 'questions';
+  try {
+    await ensureSession();
+  } catch {
+    // A failed open only means the first commit will surface the problem.
+  }
 }
 
 function setBehind(text: string): void {
@@ -122,7 +198,7 @@ function appendFront(text: string): void {
   setFront(existing.trim() === '' ? text : `${existing}\n${text}`);
 }
 
-/** The explicit skip: a press, not an empty field. Pressing again undoes it. */
+/** The explicit front skip: a press, not an empty field. Pressing again undoes it. */
 function toggleSkip(): void {
   if (!current.value) return;
   const qid = current.value.qid;
@@ -131,12 +207,31 @@ function toggleSkip(): void {
     : skipFront(draft.value, qid);
 }
 
-function goPrev(): void {
-  if (index.value > 0) draft.value = { ...draft.value, currentIndex: index.value - 1 };
+/** Fold a step result back into the draft. */
+function applyStep(step: InterviewStepPayload): void {
+  followup.value = '';
+  followupQid.value = '';
+  followupDraft.value = '';
+  if ('followup' in step) {
+    followup.value = step.followup;
+    followupQid.value = current.value?.qid ?? '';
+    return;
+  }
+  if ('done' in step) {
+    phase.value = 'submit';
+    return;
+  }
+  draft.value = { ...draft.value, currentIndex: step.index };
 }
 
-function goNext(): void {
-  if (!canContinue(currentAnswer.value)) return;
+function markCommitted(): void {
+  draft.value = {
+    ...draft.value,
+    committedUpTo: Math.max(draft.value.committedUpTo, index.value + 1),
+  };
+}
+
+function goNextLocal(): void {
   if (last.value) {
     phase.value = 'submit';
     return;
@@ -144,15 +239,140 @@ function goNext(): void {
   draft.value = { ...draft.value, currentIndex: index.value + 1 };
 }
 
+async function commitCurrent(): Promise<void> {
+  const question = current.value;
+  if (!question) return;
+  const answer = currentAnswer.value;
+  const qid = question.qid;
+  busy.value = true;
+  stepError.value = '';
+  try {
+    if (legacy.value) {
+      markCommitted();
+      goNextLocal();
+      return;
+    }
+    const step = await withSession((sessionId) =>
+      api.answerInterview(sessionId, {
+        qid,
+        text: answer.behindText.trim(),
+        ...(answer.frontSkipped
+          ? { frontSkipped: true }
+          : answer.frontText.trim().length > 0
+            ? { frontText: answer.frontText.trim() }
+            : {}),
+      }),
+    );
+    if ('followup' in step) {
+      followup.value = step.followup;
+      followupQid.value = qid;
+      followupDraft.value = '';
+      return;
+    }
+    markCommitted();
+    applyStep(step);
+  } catch {
+    stepError.value = '刚才那句话没能送出去，请再试一次。';
+  } finally {
+    busy.value = false;
+  }
+}
+
+function goNext(): void {
+  if (busy.value || followup.value !== '') return;
+  if (index.value < draft.value.committedUpTo) {
+    // Already committed: this is review only; edits still travel at finish.
+    goNextLocal();
+    return;
+  }
+  if (!canContinue(currentAnswer.value)) return;
+  void commitCurrent();
+}
+
+function goPrev(): void {
+  if (busy.value || followup.value !== '') return;
+  if (index.value > 0) draft.value = { ...draft.value, currentIndex: index.value - 1 };
+}
+
+/** The explicit "这题跳过": a silence signal, with no attempt to talk them out of it. */
+async function skipThisQuestion(): Promise<void> {
+  const question = current.value;
+  if (!question || busy.value || followup.value !== '') return;
+  const qid = question.qid;
+  draft.value = skipQuestion(draft.value, qid);
+  busy.value = true;
+  stepError.value = '';
+  try {
+    if (legacy.value) {
+      markCommitted();
+      goNextLocal();
+      return;
+    }
+    const step = await withSession((sessionId) =>
+      api.answerInterview(sessionId, { qid, skip: true }),
+    );
+    markCommitted();
+    applyStep(step);
+  } catch {
+    stepError.value = '这题没能跳过去，请再试一次。';
+  } finally {
+    busy.value = false;
+  }
+}
+
+async function sendFollowup(text: string | undefined): Promise<void> {
+  const qid = followupQid.value;
+  if (qid === '' || busy.value) return;
+  busy.value = true;
+  stepError.value = '';
+  try {
+    const step = await withSession((sessionId) =>
+      api.answerInterviewFollowup(
+        sessionId,
+        text === undefined ? { skip: true } : { text },
+      ),
+    );
+    if (text !== undefined && text.trim().length > 0) {
+      draft.value = updateFollowup(draft.value, qid, text.trim());
+    }
+    markCommitted();
+    applyStep(step);
+  } catch {
+    stepError.value = '这句话没能送出去，请再试一次。';
+  } finally {
+    busy.value = false;
+  }
+}
+
+function skipFollowup(): void {
+  void sendFollowup(undefined);
+}
+
 async function submit(): Promise<void> {
-  if (!questionnaire.value || !readyToSubmit.value) return;
+  if (!questionnaire.value || !canSubmit.value) return;
   submitting.value = true;
   submitError.value = '';
   try {
-    const result = await api.submitTestimony(
-      token.value,
-      buildSubmission(draft.value, questionnaire.value),
-    );
+    const payload = buildSubmission(draft.value, questionnaire.value);
+    let result;
+    if (legacy.value || draft.value.sessionId === '') {
+      result = await api.submitTestimony(token.value, payload);
+    } else {
+      try {
+        result = await api.finishInterview(draft.value.sessionId, payload);
+      } catch (caught) {
+        // The session is gone or the route predates this batch: fall back to
+        // the direct intake with exactly the same words.
+        if (
+          caught instanceof ApiError &&
+          (caught.status === 410 || caught.status === 404 || caught.status === 501)
+        ) {
+          result = await api.submitTestimony(token.value, payload);
+        } else {
+          throw caught;
+        }
+      }
+    }
     finalCount.value = result.count;
     clearDraft(sessionStorage, token.value);
     phase.value = 'done';
@@ -276,13 +496,54 @@ onMounted(() => {
       </p>
     </section>
 
-    <div class="nav">
-      <div class="inner">
-        <button type="button" class="btn" :disabled="index === 0" @click="goPrev">上一题</button>
+    <section v-if="followup" class="interviewer">
+      <span class="interviewer-label">访谈员</span>
+      <p class="interviewer-text">{{ followup }}</p>
+      <textarea
+        v-model="followupDraft"
+        class="textarea"
+        placeholder="想得起来就说一件具体的事；想不起来也没关系。"
+      />
+      <div class="interviewer-actions">
+        <button type="button" class="btn ghost skip" :disabled="busy" @click="skipFollowup">
+          跳过这个
+        </button>
         <button
           type="button"
           class="btn primary"
-          :disabled="!canContinue(currentAnswer)"
+          :disabled="busy || followupDraft.trim() === ''"
+          @click="sendFollowup(followupDraft)"
+        >
+          回答
+        </button>
+      </div>
+    </section>
+
+    <p v-if="stepError" class="error small">{{ stepError }}</p>
+
+    <div class="nav">
+      <div class="inner">
+        <button
+          type="button"
+          class="btn"
+          :disabled="index === 0 || busy || followup !== ''"
+          @click="goPrev"
+        >
+          上一题
+        </button>
+        <button
+          v-if="canSkipQuestion"
+          type="button"
+          class="linkish"
+          :disabled="busy"
+          @click="skipThisQuestion"
+        >
+          这题跳过
+        </button>
+        <button
+          type="button"
+          class="btn primary"
+          :disabled="busy || followup !== '' || !canContinue(currentAnswer)"
           @click="goNext"
         >
           {{ last ? '去确认' : '下一题' }}
@@ -317,13 +578,16 @@ onMounted(() => {
     <p class="honesty">
       提交后就不能再改了：这份讲述会以「只追加」的方式进入账本，旧版本不会被覆盖。提交前，你还可以点「上一题」回去改。
     </p>
+    <p v-if="readyToSubmit && !hasAnswers" class="muted small">
+      每题都跳过了，就没有可提交的内容。至少留下一句，或者先回去补一题。
+    </p>
     <p v-if="submitError" class="error">{{ submitError }}</p>
     <div class="row">
       <button type="button" class="btn" @click="phase = 'questions'">上一题</button>
       <button
         type="button"
         class="btn primary"
-        :disabled="submitting || !readyToSubmit"
+        :disabled="submitting || !canSubmit"
         @click="submit"
       >
         {{ submitting ? '正在提交……' : '提交' }}

@@ -7,10 +7,13 @@ import {
   buildSubmission,
   canContinue,
   canStart,
+  isBehindFilled,
   isFrontRevealed,
   questionAt,
   skipFront,
+  skipQuestion,
   updateBehind,
+  updateFollowup,
   updateFront,
 } from '../src/interview';
 
@@ -100,5 +103,32 @@ describe('interview state logic', () => {
   it('clamps the current index to the questionnaire bounds', () => {
     expect(questionAt({ ...emptyDraft(), currentIndex: 9 }, questionnaire)).toBe(1);
     expect(questionAt({ ...emptyDraft(), currentIndex: -3 }, questionnaire)).toBe(0);
+  });
+
+  it('treats an explicitly skipped question as resolved', () => {
+    let draft = skipFront(updateBehind(emptyDraft(), 'q1', 'words'), 'q1');
+    expect(allResolved(draft, questionnaire)).toBe(false);
+
+    draft = skipQuestion(draft, 'q2');
+    expect(allResolved(draft, questionnaire)).toBe(true);
+    expect(draft.avoidedQids).toEqual(['q2']);
+  });
+
+  it('drops any words on the question when it is skipped', () => {
+    const draft = skipQuestion(updateBehind(emptyDraft(), 'q1', 'words'), 'q1');
+    expect(draft.answers.q1).toBeUndefined();
+    expect(isBehindFilled(answerFor(draft, 'q1'))).toBe(false);
+  });
+
+  it('keeps the follow-up answer apart and lists skips in the payload', () => {
+    let draft = updateBehind(emptyDraft(), 'q1', 'words');
+    draft = updateFollowup(draft, 'q1', '  上个月他帮我搬了家。 ');
+    draft = skipQuestion(draft, 'q2');
+
+    const payload = buildSubmission(draft, questionnaire);
+    expect(payload.answers).toEqual([
+      { qid: 'q1', behindText: 'words', followupText: '上个月他帮我搬了家。' },
+    ]);
+    expect(payload.avoidedQids).toEqual(['q2']);
   });
 });
