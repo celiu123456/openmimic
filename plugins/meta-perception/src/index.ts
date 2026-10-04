@@ -65,8 +65,7 @@ export interface MetaResult {
 export const DEFAULT_META_QIDS = ['q1', 'q2', 'q4', 'q6', 'q10'];
 
 /* ------------------------------------------------------------------ */
-/* In-memory store for predictions & results                           */
-/* (Would be DB tables in production; kept as Maps for plugin scope)   */
+/* Plugin-persisted storage for predictions & results                   */
 /* ------------------------------------------------------------------ */
 
 export interface MetaPerceptionState {
@@ -169,7 +168,74 @@ export const metaPerceptionPlugin: Plugin<MetaPerceptionConfig> = {
   apply(ctx, config) {
     const store = ctx.get<Store>('store');
     const qids = config?.qids ?? DEFAULT_META_QIDS;
+
+    // Persistent tables for predictions (append-only) and results
+    const predTable = store.registerPluginTable(
+      'meta_perception', 'predictions',
+      `CREATE TABLE IF NOT EXISTS plugin_meta_perception_predictions (
+        id TEXT PRIMARY KEY,
+        subject_id TEXT NOT NULL,
+        witness_id TEXT NOT NULL,
+        qid TEXT NOT NULL,
+        predicted_text TEXT NOT NULL,
+        locked_at TEXT NOT NULL
+      )`,
+      { appendOnly: true },
+    );
+    const resultTable = store.registerPluginTable(
+      'meta_perception', 'results',
+      `CREATE TABLE IF NOT EXISTS plugin_meta_perception_results (
+        id TEXT PRIMARY KEY,
+        subject_id TEXT NOT NULL,
+        witness_id TEXT NOT NULL,
+        qid TEXT NOT NULL,
+        match_grade TEXT NOT NULL,
+        cue TEXT NOT NULL,
+        scored_at TEXT NOT NULL
+      )`,
+      { appendOnly: false },
+    );
+
+    // In-memory cache hydrated from DB on load
     const state = createMetaState();
+
+    // Hydrate from DB
+    for (const row of predTable.query()) {
+      const subjectId = row.subject_id as string;
+      if (!state.predictions.has(subjectId)) {
+        state.predictions.set(subjectId, { items: [], lockedAt: row.locked_at as string });
+      }
+      state.predictions.get(subjectId)!.items.push({
+        witnessId: row.witness_id as string,
+        qid: row.qid as string,
+        predictedText: row.predicted_text as string,
+      });
+    }
+    for (const row of resultTable.query()) {
+      const subjectId = row.subject_id as string;
+      if (!state.results.has(subjectId)) {
+        state.results.set(subjectId, {
+          subjectId,
+          totalScore: 0,
+          items: [],
+          byWitness: [],
+          scoredAt: row.scored_at as string,
+        });
+      }
+      state.results.get(subjectId)!.items.push({
+        witnessId: row.witness_id as string,
+        qid: row.qid as string,
+        match: row.match_grade as MatchGrade,
+        cue: row.cue as string,
+      });
+    }
+    // Recompute scores from hydrated items
+    for (const [subjectId, result] of state.results) {
+      const witnesses = store.listWitnessesBySubject(subjectId);
+      const witnessMap = new Map(witnesses.map((w) => [w.id, w.relation]));
+      result.totalScore = computeScore(result.items);
+      result.byWitness = computeByWitness(result.items, witnessMap);
+    }
 
     // Provide the state for testing access
     ctx.provide('meta-perception', state);
@@ -215,10 +281,23 @@ export const metaPerceptionPlugin: Plugin<MetaPerceptionConfig> = {
         predictions: z.array(PredictionItemSchema).min(1),
       }).parse(context.body);
 
+      const lockedAt = new Date().toISOString();
       state.predictions.set(subjectId, {
         items: body.predictions,
-        lockedAt: new Date().toISOString(),
+        lockedAt,
       });
+
+      // Persist to DB (append-only)
+      for (const pred of body.predictions) {
+        predTable.insert({
+          id: randomUUID(),
+          subject_id: subjectId,
+          witness_id: pred.witnessId,
+          qid: pred.qid,
+          predicted_text: pred.predictedText,
+          locked_at: lockedAt,
+        });
+      }
 
       return { status: 201, body: { locked: true, count: body.predictions.length } };
     });
@@ -240,12 +319,9 @@ export const metaPerceptionPlugin: Plugin<MetaPerceptionConfig> = {
       const witnesses = store.listWitnessesBySubject(subjectId);
       const witnessMap = new Map(witnesses.map((w) => [w.id, w.relation]));
 
-      // Build a response that performs scoring asynchronously
-      // For simplicity in a sync route, we do it inline with a promise wrapper
       const scorePromise = (async () => {
         const items: ScoreItem[] = [];
         for (const prediction of pred.items) {
-          // Find the actual answer
           const witTestimonies = testimonies.filter((t) => t.witnessId === prediction.witnessId);
           let actualText: string | undefined;
           for (const t of witTestimonies) {
@@ -269,19 +345,34 @@ export const metaPerceptionPlugin: Plugin<MetaPerceptionConfig> = {
 
         const totalScore = computeScore(items);
         const byWitness = computeByWitness(items, witnessMap);
+        const scoredAt = new Date().toISOString();
 
         const metaResult: MetaResult = {
           subjectId,
           totalScore,
           items,
           byWitness,
-          scoredAt: new Date().toISOString(),
+          scoredAt,
         };
         state.results.set(subjectId, metaResult);
+
+        // Persist to DB (clear previous results for this subject, then insert)
+        resultTable.delete('subject_id = ?', [subjectId]);
+        for (const item of items) {
+          resultTable.insert({
+            id: randomUUID(),
+            subject_id: subjectId,
+            witness_id: item.witnessId,
+            qid: item.qid,
+            match_grade: item.match,
+            cue: item.cue,
+            scored_at: scoredAt,
+          });
+        }
+
         return metaResult;
       })();
 
-      // We need to await the async scoring. Return a promise-based result.
       return scorePromise.then((result) => ({
         status: 200,
         body: result,
@@ -293,7 +384,6 @@ export const metaPerceptionPlugin: Plugin<MetaPerceptionConfig> = {
       const subjectId = context.params.id ?? '';
       const result = state.results.get(subjectId);
       if (!result) {
-        // Check if predictions exist but not scored
         if (state.predictions.has(subjectId)) {
           if (!ctx.has('llm')) {
             return { status: 200, body: { subjectId, pending: true, message: '需要配置模型后评分' } };
@@ -311,7 +401,6 @@ export const metaPerceptionPlugin: Plugin<MetaPerceptionConfig> = {
           .map((w) => w.id),
       );
 
-      // Redact items for synthesis_only witnesses: only show match grade, not cue
       const redactedItems = result.items.map((item) => {
         if (synthWitnessIds.has(item.witnessId)) {
           return { ...item, cue: '该证人未授权展示原文' };
@@ -319,9 +408,15 @@ export const metaPerceptionPlugin: Plugin<MetaPerceptionConfig> = {
         return item;
       });
 
-      // Filter out anonymous witnesses from byWitness breakdown
-      // (anonymousInRoom is P3a territory; we handle it if the field exists)
-      const filteredByWitness = result.byWitness;
+      // Anonymous witnesses: exclude from byWitness breakdown, keep in total
+      const anonymousWitnessIds = new Set(
+        witnesses
+          .filter((w) => w.anonymousInRoom === true)
+          .map((w) => w.id),
+      );
+      const filteredByWitness = result.byWitness.filter(
+        (bw) => !anonymousWitnessIds.has(bw.witnessId),
+      );
 
       return {
         status: 200,

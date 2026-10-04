@@ -16,6 +16,7 @@ import {
   filterSessionClaims,
   checkReraiseAfterCourt,
   type GateState,
+  type ContestRecord,
 } from './gate';
 
 export const gatePlugin: Plugin = {
@@ -27,13 +28,84 @@ export const gatePlugin: Plugin = {
     const store = ctx.get<Store>('store');
     const gateState = createGateState();
 
+    // Persistent table for contest records
+    const contestTable = store.registerPluginTable(
+      'gate', 'contest_records',
+      `CREATE TABLE IF NOT EXISTS plugin_gate_contest_records (
+        id TEXT PRIMARY KEY,
+        claim_id TEXT NOT NULL,
+        at TEXT NOT NULL,
+        evidence_snapshot TEXT NOT NULL
+      )`,
+      { appendOnly: true },
+    );
+
+    const wallTable = store.registerPluginTable(
+      'gate', 'wall_transcript',
+      `CREATE TABLE IF NOT EXISTS plugin_gate_wall_transcript (
+        id TEXT PRIMARY KEY,
+        claim_id TEXT NOT NULL,
+        text TEXT NOT NULL,
+        blocked_word TEXT NOT NULL,
+        at TEXT NOT NULL
+      )`,
+      { appendOnly: true },
+    );
+
+    // Hydrate from DB
+    for (const row of contestTable.query('1=1 ORDER BY rowid ASC')) {
+      const claimId = row.claim_id as string;
+      const record: ContestRecord = {
+        claimId,
+        at: row.at as string,
+        evidenceSnapshot: JSON.parse(row.evidence_snapshot as string) as string[],
+      };
+      const existing = gateState.contestRecords.get(claimId) ?? [];
+      existing.push(record);
+      gateState.contestRecords.set(claimId, existing);
+    }
+    for (const row of wallTable.query('1=1 ORDER BY rowid ASC')) {
+      gateState.wallTranscript.push({
+        claimId: row.claim_id as string,
+        text: row.text as string,
+        blockedWord: row.blocked_word as string,
+        at: row.at as string,
+      });
+    }
+
     // Provide gate state for testing
     ctx.provide('gate', gateState);
 
+    // Persistence helpers
+    const persistContest = (record: ContestRecord): void => {
+      contestTable.insert({
+        id: `${record.claimId}-${Date.now()}`,
+        claim_id: record.claimId,
+        at: record.at,
+        evidence_snapshot: JSON.stringify(record.evidenceSnapshot),
+      });
+    };
+    const persistWallEntry = (entry: { claimId: string; text: string; blockedWord: string; at: string }): void => {
+      wallTable.insert({
+        id: `wall-${entry.claimId}-${Date.now()}`,
+        claim_id: entry.claimId,
+        text: entry.text,
+        blocked_word: entry.blockedWord,
+        at: entry.at,
+      });
+    };
+
     /* --- Event listener: court.finished -------------------------------- */
     ctx.on('court.finished', (session) => {
+      const wallLenBefore = gateState.wallTranscript.length;
+
       // 1. Permission wall: filter claims with diagnostic vocabulary
       filterSessionClaims(session, store, gateState);
+
+      // Persist new wall entries
+      for (let i = wallLenBefore; i < gateState.wallTranscript.length; i++) {
+        persistWallEntry(gateState.wallTranscript[i]!);
+      }
 
       // 2. Check re-raise for previously contested claims
       checkReraiseAfterCourt(session, store, gateState);
@@ -61,6 +133,7 @@ export const gatePlugin: Plugin = {
       if (!record) {
         return { status: 500, body: { error: { code: 'internal_error', message: '否决失败' } } };
       }
+      persistContest(record);
 
       return {
         status: 200,

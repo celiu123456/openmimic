@@ -1,4 +1,8 @@
 import { describe, expect, it, afterEach } from 'vitest';
+import { existsSync, unlinkSync } from 'node:fs';
+import { join } from 'node:path';
+import { tmpdir } from 'node:os';
+import { randomUUID } from 'node:crypto';
 import { EventBus, PluginHost, Store } from '@openmimic/kernel';
 import { Router, type RouteContext } from '@openmimic/server';
 import type { Claim, CourtSession } from '@openmimic/shared';
@@ -458,5 +462,102 @@ describe('contested claims and persona assembly', () => {
     // After contest: c1 should NOT be in the prompt
     const after = await assemblePersonaContext('s1', store);
     expect(after.meta.includedClaimIds).not.toContain('c1');
+  });
+});
+
+/* ------------------------------------------------------------------ */
+/* Persistence: contest records survive a store restart                 */
+/* ------------------------------------------------------------------ */
+
+describe('gate plugin persistence', () => {
+  const dbFiles: string[] = [];
+
+  afterEach(() => {
+    for (const f of dbFiles) {
+      try { unlinkSync(f); } catch { /* ignore */ }
+    }
+    dbFiles.length = 0;
+  });
+
+  function makeDbPath(): string {
+    const p = join(tmpdir(), `openmimic-gate-test-${randomUUID()}.db`);
+    dbFiles.push(p);
+    return p;
+  }
+
+  function setupWithFile(dbPath: string) {
+    const store = new Store({ path: dbPath });
+    const events = new EventBus();
+    const host = new PluginHost(events);
+    const router = new Router();
+    host.providePreset('store', store);
+    host.providePreset('router', router);
+    host.providePreset('events', events);
+    return { store, host, router, events };
+  }
+
+  it('contest records survive store close and reopen', async () => {
+    const dbPath = makeDbPath();
+
+    // Session 1: seed data, contest a claim, close
+    {
+      const { store, host, router } = setupWithFile(dbPath);
+      seedTestData(store);
+      host.load(gatePlugin);
+
+      const match = router.match('POST', '/api/claims/c1/contest');
+      const result = await match!.handler(makeCtx(undefined, { id: 'c1' }));
+      expect((result as { status: number }).status).toBe(200);
+      expect(store.getClaim('c1')?.status).toBe('contested');
+
+      store.close();
+    }
+
+    // Session 2: reopen — the gate state must have the contest record
+    {
+      const { store, host, router } = setupWithFile(dbPath);
+      host.load(gatePlugin);
+
+      const gateState = host.getService<GateState>('gate');
+      expect(gateState.contestRecords.has('c1')).toBe(true);
+      expect(gateState.contestRecords.get('c1')!.length).toBe(1);
+
+      // The claim itself is still contested in the DB
+      expect(store.getClaim('c1')?.status).toBe('contested');
+
+      // Listing should show it
+      const listMatch = router.match('GET', '/api/subjects/s1/contested');
+      const listResult = await listMatch!.handler(makeCtx(undefined, { id: 's1' }));
+      const body = (listResult as { body: { contested: unknown[] } }).body;
+      expect(body.contested.length).toBe(1);
+
+      store.close();
+    }
+  });
+
+  it('contest table is append-only — rejects updates', () => {
+    const dbPath = makeDbPath();
+    const store = new Store({ path: dbPath });
+
+    const table = store.registerPluginTable(
+      'gate', 'contest_records',
+      `CREATE TABLE IF NOT EXISTS plugin_gate_contest_records (
+        id TEXT PRIMARY KEY,
+        claim_id TEXT NOT NULL,
+        at TEXT NOT NULL,
+        evidence_snapshot TEXT NOT NULL
+      )`,
+      { appendOnly: true },
+    );
+
+    table.insert({
+      id: 'rec-1', claim_id: 'c1', at: new Date().toISOString(),
+      evidence_snapshot: '["e1"]',
+    });
+
+    expect(() => table.update({ at: 'never' }, 'id = ?', ['rec-1'])).toThrow(/append-only/);
+    expect(() => table.delete('id = ?', ['rec-1'])).toThrow(/append-only/);
+
+    store.close();
   });
 });

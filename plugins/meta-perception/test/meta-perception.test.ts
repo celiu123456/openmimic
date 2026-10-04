@@ -1,4 +1,8 @@
 import { describe, expect, it, afterEach } from 'vitest';
+import { existsSync, unlinkSync } from 'node:fs';
+import { join } from 'node:path';
+import { tmpdir } from 'node:os';
+import { randomUUID } from 'node:crypto';
 import { EventBus, PluginHost, Store } from '@openmimic/kernel';
 import { Router, type RouteContext } from '@openmimic/server';
 import {
@@ -295,5 +299,127 @@ describe('computeByWitness', () => {
     expect(result[0]!.score).toBe(1);
     expect(result[1]!.witnessId).toBe('w1');
     expect(result[1]!.score).toBe(0);
+  });
+});
+
+/* ---------------------------------------------------------------- */
+/* Persistence: predictions survive a store restart                  */
+/* ---------------------------------------------------------------- */
+
+describe('plugin persistence', () => {
+  const dbFiles: string[] = [];
+
+  afterEach(() => {
+    for (const f of dbFiles) {
+      try { unlinkSync(f); } catch { /* ignore */ }
+    }
+    dbFiles.length = 0;
+  });
+
+  function makeDbPath(): string {
+    const p = join(tmpdir(), `openmimic-meta-test-${randomUUID()}.db`);
+    dbFiles.push(p);
+    return p;
+  }
+
+  function setupWithFile(dbPath: string): { store: Store; host: PluginHost; router: Router } {
+    const store = new Store({ path: dbPath });
+    const bus = new EventBus();
+    const host = new PluginHost(bus);
+    const router = new Router();
+    host.providePreset('store', store);
+    host.providePreset('router', router);
+    return { store, host, router };
+  }
+
+  it('predictions survive store close and reopen', () => {
+    const dbPath = makeDbPath();
+
+    // Session 1: create subject, witness, testimony, then submit predictions
+    {
+      const { store, host, router } = setupWithFile(dbPath);
+      store.putSubject({ id: 's1', displayName: '测试' });
+      store.putWitness({ id: 'w1', subjectId: 's1', relation: '朋友', consentLevel: 'quotable' });
+      store.addTestimony({
+        id: 't1', subjectId: 's1', witnessId: 'w1',
+        answers: [{ qid: 'meta_overall_impression', behindText: '非常聪明' }],
+        createdAt: new Date().toISOString(),
+      });
+
+      host.load(metaPerceptionPlugin);
+
+      const match = router.match('POST', '/api/subjects/s1/meta/predictions');
+      expect(match).toBeTruthy();
+      const result = match!.handler({
+        params: { id: 's1' },
+        query: new URLSearchParams(),
+        body: {
+          predictions: [
+            { witnessId: 'w1', qid: 'meta_overall_impression', predictedText: '应该觉得聪明' },
+          ],
+        },
+      } as RouteContext);
+      expect((result as { status: number }).status).toBe(201);
+
+      store.close();
+    }
+
+    // Session 2: reopen — predictions must still be there, and submit must be 409
+    {
+      const { store, host, router } = setupWithFile(dbPath);
+      host.load(metaPerceptionPlugin);
+
+      const state = host.getService<MetaPerceptionState>('meta-perception');
+      expect(state.predictions.has('s1')).toBe(true);
+      expect(state.predictions.get('s1')!.items.length).toBe(1);
+      expect(state.predictions.get('s1')!.items[0]!.predictedText).toBe('应该觉得聪明');
+
+      // Submitting again should be 409
+      const match = router.match('POST', '/api/subjects/s1/meta/predictions');
+      const result = match!.handler({
+        params: { id: 's1' },
+        query: new URLSearchParams(),
+        body: {
+          predictions: [
+            { witnessId: 'w1', qid: 'meta_overall_impression', predictedText: '新预测' },
+          ],
+        },
+      } as RouteContext);
+      expect((result as { status: number }).status).toBe(409);
+
+      store.close();
+    }
+  });
+
+  it('predictions are append-only — PluginTableHandle rejects update', () => {
+    const dbPath = makeDbPath();
+    const store = new Store({ path: dbPath });
+
+    const table = store.registerPluginTable(
+      'meta_perception', 'predictions',
+      `CREATE TABLE IF NOT EXISTS plugin_meta_perception_predictions (
+        id TEXT PRIMARY KEY,
+        subject_id TEXT NOT NULL,
+        witness_id TEXT NOT NULL,
+        qid TEXT NOT NULL,
+        predicted_text TEXT NOT NULL,
+        locked_at TEXT NOT NULL
+      )`,
+      { appendOnly: true },
+    );
+
+    table.insert({
+      id: 'p1', subject_id: 's1', witness_id: 'w1',
+      qid: 'q1', predicted_text: '预测', locked_at: new Date().toISOString(),
+    });
+
+    expect(() => table.update({ predicted_text: '改掉' }, 'id = ?', ['p1'])).toThrow(/append-only/);
+    expect(() => table.delete('id = ?', ['p1'])).toThrow(/append-only/);
+
+    const rows = table.query('id = ?', ['p1']);
+    expect(rows.length).toBe(1);
+    expect(rows[0]!.predicted_text).toBe('预测');
+
+    store.close();
   });
 });
