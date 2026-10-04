@@ -1,3 +1,4 @@
+export * from './embedding';
 export * from './errors';
 export * from './events';
 export * from './gate';
