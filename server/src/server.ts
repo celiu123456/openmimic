@@ -131,6 +131,11 @@ const ChatCompletionBodySchema = z
     model: z.string().min(1),
     messages: z.array(ChatMessageSchema).min(1),
     stream: z.boolean().optional(),
+    metadata: z
+      .object({
+        interlocutor: z.string().optional(),
+      })
+      .optional(),
   })
   .passthrough();
 
@@ -416,6 +421,67 @@ function buildRouter(
   });
 
   /* ---------------------------------------------------------------- */
+  /* Corpus, episodes, divergences                                     */
+  /* ---------------------------------------------------------------- */
+
+  router.post('/api/subjects/:id/corpus', (context) => {
+    const subjectId = context.params.id ?? '';
+    if (!store.getSubject(subjectId)) {
+      throw new HttpError(404, 'subject_not_found', '当事人不存在');
+    }
+    const { text } = z.object({ text: z.string().min(1) }).parse(context.body);
+    const lines = text.split('\n').map((l) => l.trim()).filter((l) => l.length > 0);
+    const items = lines.map((line) =>
+      store.putCorpusItem({
+        id: randomUUID(),
+        subjectId,
+        text: line,
+        source: 'pasted',
+        createdAt: new Date().toISOString(),
+      }),
+    );
+    return { status: 201, body: { items } };
+  });
+
+  router.get('/api/subjects/:id/corpus', (context) => {
+    const subjectId = context.params.id ?? '';
+    if (!store.getSubject(subjectId)) {
+      throw new HttpError(404, 'subject_not_found', '当事人不存在');
+    }
+    const items = store.listCorpusItemsBySubject(subjectId);
+    return { status: 200, body: { items } };
+  });
+
+  router.get('/api/subjects/:id/divergences', (context) => {
+    const subjectId = context.params.id ?? '';
+    if (!store.getSubject(subjectId)) {
+      throw new HttpError(404, 'subject_not_found', '当事人不存在');
+    }
+    const divergences = store.listDivergencesBySubject(subjectId);
+    return { status: 200, body: { divergences } };
+  });
+
+  router.get('/api/subjects/:id/episodes', (context) => {
+    const subjectId = context.params.id ?? '';
+    if (!store.getSubject(subjectId)) {
+      throw new HttpError(404, 'subject_not_found', '当事人不存在');
+    }
+    const episodes = store.listEpisodesBySubject(subjectId);
+    // Withhold synthesis_only witness episode text
+    const synthesisOnlyWitnessIds = new Set(
+      store.listWitnessesBySubject(subjectId)
+        .filter((w) => w.consentLevel === 'synthesis_only')
+        .map((w) => w.id),
+    );
+    const filtered = episodes.map((ep) =>
+      synthesisOnlyWitnessIds.has(ep.witnessId)
+        ? { ...ep, text: '[withheld]' }
+        : ep,
+    );
+    return { status: 200, body: { episodes: filtered } };
+  });
+
+  /* ---------------------------------------------------------------- */
   /* .persona packages: portable, consent-filtered persona export      */
   /* ---------------------------------------------------------------- */
 
@@ -518,7 +584,13 @@ function buildRouter(
       };
     }
 
-    const { systemPrompt } = assemblePersonaContext(subjectId, store);
+    // Extract the last user message as query for episode ranking.
+    const lastUser = [...body.messages].reverse().find((m) => m.role === 'user');
+    const query = typeof lastUser?.content === 'string' ? lastUser.content : undefined;
+    const { systemPrompt } = await assemblePersonaContext(subjectId, store, {
+      query,
+      interlocutor: body.metadata?.interlocutor,
+    });
     // The persona prompt is prepended; a client-supplied system message is kept
     // verbatim right after it, so the persona stays the higher authority.
     const messages: ChatMessage[] = [

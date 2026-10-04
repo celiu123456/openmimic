@@ -26,6 +26,10 @@ export const SubmitTestimonyInputSchema = z.object({
   freeText: z.string().min(1).optional(),
   /** Question ids the witness explicitly skipped (silence signal). */
   avoidedQids: z.array(z.string().min(1)).optional(),
+  /** Year the witness first knew the subject. */
+  knownFromYear: z.number().int().optional(),
+  /** Year the acquaintance ended; null means still ongoing. */
+  knownToYear: z.number().int().nullable().optional(),
 });
 export type SubmitTestimonyInput = z.infer<typeof SubmitTestimonyInputSchema>;
 
@@ -71,6 +75,8 @@ export function submitTestimony(
     relation: parsed.relation,
     ...(parsed.stance !== undefined ? { stance: parsed.stance } : {}),
     consentLevel: parsed.consentLevel,
+    ...(parsed.knownFromYear !== undefined ? { knownFromYear: parsed.knownFromYear } : {}),
+    ...(parsed.knownToYear !== undefined ? { knownToYear: parsed.knownToYear } : {}),
   };
   store.putWitness(witness);
 

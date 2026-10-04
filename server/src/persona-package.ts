@@ -3,14 +3,20 @@ import { z } from 'zod';
 import {
   ClaimSchema,
   ConsentLevelSchema,
+  CorpusItemSchema,
+  DivergenceSchema,
+  EpisodeSchema,
   StyleSampleSchema,
   type Claim,
   type ConsentLevel,
+  type CorpusItem,
   type CourtReport,
+  type Divergence,
+  type Episode,
   type StyleSample,
   type Subject,
 } from '@openmimic/shared';
-import { collectQuotableSamples, type Store } from '@openmimic/kernel';
+import { type Store } from '@openmimic/kernel';
 
 /**
  * The `.persona` single-file package: one subject's adjudicated persona,
@@ -25,7 +31,7 @@ import { collectQuotableSamples, type Store } from '@openmimic/kernel';
  */
 
 export const PERSONA_FORMAT = 'openmimic.persona' as const;
-export const PERSONA_VERSION = 1 as const;
+export const PERSONA_VERSION = 2 as const;
 export const PERSONA_NOTICE = '原始证言不随包分发;本包内容已按证言人授权过滤' as const;
 
 /**
@@ -62,18 +68,28 @@ export interface PersonaPackage {
   subject: { displayName: string };
   /** Surviving claims (qualified ones are surviving with qualifiers). */
   claims: Claim[];
-  /** Authorized verbatim samples, at most two per `quotable` witness. */
+  /**
+   * v2: style samples come from corpus items (subject's own words).
+   * v1 compatibility: old packages carry witness-derived samples here;
+   * on import they are treated as episodes (evidence), not style.
+   */
   styleSamples: StyleSample[];
   report: (CourtReport & { imported?: boolean }) | null;
   witnesses: PersonaWitnessEntry[];
+  /** v2: quotable episodes. */
+  episodes?: Episode[];
+  /** v2: divergence map. */
+  divergences?: Divergence[];
+  /** v2: subject's own words (corpus). */
+  corpus?: CorpusItem[];
   exportedAt: string;
   notice: string;
 }
 
-/** Validation schema for an incoming package; rejects unknown formats early. */
+/** Validation schema for an incoming package; accepts both v1 and v2. */
 export const PersonaPackageSchema = z.object({
   format: z.literal(PERSONA_FORMAT),
-  version: z.literal(PERSONA_VERSION),
+  version: z.union([z.literal(1), z.literal(2)]),
   subject: z.object({ displayName: z.string().min(1) }),
   claims: z.array(ClaimSchema),
   styleSamples: z.array(StyleSampleSchema),
@@ -86,6 +102,9 @@ export const PersonaPackageSchema = z.object({
       evidenceIds: z.array(z.string().min(1)).default([]),
     }),
   ),
+  episodes: z.array(EpisodeSchema).optional(),
+  divergences: z.array(DivergenceSchema).optional(),
+  corpus: z.array(CorpusItemSchema).optional(),
   exportedAt: z.string().min(1),
   notice: z.string().min(1),
 });
@@ -168,12 +187,34 @@ export function buildPersonaPackage(
       ? { ...baseReport, imported: true }
       : baseReport;
 
+  // v2: styleSamples come from corpus (subject's own words)
+  const corpusItems = store.listCorpusItemsBySubject(subjectId);
+  const styleSamples: StyleSample[] = corpusItems.map((item) => ({
+    relation: '本人',
+    text: item.text,
+  }));
+
+  // Quotable episodes only
+  const quotableWitnessIds = new Set(
+    store.listWitnessesBySubject(subjectId)
+      .filter((w) => w.consentLevel === 'quotable')
+      .map((w) => w.id),
+  );
+  const episodes = store.listEpisodesBySubject(subjectId)
+    .filter((ep) => quotableWitnessIds.has(ep.witnessId))
+    .map((ep) => ({ ...ep }));
+  const divergences = store.listDivergencesBySubject(subjectId)
+    .map((d) => ({ ...d }));
+
   return {
     format: PERSONA_FORMAT,
     version: PERSONA_VERSION,
     subject: { displayName: subject.displayName },
     claims,
-    styleSamples: collectQuotableSamples(store, subjectId).map((sample) => ({ ...sample })),
+    styleSamples,
+    episodes,
+    divergences,
+    corpus: corpusItems.map((item) => ({ ...item })),
     report,
     witnesses,
     exportedAt: (options.now ?? (() => new Date()))().toISOString(),

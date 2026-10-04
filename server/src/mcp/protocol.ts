@@ -245,12 +245,12 @@ async function callPersonaList(options: McpSessionOptions): Promise<ToolContent>
   );
 }
 
-function callPersonaContext(options: McpSessionOptions, args: unknown): ToolContent {
+async function callPersonaContext(options: McpSessionOptions, args: unknown): Promise<ToolContent> {
   const { subjectId } = SubjectArgsSchema.parse(args);
   if (!options.store.getSubject(subjectId)) {
     return toolError(`当事人不存在:${subjectId}`);
   }
-  const context = assemblePersonaContext(subjectId, options.store);
+  const context = await assemblePersonaContext(subjectId, options.store);
   return toolOk(options.store, [subjectId], {
     subjectId,
     systemPrompt: context.systemPrompt,
@@ -271,7 +271,7 @@ async function callPersonaSpeak(
     return toolError('服务器未配置语言模型(缺 LLM_API_KEY),无法让人格开口');
   }
 
-  const { systemPrompt } = assemblePersonaContext(subjectId, options.store);
+  const { systemPrompt } = await assemblePersonaContext(subjectId, options.store);
   let upstream: Response;
   try {
     upstream = await chat.chatRaw([
@@ -361,7 +361,7 @@ async function handleToolsCall(
         result = await callPersonaList(options);
         break;
       case 'persona_context':
-        result = callPersonaContext(options, args);
+        result = await callPersonaContext(options, args);
         break;
       case 'persona_speak':
         result = await callPersonaSpeak(options, args);
