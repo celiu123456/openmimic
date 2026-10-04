@@ -608,7 +608,7 @@ export const DEMO_EPISODES: readonly Episode[] = [
     witnessId: 'w-boss',
     testimonyId: 't-boss',
     qid: 'q10',
-    text: '他说"苏总,我二十八了,我不想三十五岁的时候还在跟您解释同一件事"',
+    text: '说"苏总,我二十八了,我不想三十五岁的时候还在跟您解释同一件事"',
     elicited: false,
     situation: '提离职',
   },
