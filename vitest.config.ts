@@ -21,6 +21,7 @@ export default defineConfig({
       'kernel/**/*.test.ts',
       'engines/**/*.test.ts',
       'server/**/*.test.ts',
+      'web/**/*.test.ts',
     ],
     exclude: ['**/node_modules/**', '**/dist/**'],
   },

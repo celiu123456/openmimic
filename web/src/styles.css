@@ -1,0 +1,201 @@
+/* OpenMimic interview room — hand-written, mobile-first, no framework.
+   One accent colour, a deep quiet background, generous whitespace. */
+
+:root {
+  --bg: #0c0e11;
+  --panel: #14171d;
+  --line: #262b34;
+  --text: #e8eaf0;
+  --muted: #8a92a1;
+  --accent: #d7a86e;
+  --accent-soft: rgba(215, 168, 110, 0.14);
+  --danger: #d98b7a;
+  --radius: 14px;
+}
+* { box-sizing: border-box; }
+html, body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--text);
+  font-family: -apple-system, BlinkMacSystemFont, 'PingFang SC', 'Noto Sans SC',
+    'Microsoft YaHei', sans-serif;
+  font-size: 16px;
+  line-height: 1.7;
+  -webkit-font-smoothing: antialiased;
+}
+#app { min-height: 100vh; }
+.room {
+  max-width: 34rem;
+  margin: 0 auto;
+  padding: 2.5rem 1.4rem calc(5.5rem + env(safe-area-inset-bottom));
+}
+.room.center {
+  display: flex;
+  min-height: 100vh;
+  flex-direction: column;
+  justify-content: center;
+  padding-bottom: 2.5rem;
+}
+.eyebrow {
+  margin: 0 0 0.4rem;
+  color: var(--muted);
+  font-size: 0.78rem;
+  letter-spacing: 0.22em;
+  text-transform: uppercase;
+}
+.lede { color: var(--muted); font-size: 0.95rem; }
+.name { margin: 0 0 1.1rem; font-size: 1.9rem; font-weight: 600; }
+.quote {
+  margin: 0 0 2.2rem;
+  padding-left: 1rem;
+  border-left: 2px solid var(--accent);
+  color: #cfd3dc;
+  font-size: 1.02rem;
+}
+.muted { color: var(--muted); }
+.error { color: var(--danger); }
+.stack { display: flex; flex-direction: column; gap: 1.1rem; }
+.label { display: block; margin-bottom: 0.5rem; color: var(--muted); font-size: 0.85rem; }
+.relations { display: flex; flex-wrap: wrap; gap: 0.6rem; margin-bottom: 1.2rem; }
+.chip {
+  padding: 0.55rem 1.05rem;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: transparent;
+  color: var(--text);
+  font: inherit;
+  cursor: pointer;
+  transition: border-color 0.18s ease, background 0.18s ease;
+}
+.chip.active { border-color: var(--accent); background: var(--accent-soft); color: var(--accent); }
+.input, .textarea {
+  width: 100%;
+  padding: 0.85rem 1rem;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--panel);
+  color: var(--text);
+  font: inherit;
+  line-height: 1.65;
+  outline: none;
+  resize: vertical;
+}
+.input:focus, .textarea:focus { border-color: var(--accent); }
+.textarea { min-height: 9.5rem; }
+.btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.5rem;
+  padding: 0.85rem 1.5rem;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: transparent;
+  color: var(--text);
+  font: inherit;
+  cursor: pointer;
+  transition: opacity 0.18s ease, border-color 0.18s ease, background 0.18s ease;
+}
+.btn.primary { border-color: var(--accent); background: var(--accent); color: #1b1408; font-weight: 600; }
+.btn.ghost { border-color: transparent; color: var(--muted); padding-inline: 0.6rem; }
+.btn:disabled { cursor: not-allowed; opacity: 0.38; }
+.progress {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 2.4rem;
+  color: var(--muted);
+  font-size: 0.82rem;
+  letter-spacing: 0.08em;
+}
+.dots { display: flex; gap: 0.42rem; }
+.dot { width: 6px; height: 6px; border-radius: 50%; background: var(--line); }
+.dot.done { background: var(--muted); }
+.dot.active { background: var(--accent); transform: scale(1.35); }
+.prompt { margin: 0 0 0.7rem; font-size: 1.42rem; font-weight: 600; line-height: 1.5; }
+.hint { margin: 0 0 1.4rem; color: var(--muted); font-size: 0.88rem; }
+.answer { display: flex; align-items: flex-start; gap: 0.6rem; }
+.answer .textarea { flex: 1; }
+.mic {
+  flex: none;
+  width: 2.9rem;
+  height: 2.9rem;
+  border: 1px solid var(--line);
+  border-radius: 50%;
+  background: var(--panel);
+  color: var(--muted);
+  font-size: 1.05rem;
+  cursor: pointer;
+}
+.mic.recording { border-color: var(--accent); background: var(--accent-soft); color: var(--accent); }
+.front {
+  margin-top: 1.6rem;
+  padding-top: 1.4rem;
+  border-top: 1px dashed var(--line);
+  animation: rise 0.22s ease;
+}
+@keyframes rise {
+  from { opacity: 0; transform: translateY(6px); }
+}
+@media (prefers-reduced-motion: reduce) {
+  .front { animation: none; }
+}
+.front .label { color: var(--accent); }
+.front-actions { display: flex; justify-content: flex-end; margin-top: 0.5rem; }
+.skip.active { border-color: var(--accent); color: var(--accent); }
+.nav {
+  position: fixed;
+  inset: auto 0 0 0;
+  padding: 0.9rem 1.4rem calc(0.9rem + env(safe-area-inset-bottom));
+  border-top: 1px solid var(--line);
+  background: rgba(12, 14, 17, 0.94);
+  backdrop-filter: blur(8px);
+}
+.nav .inner {
+  display: flex;
+  width: 100%;
+  max-width: 34rem;
+  margin: 0 auto;
+  gap: 0.8rem;
+  justify-content: space-between;
+}
+.cards { display: grid; gap: 0.9rem; margin: 1.4rem 0; }
+.card {
+  padding: 1.1rem 1.2rem;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--panel);
+  text-align: left;
+  color: var(--text);
+  font: inherit;
+  cursor: pointer;
+  transition: border-color 0.18s ease, background 0.18s ease;
+}
+.card.active { border-color: var(--accent); background: var(--accent-soft); }
+.card-title { display: block; margin-bottom: 0.35rem; font-size: 1.02rem; font-weight: 600; }
+.card-note { display: block; color: var(--muted); font-size: 0.85rem; line-height: 1.6; }
+.honesty {
+  margin: 1.2rem 0 1.8rem;
+  padding: 0.9rem 1rem;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  color: var(--muted);
+  font-size: 0.86rem;
+}
+.count { margin: 0.4rem 0 1.6rem; color: var(--accent); font-size: 2.6rem; font-weight: 600; }
+.link {
+  padding: 0.9rem 1rem;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--panel);
+  color: var(--text);
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 0.86rem;
+  word-break: break-all;
+}
+.progress-line { color: var(--muted); font-size: 0.9rem; }
+.row { display: flex; flex-wrap: wrap; align-items: center; gap: 0.8rem; }
+@media (min-width: 40rem) {
+  .room { padding-top: 4.5rem; }
+  .prompt { font-size: 1.6rem; }
+}

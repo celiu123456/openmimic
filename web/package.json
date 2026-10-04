@@ -1,0 +1,20 @@
+{
+  "name": "@openmimic/web",
+  "version": "0.0.1",
+  "private": true,
+  "description": "OpenMimic mobile interview room (H5) and inviter page.",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "preview": "vite preview"
+  },
+  "dependencies": {
+    "vue": "^3.5.43",
+    "vue-router": "^4.6.4"
+  },
+  "devDependencies": {
+    "@vitejs/plugin-vue": "^6.0.9",
+    "vite": "^7.3.6"
+  }
+}
