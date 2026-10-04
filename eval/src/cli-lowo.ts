@@ -3,6 +3,7 @@
  * CLI: npm run eval:lowo -- --subject <id>
  *
  * Runs Leave-One-Witness-Out evaluation for a subject.
+ * Supports incremental checkpointing via --progress <file>.
  */
 
 import { loadEnv } from './env';
@@ -20,6 +21,9 @@ async function main(): Promise<void> {
   const maxQIdx = args.indexOf('--max-questions');
   const maxQuestionsPerWitness = maxQIdx >= 0 && args[maxQIdx + 1] ? parseInt(args[maxQIdx + 1], 10) : 3;
 
+  const progressIdx = args.indexOf('--progress');
+  const progressFile = progressIdx >= 0 && args[progressIdx + 1] ? args[progressIdx + 1] : undefined;
+
   const client = createEvalLLM();
 
   if (!client.configured) {
@@ -29,6 +33,7 @@ async function main(): Promise<void> {
 
   const modelName = process.env.LLM_MODEL ?? 'unknown';
   console.log(`Running LOWO for subject: ${subjectId}, model: ${modelName}, maxQ=${maxQuestionsPerWitness}`);
+  if (progressFile) console.log(`Checkpoint file: ${progressFile}`);
 
   // Load demo data
   const store = new Store();
@@ -40,6 +45,7 @@ async function main(): Promise<void> {
     const result = await runLowo(subjectId, store, client, Store, {
       modelName,
       maxQuestionsPerWitness,
+      progressFile,
     });
 
     console.log('\n=== LOWO Results ===');

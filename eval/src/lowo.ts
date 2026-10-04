@@ -9,8 +9,12 @@
  *    - "without persona" (baseline): only w's relation + the question
  * 4. Judge which prediction is closer to w's actual answer
  * 5. Optional mismatch control: use a different subject's persona
+ *
+ * Supports incremental checkpointing: each completed question is saved
+ * to a progress file so a crash/timeout does not lose partial results.
  */
 
+import { readFileSync, writeFileSync, existsSync } from 'node:fs';
 import type { LLMClient, LLMCompletionRequest } from '@openmimic/engine-court';
 import type { Store } from '@openmimic/kernel';
 import type { Testimony, Witness } from '@openmimic/shared';
@@ -90,6 +94,32 @@ export interface LowoOptions {
   mismatchSubjectId?: string;
   /** Max questions per held-out witness (default: all) — controls call volume. */
   maxQuestionsPerWitness?: number;
+  /** Path to checkpoint file for incremental save/resume */
+  progressFile?: string;
+}
+
+/* ------------------------------------------------------------------ */
+/* Checkpoint: incremental save/resume                                 */
+/* ------------------------------------------------------------------ */
+
+interface LowoCheckpoint {
+  completedWitnesses: LowoWitnessResult[];
+  /** witnessId of in-progress witness, if any */
+  currentWitnessId?: string;
+  currentWitnessQuestions?: LowoQuestionResult[];
+}
+
+function loadCheckpoint(file: string): LowoCheckpoint | null {
+  if (!existsSync(file)) return null;
+  try {
+    return JSON.parse(readFileSync(file, 'utf-8'));
+  } catch {
+    return null;
+  }
+}
+
+function saveCheckpoint(file: string, cp: LowoCheckpoint): void {
+  writeFileSync(file, JSON.stringify(cp, null, 2), 'utf-8');
 }
 
 /* ------------------------------------------------------------------ */
@@ -157,10 +187,21 @@ export async function runLowo(
   }
 
   const allTestimonies = store.listBySubject(subjectId);
-  const witnessResults: LowoWitnessResult[] = [];
+
+  // Load checkpoint if available
+  const checkpoint = options.progressFile ? loadCheckpoint(options.progressFile) : null;
+  const witnessResults: LowoWitnessResult[] = checkpoint?.completedWitnesses ?? [];
+  const completedWitnessIds = new Set(witnessResults.map((wr) => wr.witnessId));
 
   for (let wi = 0; wi < witnesses.length; wi++) {
     const heldOut = witnesses[wi];
+
+    // Skip already-completed witnesses
+    if (completedWitnessIds.has(heldOut.id)) {
+      console.error(`[LOWO] Witness ${wi + 1}/${witnesses.length}: ${heldOut.id} (${heldOut.relation}) — resuming, already done`);
+      continue;
+    }
+
     console.error(`[LOWO] Witness ${wi + 1}/${witnesses.length}: holding out ${heldOut.id} (${heldOut.relation})`);
     // 1. Build temporary store without this witness
     const tempStore = buildHeldOutStore(StoreClass, store, subjectId, heldOut.id);
@@ -176,13 +217,20 @@ export async function runLowo(
 
       // 4. Get held-out witness's testimonies
       const heldOutTestimonies = allTestimonies.filter((t) => t.witnessId === heldOut.id);
-      const questions: LowoQuestionResult[] = [];
+
+      // Resume in-progress questions for this witness
+      const questions: LowoQuestionResult[] =
+        (checkpoint?.currentWitnessId === heldOut.id ? checkpoint.currentWitnessQuestions : undefined) ?? [];
+      const completedQids = new Set(questions.map((q) => q.qid));
+
       const maxQ = options.maxQuestionsPerWitness ?? Infinity;
 
       for (const testimony of heldOutTestimonies) {
         for (const answer of testimony.answers) {
           if (questions.length >= maxQ) break;
           if (!answer.behindText || answer.behindText.trim().length === 0) continue;
+          if (completedQids.has(answer.qid)) continue;
+
           console.error(`[LOWO]   Q${questions.length + 1} (${answer.qid})...`);
 
           // Generate "with persona" prediction
@@ -236,6 +284,15 @@ export async function runLowo(
             baselinePrediction,
             judgeResult,
           });
+
+          // Checkpoint after each question
+          if (options.progressFile) {
+            saveCheckpoint(options.progressFile, {
+              completedWitnesses: witnessResults,
+              currentWitnessId: heldOut.id,
+              currentWitnessQuestions: questions,
+            });
+          }
         }
       }
 
@@ -247,14 +304,22 @@ export async function runLowo(
       ).length;
       const discarded = questions.filter((q) => q.judgeResult.status === 'discarded').length;
 
-      witnessResults.push({
+      const wr: LowoWitnessResult = {
         witnessId: heldOut.id,
         relation: heldOut.relation,
         questions,
         personaWins,
         baselineWins,
         discarded,
-      });
+      };
+      witnessResults.push(wr);
+
+      // Checkpoint after each witness
+      if (options.progressFile) {
+        saveCheckpoint(options.progressFile, {
+          completedWitnesses: witnessResults,
+        });
+      }
     } finally {
       tempStore.close();
     }

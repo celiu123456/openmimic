@@ -3,6 +3,7 @@
  * CLI: npm run eval:stability -- --subject <id>
  *
  * Runs court stability evaluation for a subject.
+ * Supports incremental checkpointing via --progress <file>.
  */
 
 import { loadEnv } from './env';
@@ -23,6 +24,9 @@ async function main(): Promise<void> {
   const subsetsIdx = args.indexOf('--max-subsets');
   const maxSubsets = subsetsIdx >= 0 && args[subsetsIdx + 1] ? parseInt(args[subsetsIdx + 1], 10) : 2;
 
+  const progressIdx = args.indexOf('--progress');
+  const progressFile = progressIdx >= 0 && args[progressIdx + 1] ? args[progressIdx + 1] : undefined;
+
   const client = createEvalLLM();
 
   if (!client.configured) {
@@ -32,6 +36,7 @@ async function main(): Promise<void> {
 
   const modelName = process.env.LLM_MODEL ?? 'unknown';
   console.log(`Running stability for subject: ${subjectId}, model: ${modelName}, K=${K}, maxSubsets=${maxSubsets}`);
+  if (progressFile) console.log(`Checkpoint file: ${progressFile}`);
 
   // Load demo data
   const store = new Store();
@@ -44,6 +49,7 @@ async function main(): Promise<void> {
       modelName,
       K,
       maxSubsets,
+      progressFile,
     });
 
     console.log('\n=== Stability Results ===');

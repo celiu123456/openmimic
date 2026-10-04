@@ -440,7 +440,29 @@ describe('Stability: claim matching', () => {
 });
 
 /* ------------------------------------------------------------------ */
-/* 8. Ledger: run writing and format                                   */
+/* 8. Calibration: difficulty-based gating                             */
+/* ------------------------------------------------------------------ */
+
+describe('Calibration difficulty', () => {
+  it('pairs include both easy and hard difficulties', () => {
+    const pairs = loadCalibrationPairs();
+    const easy = pairs.filter((p) => p.difficulty === 'easy');
+    const hard = pairs.filter((p) => p.difficulty === 'hard');
+    expect(easy.length).toBeGreaterThanOrEqual(24);
+    expect(hard.length).toBeGreaterThanOrEqual(24);
+  });
+
+  it('hard pair IDs all start with cal-h', () => {
+    const pairs = loadCalibrationPairs();
+    const hard = pairs.filter((p) => p.difficulty === 'hard');
+    for (const p of hard) {
+      expect(p.id).toMatch(/^cal-h/);
+    }
+  });
+});
+
+/* ------------------------------------------------------------------ */
+/* 9. Ledger: run writing and format                                   */
 /* ------------------------------------------------------------------ */
 
 describe('Ledger', () => {

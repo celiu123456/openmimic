@@ -5,8 +5,12 @@
  * 2. Witness count curve: for n=2..N, sample subsets -> stability vs n
  *
  * Claim matching uses character bigram Jaccard by default (injectable).
+ *
+ * Supports incremental checkpointing so a crash/timeout does not lose
+ * partial progress.
  */
 
+import { readFileSync, writeFileSync, existsSync } from 'node:fs';
 import type { LLMClient } from '@openmimic/engine-court';
 import type { Store } from '@openmimic/kernel';
 import type { Claim } from '@openmimic/shared';
@@ -145,6 +149,52 @@ export interface StabilityOptions {
   skipCalibrationCheck?: boolean;
   /** Similarity function override */
   similarity?: SimilarityFn;
+  /** Path to checkpoint file for incremental save/resume */
+  progressFile?: string;
+}
+
+/* ------------------------------------------------------------------ */
+/* Checkpoint                                                          */
+/* ------------------------------------------------------------------ */
+
+interface StabilityCheckpoint {
+  /** Serialized claim sets for completed repeat runs */
+  repeatClaimTexts: string[][];
+  /** Completed curve points */
+  curve: StabilityCurvePoint[];
+  /** Subset claim texts for in-progress curve point n */
+  currentN?: number;
+  currentSubsetClaimTexts?: string[][];
+}
+
+function loadStabilityCheckpoint(file: string): StabilityCheckpoint | null {
+  if (!existsSync(file)) return null;
+  try {
+    return JSON.parse(readFileSync(file, 'utf-8'));
+  } catch {
+    return null;
+  }
+}
+
+function saveStabilityCheckpoint(file: string, cp: StabilityCheckpoint): void {
+  writeFileSync(file, JSON.stringify(cp, null, 2), 'utf-8');
+}
+
+/** Serialize claim sets as text arrays (claims are re-created from text for matching). */
+function claimsToTexts(claims: Claim[]): string[] {
+  return claims.filter((c) => c.status === 'surviving').map((c) => c.text);
+}
+
+function textsToMinimalClaims(texts: string[]): Claim[] {
+  return texts.map((text, i) => ({
+    id: `restored-${i}`,
+    subjectId: 'restored',
+    text,
+    conviction: 0.5,
+    evidence: [],
+    status: 'surviving' as const,
+    courtSessionId: 'restored',
+  }));
 }
 
 /* ------------------------------------------------------------------ */
@@ -212,10 +262,16 @@ export async function runStability(
   const witnesses = store.listWitnessesBySubject(subjectId);
   const allTestimonies = store.listBySubject(subjectId);
 
-  /* ---- Repeat runs (full data, K times) ---- */
-  const repeatClaimSets: Claim[][] = [];
+  // Load checkpoint
+  const checkpoint = options.progressFile ? loadStabilityCheckpoint(options.progressFile) : null;
 
-  for (let run = 0; run < K; run++) {
+  /* ---- Repeat runs (full data, K times) ---- */
+  const repeatClaimSets: Claim[][] = checkpoint
+    ? checkpoint.repeatClaimTexts.map(textsToMinimalClaims)
+    : [];
+
+  for (let run = repeatClaimSets.length; run < K; run++) {
+    console.error(`[Stability] Repeat run ${run + 1}/${K}...`);
     const tempStore = new StoreClass();
     const subject = store.getSubject(subjectId);
     if (subject) tempStore.putSubject(subject);
@@ -226,6 +282,15 @@ export async function runStability(
       await adapterRunCourt(subjectId, tempStore, llm);
       const claims = tempStore.listClaimsBySubject(subjectId);
       repeatClaimSets.push(claims);
+      console.error(`[Stability]   Run ${run + 1}: ${claims.length} claims`);
+
+      // Checkpoint
+      if (options.progressFile) {
+        saveStabilityCheckpoint(options.progressFile, {
+          repeatClaimTexts: repeatClaimSets.map(claimsToTexts),
+          curve: checkpoint?.curve ?? [],
+        });
+      }
     } finally {
       tempStore.close();
     }
@@ -238,13 +303,22 @@ export async function runStability(
   };
 
   /* ---- Witness count curve ---- */
-  const curve: StabilityCurvePoint[] = [];
+  const curve: StabilityCurvePoint[] = checkpoint?.curve ?? [];
+  const completedNs = new Set(curve.map((p) => p.n));
 
   for (let n = 2; n <= witnesses.length; n++) {
+    if (completedNs.has(n)) {
+      console.error(`[Stability] Curve n=${n}: already done, skipping`);
+      continue;
+    }
+
+    console.error(`[Stability] Curve n=${n}...`);
     const subsets = randomSubsets(witnesses, n, maxSubsets);
     const subsetClaimSets: Claim[][] = [];
 
-    for (const subset of subsets) {
+    for (let si = 0; si < subsets.length; si++) {
+      const subset = subsets[si];
+      console.error(`[Stability]   Subset ${si + 1}/${subsets.length} (n=${n})...`);
       const subsetIds = new Set(subset.map((w) => w.id));
       const tempStore = new StoreClass();
       const subject = store.getSubject(subjectId);
@@ -258,6 +332,7 @@ export async function runStability(
         await adapterRunCourt(subjectId, tempStore, llm);
         const claims = tempStore.listClaimsBySubject(subjectId);
         subsetClaimSets.push(claims);
+        console.error(`[Stability]     ${claims.length} claims`);
       } finally {
         tempStore.close();
       }
@@ -268,6 +343,14 @@ export async function runStability(
       subsets: subsets.length,
       overlap: pairwiseOverlap(subsetClaimSets, similarity),
     });
+
+    // Checkpoint
+    if (options.progressFile) {
+      saveStabilityCheckpoint(options.progressFile, {
+        repeatClaimTexts: repeatClaimSets.map(claimsToTexts),
+        curve,
+      });
+    }
   }
 
   const result: StabilityResult = {
