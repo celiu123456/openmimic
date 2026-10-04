@@ -240,6 +240,101 @@ describe('meta-perception plugin', () => {
     expect(w2Item.cue).toBe('该证人未授权展示原文');
   });
 
+  it('anonymous witnesses excluded from byWitness but contribute to total', async () => {
+    store = new Store();
+    seedTestData(store);
+
+    // Add an anonymous witness w3
+    store.putWitness({
+      id: 'w3', subjectId: 's1', relation: '网友',
+      consentLevel: 'quotable',
+      anonymousInRoom: true,
+    });
+    store.addTestimony({
+      id: 't3', witnessId: 'w3', subjectId: 's1',
+      answers: [
+        { qid: 'q1', behindText: '他心思很细腻' },
+      ],
+    });
+
+    const { host, router } = await setupHost(store);
+    const state = host.getService<MetaPerceptionState>('meta-perception');
+
+    // Submit predictions
+    const predMatch = router.match('POST', '/api/subjects/s1/meta/predictions');
+    await predMatch!.handler(makeCtx({
+      predictions: [
+        { witnessId: 'w1', qid: 'meta_overall_impression', predictedText: '觉得不错' },
+        { witnessId: 'w3', qid: 'meta_overall_impression', predictedText: '觉得不错' },
+      ],
+    }, { id: 's1' }));
+
+    // Manually set result items so we don't need LLM
+    state.results.set('s1', {
+      subjectId: 's1',
+      totalScore: 0.5,
+      items: [
+        { witnessId: 'w1', qid: 'q1', match: 'hit', cue: '匹配' },
+        { witnessId: 'w3', qid: 'q1', match: 'hit', cue: '匹配' },
+      ],
+      byWitness: [
+        { witnessId: 'w1', relation: '发小', score: 1, count: 1 },
+        { witnessId: 'w3', relation: '网友', score: 1, count: 1 },
+      ],
+      scoredAt: new Date().toISOString(),
+    });
+
+    const resMatch = router.match('GET', '/api/subjects/s1/meta/result');
+    const result = await resMatch!.handler(makeCtx(undefined, { id: 's1' }));
+    const body = (result as { body: Record<string, unknown> }).body;
+
+    // byWitness should NOT include w3 (anonymous)
+    const byWitness = body.byWitness as Array<{ witnessId: string }>;
+    expect(byWitness.length).toBe(1);
+    expect(byWitness[0]!.witnessId).toBe('w1');
+
+    // items should still include w3's data (contributes to total)
+    const items = body.items as Array<{ witnessId: string }>;
+    expect(items.length).toBe(2);
+    expect(items.some((i) => i.witnessId === 'w3')).toBe(true);
+  });
+
+  it('non-anonymous witnesses appear in byWitness breakdown', async () => {
+    store = new Store();
+    seedTestData(store);
+
+    const { host, router } = await setupHost(store);
+    const state = host.getService<MetaPerceptionState>('meta-perception');
+
+    // Submit predictions (just w1 and w2, neither anonymous)
+    const predMatch = router.match('POST', '/api/subjects/s1/meta/predictions');
+    await predMatch!.handler(makeCtx({
+      predictions: [
+        { witnessId: 'w1', qid: 'meta_overall_impression', predictedText: '觉得不错' },
+      ],
+    }, { id: 's1' }));
+
+    state.results.set('s1', {
+      subjectId: 's1',
+      totalScore: 1,
+      items: [
+        { witnessId: 'w1', qid: 'q1', match: 'hit', cue: '匹配' },
+      ],
+      byWitness: [
+        { witnessId: 'w1', relation: '发小', score: 1, count: 1 },
+      ],
+      scoredAt: new Date().toISOString(),
+    });
+
+    const resMatch = router.match('GET', '/api/subjects/s1/meta/result');
+    const result = await resMatch!.handler(makeCtx(undefined, { id: 's1' }));
+    const body = (result as { body: Record<string, unknown> }).body;
+
+    const byWitness = body.byWitness as Array<{ witnessId: string }>;
+    expect(byWitness.length).toBe(1);
+    expect(byWitness[0]!.witnessId).toBe('w1');
+  });
+
   it('plugin disabled -> routes not registered -> 404', async () => {
     store = new Store();
     const events = new EventBus();
