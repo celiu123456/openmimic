@@ -38,6 +38,21 @@ export const WitnessSchema = z.object({
 });
 export type Witness = z.infer<typeof WitnessSchema>;
 
+/**
+ * A reusable invitation link that turns friends into witnesses.
+ *
+ * Deliberately *not* single-use: one link can be pasted into a group chat and
+ * several people may answer it. The token is the only secret; it is a
+ * URL-safe random string and carries no embedded data.
+ */
+export const InviteSchema = z.object({
+  token: z.string().min(1),
+  subjectId: z.string().min(1),
+  createdAt: z.string().min(1),
+  expiresAt: z.string().min(1),
+});
+export type Invite = z.infer<typeof InviteSchema>;
+
 /** One answer inside a testimony. */
 export const TestimonyAnswerSchema = z.object({
   qid: z.string().min(1),

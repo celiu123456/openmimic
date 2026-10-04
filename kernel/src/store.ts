@@ -4,12 +4,14 @@ import type { Database as DatabaseConnection } from 'better-sqlite3';
 import {
   ClaimSchema,
   CourtSessionSchema,
+  InviteSchema,
   SubjectSchema,
   TestimonySchema,
   WitnessSchema,
   type Claim,
   type ConsentLevel,
   type CourtSession,
+  type Invite,
   type Subject,
   type Testimony,
   type ViewerScope,
@@ -70,6 +72,13 @@ interface CourtSessionRow {
   finished_at: string | null;
   transcript: string;
   report: string | null;
+}
+
+interface InviteRow {
+  token: string;
+  subject_id: string;
+  created_at: string;
+  expires_at: string;
 }
 
 const SCHEMA_SQL = `
@@ -138,6 +147,17 @@ BEFORE DELETE ON testimonies
 BEGIN
   SELECT RAISE(ABORT, 'append-only violation: testimonies may not be deleted');
 END;
+
+-- Invites are a separate, mutable table: a token can be revoked or allowed to
+-- expire, and nothing here touches the append-only testimony ledger.
+CREATE TABLE IF NOT EXISTS invites (
+  token      TEXT PRIMARY KEY,
+  subject_id TEXT NOT NULL,
+  created_at TEXT NOT NULL,
+  expires_at TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_invites_subject ON invites (subject_id);
 `;
 
 /**
@@ -227,6 +247,46 @@ export class Store {
 
   getConsentLevel(witnessId: string): ConsentLevel | undefined {
     return this.getWitness(witnessId)?.consentLevel;
+  }
+
+  /* ---------------------------------------------------------------- */
+  /* Invites                                                           */
+  /* ---------------------------------------------------------------- */
+
+  /**
+   * Persist an invite. Invites are reusable by design: one link, many
+   * witnesses. Unlike testimony they are mutable infrastructure, so a plain
+   * upsert is fine (re-putting a token refreshes its row).
+   */
+  putInvite(invite: Invite): Invite {
+    const parsed = InviteSchema.parse(invite);
+    this.db
+      .prepare<[string, string, string, string]>(
+        `INSERT INTO invites (token, subject_id, created_at, expires_at)
+         VALUES (?, ?, ?, ?)
+         ON CONFLICT(token) DO UPDATE SET
+           subject_id = excluded.subject_id,
+           created_at = excluded.created_at,
+           expires_at = excluded.expires_at`,
+      )
+      .run(parsed.token, parsed.subjectId, parsed.createdAt, parsed.expiresAt);
+    return parsed;
+  }
+
+  getInvite(token: string): Invite | undefined {
+    const row = this.db
+      .prepare<[string], InviteRow>('SELECT * FROM invites WHERE token = ?')
+      .get(token);
+    return row ? this.rowToInvite(row) : undefined;
+  }
+
+  listInvitesBySubject(subjectId: string): Invite[] {
+    return this.db
+      .prepare<[string], InviteRow>(
+        'SELECT * FROM invites WHERE subject_id = ? ORDER BY created_at ASC, rowid ASC',
+      )
+      .all(subjectId)
+      .map((row) => this.rowToInvite(row));
   }
 
   /* ---------------------------------------------------------------- */
@@ -437,6 +497,15 @@ export class Store {
       stance: row.stance ?? undefined,
       consentLevel: row.consent_level,
     };
+  }
+
+  private rowToInvite(row: InviteRow): Invite {
+    return InviteSchema.parse({
+      token: row.token,
+      subjectId: row.subject_id,
+      createdAt: row.created_at,
+      expiresAt: row.expires_at,
+    });
   }
 
   private rowToTestimony(row: TestimonyRow): Testimony {
