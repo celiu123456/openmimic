@@ -65,7 +65,7 @@ describe('no-backdoor: third-party engine replaces official court', () => {
                 subjectId,
                 startedAt: new Date().toISOString(),
                 transcript: [],
-                report: { total: 0, surviving: 0, retired: 0, divergences: 0, episodes: 0 },
+                report: { totalClaims: 0, surviving: 0, qualified: 0, challengeCount: 0, evidenceCoverage: 1 },
               };
               return session;
             },

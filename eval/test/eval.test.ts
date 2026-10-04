@@ -321,17 +321,16 @@ describe('LOWO isolation', () => {
 
     // Verify that assembling persona from temp store produces a prompt
     // that does NOT contain the held-out witness's specific phrases
-    const { assemblePersonaContext } = await import('@openmimic/kernel');
+    const { adapterRunCourt, adapterAssemblePersona } = await import('../src/engine-adapter');
 
     // First run court to generate claims
-    const { runCourt } = await import('@openmimic/engine-court');
     const courtLlm = new FakeLLM([
       ...courtResponses,
       ...challengeResponses,
     ]);
-    await runCourt(DEMO_SUBJECT_ID, tempStore, courtLlm);
+    await adapterRunCourt(DEMO_SUBJECT_ID, tempStore, courtLlm);
 
-    const persona = assemblePersonaContext(DEMO_SUBJECT_ID, tempStore);
+    const persona = await adapterAssemblePersona(DEMO_SUBJECT_ID, tempStore);
 
     for (const phrase of heldOutPhrases) {
       expect(persona.systemPrompt).not.toContain(phrase);
