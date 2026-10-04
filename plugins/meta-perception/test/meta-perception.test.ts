@@ -278,8 +278,8 @@ describe('meta-perception plugin', () => {
         { witnessId: 'w3', qid: 'q1', match: 'hit', cue: '匹配' },
       ],
       byWitness: [
-        { witnessId: 'w1', relation: '发小', score: 1, count: 1 },
-        { witnessId: 'w3', relation: '网友', score: 1, count: 1 },
+        { witnessId: 'w1', relation: '发小', score: 1, itemCount: 1 },
+        { witnessId: 'w3', relation: '网友', score: 1, itemCount: 1 },
       ],
       scoredAt: new Date().toISOString(),
     });
@@ -321,7 +321,7 @@ describe('meta-perception plugin', () => {
         { witnessId: 'w1', qid: 'q1', match: 'hit', cue: '匹配' },
       ],
       byWitness: [
-        { witnessId: 'w1', relation: '发小', score: 1, count: 1 },
+        { witnessId: 'w1', relation: '发小', score: 1, itemCount: 1 },
       ],
       scoredAt: new Date().toISOString(),
     });
