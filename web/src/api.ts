@@ -47,12 +47,24 @@ export interface ProgressPayload {
 /** `speech` is a spoken turn; `stage` is a stage direction (a silence, a look). */
 export type RoomUtteranceKind = 'speech' | 'stage';
 
+/** Expression tier: how close an utterance is to a witness's own words. */
+export type UtteranceTier = 'quote' | 'paraphrase' | 'extrapolate';
+
+export interface UtteranceAnchor {
+  testimonyId: string;
+  qid: string;
+}
+
 export interface RoomUtterance {
   witnessId: string;
   displayLabel: string;
   text: string;
   kind: RoomUtteranceKind;
   at: string;
+  /** Expression tier; absent on old data, treated as 'extrapolate'. */
+  tier?: UtteranceTier;
+  /** Testimony anchors this utterance draws from. */
+  anchors?: UtteranceAnchor[];
 }
 
 export type RoomStatus = 'behind_only' | 'door_opened';

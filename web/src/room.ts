@@ -1,4 +1,4 @@
-import type { RoomUtterance } from './api';
+import type { RoomUtterance, UtteranceTier } from './api';
 import { writeJson, type KeyValueStore } from './storage';
 
 /**
@@ -356,4 +356,60 @@ export function resolveSubjectName(
   if (typeof queryName === 'string' && queryName.trim() !== '') return queryName.trim();
   if (typeof storeName === 'string' && storeName.trim() !== '') return storeName.trim();
   return FALLBACK_SUBJECT_NAME;
+}
+
+/* ------------------------------------------------------------------ */
+/* Tier display                                                        */
+/* ------------------------------------------------------------------ */
+
+/** Human-readable label for a tier value, shown beside each utterance. */
+export function tierLabel(tier: UtteranceTier | undefined): string {
+  switch (tier) {
+    case 'quote':
+      return '原话';
+    case 'paraphrase':
+      return '转述';
+    case 'extrapolate':
+    default:
+      return '系统补的';
+  }
+}
+
+/** The fixed disclaimer pinned above every room transcript. */
+export const ROOM_DISCLAIMER =
+  '以下对话由系统根据证言生成,不是他们真的这样聊过。标「原话」的句子出自本人填写的内容。';
+
+export interface TierDistribution {
+  quote: number;
+  paraphrase: number;
+  extrapolate: number;
+  total: number;
+}
+
+/** Count the three-tier distribution over a set of utterances. */
+export function tierDistribution(utterances: readonly RoomUtterance[]): TierDistribution {
+  let quote = 0;
+  let paraphrase = 0;
+  let extrapolate = 0;
+  for (const u of utterances) {
+    switch (u.tier) {
+      case 'quote':
+        quote++;
+        break;
+      case 'paraphrase':
+        paraphrase++;
+        break;
+      default:
+        extrapolate++;
+        break;
+    }
+  }
+  return { quote, paraphrase, extrapolate, total: utterances.length };
+}
+
+/** Format a distribution as a human-readable string. */
+export function formatTierDistribution(dist: TierDistribution): string {
+  if (dist.total === 0) return '无台词';
+  const pct = (n: number) => Math.round((n / dist.total) * 100);
+  return `原话 ${pct(dist.quote)}% / 转述 ${pct(dist.paraphrase)}% / 系统补的 ${pct(dist.extrapolate)}%`;
 }
