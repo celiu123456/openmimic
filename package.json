@@ -14,7 +14,8 @@
     "web",
     "plugins/*",
     "packages/*",
-    "shared"
+    "shared",
+    "eval"
   ],
   "scripts": {
     "typecheck": "tsc -p tsconfig.json --noEmit && tsc -p shared/tsconfig.json --noEmit && tsc -p kernel/tsconfig.json --noEmit && tsc -p engines/court/tsconfig.json --noEmit && tsc -p engines/room/tsconfig.json --noEmit && tsc -p engines/witness/tsconfig.json --noEmit && tsc -p server/tsconfig.json --noEmit && tsc -p web/tsconfig.json --noEmit",
@@ -23,7 +24,10 @@
     "dev:web": "npm run dev -w @openmimic/web",
     "dev": "npm run dev:server & npm run dev:web",
     "build:web": "npm run build -w @openmimic/web",
-    "config:dump": "tsx scripts/config-dump.ts"
+    "config:dump": "tsx scripts/config-dump.ts",
+    "eval:calibrate": "tsx eval/src/cli-calibrate.ts",
+    "eval:lowo": "tsx eval/src/cli-lowo.ts",
+    "eval:stability": "tsx eval/src/cli-stability.ts"
   },
   "devDependencies": {
     "@types/node": "^24.19.1",
@@ -33,5 +37,9 @@
   },
   "dependencies": {
     "yaml": "^2.9.1"
+  },
+  "allowScripts": {
+    "better-sqlite3@13.0.3": true,
+    "esbuild@0.28.2": true
   }
 }

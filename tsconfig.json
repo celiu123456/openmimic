@@ -13,7 +13,8 @@
       "@openmimic/collector-freetext": ["./plugins/collector-freetext/src/index.ts"],
       "@openmimic/scenario-review": ["./plugins/scenario-review/src/index.ts"],
       "@openmimic/example-bridge": ["./plugins/example-bridge/src/index.ts"],
-      "@openmimic/core": ["./packages/core/src/index.ts"]
+      "@openmimic/core": ["./packages/core/src/index.ts"],
+      "@openmimic/eval": ["./eval/src/index.ts"]
     }
   },
   "include": [
@@ -36,6 +37,8 @@
     "packages/*/test/**/*.ts",
     "examples/**/*.ts",
     "scripts/**/*.ts",
+    "eval/src/**/*.ts",
+    "eval/test/**/*.ts",
     "vitest.config.ts"
   ],
   "exclude": ["node_modules", "**/dist/**"]

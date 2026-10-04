@@ -18,6 +18,7 @@ export default defineConfig({
       '@openmimic/scenario-review': resolveSource('./plugins/scenario-review/src/index.ts'),
       '@openmimic/example-bridge': resolveSource('./plugins/example-bridge/src/index.ts'),
       '@openmimic/core': resolveSource('./packages/core/src/index.ts'),
+      '@openmimic/eval': resolveSource('./eval/src/index.ts'),
     },
   },
   test: {
@@ -31,6 +32,7 @@ export default defineConfig({
       'plugins/**/*.test.ts',
       'packages/**/*.test.ts',
       'examples/**/*.test.ts',
+      'eval/**/*.test.ts',
     ],
     exclude: ['**/node_modules/**', '**/dist/**'],
   },
