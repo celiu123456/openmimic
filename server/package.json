@@ -1,0 +1,16 @@
+{
+  "name": "@openmimic/server",
+  "version": "0.0.1",
+  "private": true,
+  "description": "OpenMimic collection HTTP API: node:http router over the kernel and WitnessEngine.",
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "dependencies": {
+    "@openmimic/engine-witness": "*",
+    "@openmimic/kernel": "*",
+    "@openmimic/shared": "*",
+    "zod": "^3.25.76"
+  }
+}

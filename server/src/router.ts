@@ -1,0 +1,102 @@
+import type { IncomingMessage } from 'node:http';
+
+/** Everything a route handler receives for one request. */
+export interface RouteContext {
+  params: Record<string, string>;
+  query: URLSearchParams;
+  body: unknown;
+}
+
+export interface RouteResult {
+  status: number;
+  body: unknown;
+}
+
+export type RouteHandler = (context: RouteContext) => RouteResult | Promise<RouteResult>;
+
+/** Thrown by a route to choose the HTTP status its failure maps to. */
+export class HttpError extends Error {
+  constructor(
+    readonly status: number,
+    readonly code: string,
+    message: string,
+  ) {
+    super(message);
+    this.name = 'HttpError';
+  }
+}
+
+const MAX_BODY_BYTES = 256 * 1024;
+
+/** Read and parse a JSON body, rejecting oversized or malformed input. */
+export async function readJsonBody(request: IncomingMessage): Promise<unknown> {
+  const chunks: Buffer[] = [];
+  let size = 0;
+  for await (const chunk of request) {
+    const buffer = chunk as Buffer;
+    size += buffer.length;
+    if (size > MAX_BODY_BYTES) throw new HttpError(413, 'payload_too_large', '请求体过大');
+    chunks.push(buffer);
+  }
+  const text = Buffer.concat(chunks).toString('utf8').trim();
+  if (text === '') return undefined;
+  try {
+    return JSON.parse(text) as unknown;
+  } catch {
+    throw new HttpError(400, 'invalid_json', '请求体不是合法 JSON');
+  }
+}
+
+interface Route {
+  method: string;
+  segments: string[];
+  handler: RouteHandler;
+}
+
+export interface RouteMatch {
+  handler: RouteHandler;
+  params: Record<string, string>;
+}
+
+const splitPath = (path: string): string[] => path.split('/').filter((part) => part !== '');
+
+/**
+ * Minimal method + path router: exact segments, `:name` captures, nothing
+ * else. No middleware, no wildcards, no regex — the API needs none of them.
+ */
+export class Router {
+  private readonly routes: Route[] = [];
+
+  add(method: string, path: string, handler: RouteHandler): this {
+    this.routes.push({ method, segments: splitPath(path), handler });
+    return this;
+  }
+
+  get(path: string, handler: RouteHandler): this {
+    return this.add('GET', path, handler);
+  }
+
+  post(path: string, handler: RouteHandler): this {
+    return this.add('POST', path, handler);
+  }
+
+  match(method: string, pathname: string): RouteMatch | undefined {
+    const parts = splitPath(pathname);
+    for (const route of this.routes) {
+      if (route.method !== method || route.segments.length !== parts.length) continue;
+      const params: Record<string, string> = {};
+      let matched = true;
+      for (let index = 0; index < parts.length; index += 1) {
+        const pattern = route.segments[index] ?? '';
+        const value = parts[index] ?? '';
+        if (pattern.startsWith(':')) params[pattern.slice(1)] = decodeURIComponent(value);
+        else if (pattern !== value) {
+          matched = false;
+          break;
+        }
+      }
+      if (matched) return { handler: route.handler, params };
+    }
+    return undefined;
+  }
+}
