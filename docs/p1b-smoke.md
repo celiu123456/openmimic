@@ -1,14 +1,15 @@
 # p1b Plugin Kernel v1 Verification
 
 > Generated: 2026-10-05
+> Updated: 2026-10-05 (post-merge engine isolation)
 
 ## Test results
 
-226 tests, 28 files, 0 failures.
+257 tests, 29 files, 0 failures.
 
 ```
- Test Files  28 passed (28)
-      Tests  226 passed (226)
+ Test Files  29 passed (29)
+      Tests  257 passed (257)
 ```
 
 ## New test count (target: >= 18)
@@ -24,6 +25,51 @@
 | engines/court/test/court.test.ts | +3 | mergedText, displayName, agreement-without-mergedText (court fix) |
 
 **Total new: 32** (target was >= 18)
+
+## Engine function isolation (post-merge)
+
+Runtime engine functions (`runBehindRoom`, `findCrisisWord`, `courtPlugin`,
+`roomPlugin`, `witnessPlugin`, `submitTestimony`, `runCourt`) are no longer
+imported directly in server source code. All engine access goes through the
+plugin context (`ctx.get('court')`, `ctx.get('room')`, `ctx.get('witness')`).
+
+Plugin object assembly is centralized in `server/src/plugin-resolver.ts`,
+the single file that maps `use` names from `openmimic.yml` to concrete
+Plugin objects.
+
+`findCrisisWord` was moved to `kernel/src/gate.ts` (its conceptual home)
+and re-exported from `engines/room/src/wordlist.ts` for backward compat.
+
+### Remaining engine imports (non-function)
+
+```
+$ grep -rn 'from.*@openmimic/engine' server/src/ --include='*.ts' \
+    | grep -v 'import type' | grep -v 'plugin-resolver.ts'
+
+server/src/imported-room.ts:10:} from '@openmimic/engine-room';
+server/src/mount-rest.ts:22:} from '@openmimic/engine-witness';
+server/src/server.ts:12:} from '@openmimic/engine-court';
+server/src/server.ts:13:import { RoomRefusedError, type LLMClient } from '@openmimic/engine-room';
+server/src/server.ts:18:} from '@openmimic/engine-witness';
+server/src/mcp/main.ts:5:import { OpenAICompatClient } from '@openmimic/engine-court';
+server/src/mcp/protocol.ts:4:import { SubmitTestimonyInputSchema } from '@openmimic/engine-witness';
+```
+
+These are:
+- **Error classes** (`RoomRefusedError`, `InviteInvalidError`, etc.) -- used for
+  `instanceof` in the server error handler, cannot be `import type`
+- **Zod validation schemas** (`SubmitTestimonyInputSchema`, etc.) -- structural
+  validators for HTTP/MCP request bodies, not engine pipeline execution
+- **`OpenAICompatClient`** -- LLM client constructor (infrastructure)
+- **Utility constants** (`DEFAULT_TOPIC_SEED`, `parseRoomText`) in
+  `imported-room.ts` -- room text formatting, not engine pipeline functions
+
+### MCP standalone entry
+
+`npx tsx server/src/mcp/main.ts` assembles a `PluginHost`, loads engines via
+the same resolver, and passes `witness` / `room` services into
+`McpSessionOptions`. The entry remains functional (spawned-process
+handshake test passes).
 
 ## Checklist
 
@@ -46,6 +92,7 @@
 - [x] createOpenMimic test: no port, dispose closes DB
 - [x] Default config smoke: health/subject/invite routes work
 - [x] Error types: MissingServiceError, CyclicDependencyError
+- [x] Server engine function isolation: all via ctx.get() or plugin-resolver
 - [x] docs/PLUGIN-GUIDE.md
 - [x] docs/ARCHITECTURE.md
 - [x] README updated (plugin status, roadmap)

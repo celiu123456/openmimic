@@ -51,6 +51,36 @@ export function redact(
   return redacted;
 }
 
+/* ------------------------------------------------------------------ */
+/* Crisis word gate                                                    */
+/* ------------------------------------------------------------------ */
+
+/**
+ * W3a mental-health crisis word list.
+ *
+ * If someone opens a room with a topic seed that contains one of these words
+ * the room refuses to start. This list is a cheap floor, not a medical
+ * screening instrument.
+ */
+export const CRISIS_WORDS: readonly string[] = [
+  '自杀', '自残', '自伤', '割腕', '跳楼', '跳桥', '想死', '不想活',
+  '活不下去', '死了算了', '轻生', '结束生命', '遗书', '烧炭', '安眠药',
+  '服药过量', '上吊', '一了百了', '不想醒来', '永远睡过去', '从楼上跳',
+  '失踪算了', '没脸活了', '活着没意思',
+];
+
+/** First crisis word that appears in `text`, if any. */
+export function findCrisisWord(text: string): string | undefined {
+  for (const word of CRISIS_WORDS) {
+    if (word.length > 0 && text.includes(word)) return word;
+  }
+  return undefined;
+}
+
+/* ------------------------------------------------------------------ */
+/* Authorization gate                                                  */
+/* ------------------------------------------------------------------ */
+
 /** Convenience wrapper binding a {@link ConsentResolver}. */
 export class AuthorizationGate {
   constructor(private readonly resolveConsent: ConsentResolver) {}

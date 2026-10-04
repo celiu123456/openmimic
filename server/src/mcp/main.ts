@@ -1,9 +1,12 @@
 import { mkdirSync } from 'node:fs';
 import { dirname } from 'node:path';
 import { createInterface } from 'node:readline';
-import { Store } from '@openmimic/kernel';
+import { Store, EventBus, PluginHost } from '@openmimic/kernel';
 import { OpenAICompatClient } from '@openmimic/engine-court';
+import type { WitnessCollector } from '@openmimic/engine-witness';
+import type { RoomEngine } from '@openmimic/engine-room';
 import { seedDemo } from '../../../fixtures/limo';
+import { resolvePlugin } from '../plugin-resolver';
 import {
   JSON_RPC_ERRORS,
   dispatchMcpMessage,
@@ -38,9 +41,37 @@ if (store.listSubjects().length === 0) {
 // no tool can accidentally attempt a real call.
 const client = new OpenAICompatClient();
 const ready = client.configured && client.hasApiKey ? client : undefined;
+
+// Assemble the plugin system so MCP tools access engines through services,
+// the same path as the HTTP server.
+const events = new EventBus();
+const host = new PluginHost(events);
+host.providePreset('store', store);
+host.providePreset('events', events);
+if (ready) host.providePreset('llm', ready);
+
+// Load engine plugins via the resolver
+const engineUses = [
+  '@openmimic/engine-witness',
+  ...(ready ? ['@openmimic/engine-court', '@openmimic/engine-room'] : []),
+];
+for (const use of engineUses) {
+  const plugin = resolvePlugin(use);
+  if (plugin) await host.load(plugin);
+}
+
+const witness = host.hasService('witness')
+  ? host.getService<WitnessCollector>('witness')
+  : undefined;
+const room = host.hasService('room')
+  ? host.getService<RoomEngine>('room')
+  : undefined;
+
 const options: McpSessionOptions = {
   store,
   ...(ready ? { llm: ready, chat: ready } : {}),
+  ...(witness ? { witness } : {}),
+  ...(room ? { room } : {}),
 };
 
 function writeMessage(value: unknown): void {
@@ -87,4 +118,5 @@ for await (const line of lines) {
   }
 }
 
+await host.disposeAll();
 store.close();

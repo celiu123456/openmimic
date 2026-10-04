@@ -9,11 +9,10 @@
 import { randomUUID } from 'node:crypto';
 import { z, ZodError } from 'zod';
 import { SubjectSchema } from '@openmimic/shared';
-import { assemblePersonaContext, type Store } from '@openmimic/kernel';
+import { assemblePersonaContext, findCrisisWord, type Store } from '@openmimic/kernel';
 import type { Plugin, Context, Dispose } from '@openmimic/kernel';
 import type { CourtEngine } from '@openmimic/engine-court';
 import type { RoomEngine } from '@openmimic/engine-room';
-import { findCrisisWord, RoomRefusedError } from '@openmimic/engine-room';
 import {
   AnswerFollowupInputSchema,
   AnswerQuestionInputSchema,

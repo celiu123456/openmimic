@@ -10,18 +10,12 @@ import {
   OpenAICompatClient,
   type ChatMessage,
 } from '@openmimic/engine-court';
-import {
-  RoomRefusedError,
-  type LLMClient,
-} from '@openmimic/engine-room';
+import { RoomRefusedError, type LLMClient } from '@openmimic/engine-room';
 import {
   InterviewSessionInvalidError,
   InterviewStateError,
   InviteInvalidError,
-  witnessPlugin,
 } from '@openmimic/engine-witness';
-import { courtPlugin } from '@openmimic/engine-court';
-import { roomPlugin } from '@openmimic/engine-room';
 import { DEMO_SUBJECT_ID, seedDemo } from '../../fixtures/limo';
 import { redactForExternal } from './external';
 import {
@@ -35,9 +29,10 @@ import {
 } from './router';
 import { readAsrConfig, type AsrConfig } from './asr';
 import { createStaticHandler, type StaticHandler } from './static';
-import { mountRestPlugin, type MountRestConfig } from './mount-rest';
-import { mountOpenaiPlugin, type MountOpenAIConfig } from './mount-openai';
-import { mountMcpPlugin, type MountMcpConfig } from './mount-mcp';
+import { resolvePlugin } from './plugin-resolver';
+import type { MountRestConfig } from './mount-rest';
+import type { MountOpenAIConfig } from './mount-openai';
+import type { MountMcpConfig } from './mount-mcp';
 
 export { SERVER_VERSION } from './mount-rest';
 
@@ -224,22 +219,29 @@ export async function startServer(options: StartServerOptions): Promise<RunningS
   host.providePreset('router', router);
   if (llm) host.providePreset('llm', llm);
 
-  // Load engine plugins
-  await host.load(witnessPlugin);
-  if (llm) {
-    await host.load(courtPlugin);
-    await host.load(roomPlugin);
+  // Load plugins via resolver (the single location that maps use names
+  // to concrete Plugin objects). Engine plugins that need llm are only
+  // loaded when an LLM is available.
+  const pluginConfigs: Record<string, unknown> = {
+    'mount-rest': { asr: options.asr } satisfies MountRestConfig,
+    'mount-openai': { chat } satisfies MountOpenAIConfig,
+    'mount-mcp': { chat } satisfies MountMcpConfig,
+  };
+
+  const useNames = [
+    '@openmimic/engine-witness',
+    ...(llm ? ['@openmimic/engine-court', '@openmimic/engine-room'] : []),
+    '@openmimic/mount-rest',
+    '@openmimic/mount-openai',
+    '@openmimic/mount-mcp',
+  ];
+
+  for (const use of useNames) {
+    const plugin = resolvePlugin(use);
+    if (!plugin) throw new Error(`plugin not found: ${use}`);
+    const config = pluginConfigs[plugin.name];
+    await host.load(plugin, config);
   }
-
-  // Load mount plugins
-  const restConfig: MountRestConfig = { asr: options.asr };
-  await host.load(mountRestPlugin, restConfig);
-
-  const openaiConfig: MountOpenAIConfig = { chat };
-  await host.load(mountOpenaiPlugin, openaiConfig);
-
-  const mcpConfig: MountMcpConfig = { chat };
-  await host.load(mountMcpPlugin, mcpConfig);
 
   // Static hosting
   const distDir = options.webDistDir ?? 'web/dist';

@@ -1,10 +1,10 @@
 import { randomUUID } from 'node:crypto';
 import type { Room, RoomUtterance } from '@openmimic/shared';
 import type { Store } from '@openmimic/kernel';
+import { findCrisisWord } from '@openmimic/kernel';
 import {
   DEFAULT_TOPIC_SEED,
   RoomRefusedError,
-  findCrisisWord,
   parseRoomText,
   type LLMClient,
 } from '@openmimic/engine-room';

@@ -1,10 +1,10 @@
 import { z } from 'zod';
 import { assemblePersonaContext, type Store } from '@openmimic/kernel';
-import {
-  SubmitTestimonyInputSchema,
-  submitTestimony,
-} from '@openmimic/engine-witness';
-import { runBehindRoom, type LLMClient } from '@openmimic/engine-room';
+import type { SubmitTestimonyInput } from '@openmimic/engine-witness';
+import { SubmitTestimonyInputSchema } from '@openmimic/engine-witness';
+import type { WitnessCollector } from '@openmimic/engine-witness';
+import type { RoomEngine } from '@openmimic/engine-room';
+import type { LLMClient } from '@openmimic/engine-room';
 import { DEMO_SUBJECT_ID } from '../../../fixtures/limo';
 import { redactForExternal, withholdSynthesisOnly } from '../external';
 import { runImportedRoom } from '../imported-room';
@@ -138,6 +138,10 @@ export interface McpSessionOptions {
   llm?: LLMClient;
   /** Chat upstream used by `persona_speak`; absent/without key means no model. */
   chat?: ChatUpstream;
+  /** Witness collector service (from plugin system). */
+  witness?: WitnessCollector;
+  /** Room engine service (from plugin system). */
+  room?: RoomEngine;
   /** Injectable clock. */
   now?: () => Date;
   /** Id factory. */
@@ -298,6 +302,8 @@ async function callPersonaSpeak(
 }
 
 function callTestimonySubmit(options: McpSessionOptions, args: unknown): ToolContent {
+  const witness = options.witness;
+  if (!witness) return toolError('证言采集服务未加载');
   const envelope = TestimonyArgsSchema.parse(args);
   const input = SubmitTestimonyInputSchema.parse({
     relation: envelope.relation,
@@ -308,7 +314,7 @@ function callTestimonySubmit(options: McpSessionOptions, args: unknown): ToolCon
     ...(envelope.avoidedQids !== undefined ? { avoidedQids: envelope.avoidedQids } : {}),
   });
   try {
-    const result = submitTestimony(options.store, envelope.token, input, {
+    const result = witness.submitTestimony(envelope.token, input, {
       ...(options.now ? { now: options.now() } : {}),
       ...(options.newId ? { newId: options.newId } : {}),
     });
@@ -329,8 +335,8 @@ async function callRoomRun(options: McpSessionOptions, args: unknown): Promise<T
       const room = await runImportedRoom(subjectId, options.store, options.llm, roomOptions);
       return toolOk(options.store, [subjectId], { room });
     }
-    if (options.llm) {
-      const room = await runBehindRoom(subjectId, options.store, options.llm, roomOptions);
+    if (options.room) {
+      const room = await options.room.runBehindRoom(subjectId, roomOptions);
       return toolOk(options.store, [subjectId], { room });
     }
     if (subjectId === DEMO_SUBJECT_ID) {

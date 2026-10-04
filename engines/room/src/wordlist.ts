@@ -14,33 +14,15 @@
  *
  * The list is intentionally naive substring matching: it is a cheap floor, not
  * a medical screening instrument, and it is meant to be reviewed by humans.
+ *
+ * CRISIS_WORDS and findCrisisWord are canonical in kernel/gate and re-exported
+ * here for backward compatibility.
  */
-export const CRISIS_WORDS: readonly string[] = [
-  '自杀',
-  '自残',
-  '自伤',
-  '割腕',
-  '跳楼',
-  '跳桥',
-  '想死',
-  '不想活',
-  '活不下去',
-  '死了算了',
-  '轻生',
-  '结束生命',
-  '遗书',
-  '烧炭',
-  '安眠药',
-  '服药过量',
-  '上吊',
-  '一了百了',
-  '不想醒来',
-  '永远睡过去',
-  '从楼上跳',
-  '失踪算了',
-  '没脸活了',
-  '活着没意思',
-];
+
+// Re-export from kernel (the canonical location)
+export { CRISIS_WORDS, findCrisisWord } from '@openmimic/kernel';
+
+import { CRISIS_WORDS } from '@openmimic/kernel';
 
 export const DIAGNOSIS_WORDS: readonly string[] = [
   '抑郁症',
@@ -81,11 +63,6 @@ function findWord(text: string, words: readonly string[]): string | undefined {
     if (word.length > 0 && text.includes(word)) return word;
   }
   return undefined;
-}
-
-/** First crisis word that appears in `text`, if any. */
-export function findCrisisWord(text: string): string | undefined {
-  return findWord(text, CRISIS_WORDS);
 }
 
 /** First quasi-diagnostic expression that appears in `text`, if any. */

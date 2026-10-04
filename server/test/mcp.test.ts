@@ -6,8 +6,8 @@ import type { Readable } from 'node:stream';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
 import { Store } from '@openmimic/kernel';
-import { createInvite } from '@openmimic/engine-witness';
-import { FakeLLM } from '@openmimic/engine-room';
+import { createInvite, createWitnessCollector } from '@openmimic/engine-witness';
+import { FakeLLM, runBehindRoom, openDoor, type RoomEngine } from '@openmimic/engine-room';
 import { DEMO_SUBJECT_ID, seedDemo } from '@openmimic/fixtures';
 import {
   JSON_RPC_ERRORS,
@@ -190,8 +190,9 @@ describe('MCP stdio protocol (pure dispatch)', () => {
     store.putSubject({ id: 'subj-mcp', displayName: '受试者' });
     const invite = createInvite(store, 'subj-mcp', { now: new Date(NOW) });
 
+    const witness = createWitnessCollector(store);
     const payload = toolPayload(
-      await call({ store }, 'tools/call', {
+      await call({ store, witness }, 'tools/call', {
         name: 'testimony_submit',
         arguments: {
           token: invite.token,
@@ -203,8 +204,8 @@ describe('MCP stdio protocol (pure dispatch)', () => {
     );
     expect(payload.count).toBe(1);
     expect(store.listBySubject('subj-mcp')).toHaveLength(1);
-    const witness = store.getWitness(payload.witnessId as string);
-    expect(witness?.relation).toBe('同事');
+    const storedWitness = store.getWitness(payload.witnessId as string);
+    expect(storedWitness?.relation).toBe('同事');
     store.close();
   });
 
@@ -267,9 +268,15 @@ describe('MCP stdio protocol (pure dispatch)', () => {
     );
     expect(JSON.stringify(context)).not.toContain(SECRET);
 
+    const roomLlm = new FakeLLM(Array.from({ length: 8 }, () => `{"text":"${SECRET}"}`));
+    const roomEngine: RoomEngine = {
+      runBehindRoom: (subjectId, opts) => runBehindRoom(subjectId, store, roomLlm, opts),
+      openDoor: (roomId) => openDoor(roomId, store, roomLlm),
+    };
     const roomOptions: McpSessionOptions = {
       store,
-      llm: new FakeLLM(Array.from({ length: 8 }, () => `{"text":"${SECRET}"}`)),
+      llm: roomLlm,
+      room: roomEngine,
     };
     const room = toolPayload(
       await call(roomOptions, 'tools/call', {
