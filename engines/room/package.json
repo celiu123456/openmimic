@@ -1,0 +1,15 @@
+{
+  "name": "@openmimic/engine-room",
+  "version": "0.0.1",
+  "private": true,
+  "description": "OpenMimic RoomEngine: behind-the-back and face-to-face witness room simulation.",
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "dependencies": {
+    "@openmimic/kernel": "*",
+    "@openmimic/shared": "*",
+    "zod": "^3.25.76"
+  }
+}

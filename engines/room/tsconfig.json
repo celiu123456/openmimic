@@ -1,0 +1,12 @@
+{
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    "baseUrl": ".",
+    "paths": {
+      "@openmimic/shared": ["../../shared/src/index.ts"],
+      "@openmimic/kernel": ["../../kernel/src/index.ts"],
+      "@openmimic/engine-room": ["./src/index.ts"]
+    }
+  },
+  "include": ["src/**/*.ts", "test/**/*.ts"]
+}

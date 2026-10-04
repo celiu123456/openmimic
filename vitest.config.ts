@@ -10,8 +10,10 @@ export default defineConfig({
       '@openmimic/shared': resolveSource('./shared/src/index.ts'),
       '@openmimic/kernel': resolveSource('./kernel/src/index.ts'),
       '@openmimic/engine-court': resolveSource('./engines/court/src/index.ts'),
+      '@openmimic/engine-room': resolveSource('./engines/room/src/index.ts'),
       '@openmimic/engine-witness': resolveSource('./engines/witness/src/index.ts'),
       '@openmimic/server': resolveSource('./server/src/index.ts'),
+      '@openmimic/fixtures': resolveSource('./fixtures/limo.ts'),
     },
   },
   test: {

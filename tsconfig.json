@@ -6,8 +6,10 @@
       "@openmimic/shared": ["./shared/src/index.ts"],
       "@openmimic/kernel": ["./kernel/src/index.ts"],
       "@openmimic/engine-court": ["./engines/court/src/index.ts"],
+      "@openmimic/engine-room": ["./engines/room/src/index.ts"],
       "@openmimic/engine-witness": ["./engines/witness/src/index.ts"],
-      "@openmimic/server": ["./server/src/index.ts"]
+      "@openmimic/server": ["./server/src/index.ts"],
+      "@openmimic/fixtures": ["./fixtures/limo.ts"]
     }
   },
   "include": [
@@ -17,8 +19,11 @@
     "kernel/types/**/*.d.ts",
     "engines/court/src/**/*.ts",
     "engines/court/test/**/*.ts",
+    "engines/room/src/**/*.ts",
+    "engines/room/test/**/*.ts",
     "engines/witness/src/**/*.ts",
     "engines/witness/test/**/*.ts",
+    "fixtures/**/*.ts",
     "server/src/**/*.ts",
     "server/test/**/*.ts",
     "vitest.config.ts"
