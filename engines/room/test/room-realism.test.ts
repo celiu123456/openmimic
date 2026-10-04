@@ -240,9 +240,9 @@ describe('front room constraints', () => {
     const frontLlm = new FakeLLM([line('来了啊')]);
     await openDoor(room.id, store, frontLlm, { maxTurnsPerWitness: 1 });
 
-    // Front mode should contain courtesy instructions
+    // Front mode should contain courtesy instructions and frontText-based prompting
     expect(frontLlm.calls[0]!.system).toContain('不会当面评价');
-    expect(frontLlm.calls[0]!.system).toContain('嘘寒问暖');
+    expect(frontLlm.calls[0]!.system).toContain('当面会怎么说');
   });
 
   it('highlights the last utterance for conversational flow', async () => {

@@ -21,6 +21,8 @@ import {
   formatReport,
   checkCriteria,
   extractPrivateFragments,
+  type FrontTextInfo,
+  type BehindTextInfo,
 } from './room-metrics';
 
 // Load .env manually
@@ -75,10 +77,25 @@ async function main() {
     answers: w.answers.map((a) => ({ qid: a.qid, behindText: a.behindText })),
   }));
   const privateFragments = extractPrivateFragments(testimonies);
+
+  // Extract frontText and behindText entries for new metrics
+  const frontTextEntries: FrontTextInfo[] = DEMO_WITNESSES.flatMap((w) =>
+    w.answers
+      .filter((a) => (a.frontText ?? '').length > 0)
+      .map((a) => ({ witnessId: w.id, qid: a.qid, frontText: a.frontText as string })),
+  );
+  const behindTextEntries: BehindTextInfo[] = DEMO_WITNESSES.flatMap((w) =>
+    w.answers
+      .filter((a) => a.behindText.length > 0)
+      .map((a) => ({ witnessId: w.id, qid: a.qid, behindText: a.behindText })),
+  );
+
   const report = buildReport(
     room.behindTranscript,
     doorRoom.frontTranscript,
     privateFragments,
+    frontTextEntries,
+    behindTextEntries,
   );
   const checks = checkCriteria(report);
 

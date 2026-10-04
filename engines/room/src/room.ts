@@ -240,11 +240,35 @@ interface PersonaContext {
  */
 export type ActionHint = 'contribute' | 'react';
 
+/**
+ * Opening styles for front-room witnesses. Each witness gets a different one
+ * so they don't all say "来了/坐吧" in unison.
+ */
+export const OPENING_STYLES = [
+  { tag: 'ask-recent', instruction: '问问TA最近的近况(工作、生活),用你自己的话,别说"最近怎么样"这种泛泛的。' },
+  { tag: 'reminisce', instruction: '叙旧——提一件你们共同经历过的具体事,轻松自然。' },
+  { tag: 'tease', instruction: '打趣TA一下,开个善意的小玩笑,让气氛轻松。' },
+  { tag: 'care', instruction: '关心TA一件你知道的具体事(身体、搬家、忙不忙),不要笼统。' },
+  { tag: 'deflect', instruction: '聊一件跟TA无关的事岔开话题(天气、吃的、最近看的剧),自然地带过。' },
+] as const;
+
+export type OpeningStyle = (typeof OPENING_STYLES)[number]['tag'];
+
+interface BuildSystemExtra {
+  /** For front mode: the opening style for this witness's first utterance. */
+  openingStyle?: OpeningStyle;
+  /** For front mode: whether this turn is the half-truth slot. */
+  halfTruthSlot?: boolean;
+  /** For front mode: whether the previous turn was the half-truth (so deflect). */
+  deflectAfterHalfTruth?: boolean;
+}
+
 function buildSystem(
   context: PersonaContext,
   mode: RoomMode,
   topicSeed: string,
   actionHint: ActionHint = 'contribute',
+  extra: BuildSystemExtra = {},
 ): string {
   const { witness, subjectName } = context;
   const lines: string[] = [];
@@ -272,20 +296,46 @@ function buildSystem(
       );
     }
   } else {
-    // Front mode: much more constrained
+    // Front mode: use frontText as primary material
     lines.push(
       `你是${subjectName}的${witness.relation}。${subjectName}刚走进来,一屋子人都在。`,
       '你只说你自己亲眼见过、亲耳听过的事,不要编造。',
-      '当面说话要客气、自然。说话像真正碰面打招呼:短句、口语。一次最多一句。',
+      '当面说话要自然。说话像真正碰面时会说的话:短句、口语。一次最多一句。',
       '不要提"证言""问卷""数据""分析"这类词。',
       `${subjectName}就坐在面前,你不会当面评价TA、不会翻旧账、不会说重话。`,
-      '你说的话只能是:打招呼、嘘寒问暖、关心近况、聊无关紧要的小事、转移话题。',
-      '就算你心里有看法,现在也不说,最多客气一句带过。',
     );
-    if (actionHint === 'react') {
+
+    if (extra.halfTruthSlot) {
+      // This witness is chosen to let slip one short line that subtly echoes their behind-the-back talk
       lines.push(
-        '这轮你只需要简单接一句,不要说实质内容。qids给空数组。',
+        '你忍不住了——用很短的一句(不超过15个字)隐约提一下你心里那个想法,但说完马上自己觉得不该说,话到嘴边就收住了。',
+        '这句话不要把背后说的事直接讲出来,只是一种隐晦的、模糊的暗示。像是"没忍住嘴"的感觉。',
+        'qids给空数组。',
       );
+    } else if (extra.deflectAfterHalfTruth) {
+      // The person right after the half-truth should change the subject
+      lines.push(
+        '刚才有人差点说漏嘴了,你赶紧岔开话题,说点完全不相关的事。不要追问刚才的话。',
+        'qids给空数组。',
+      );
+    } else if (actionHint === 'react') {
+      lines.push(
+        '这轮你只需要自然地接一句,不要说实质内容。qids给空数组。',
+        '注意:不要说"坐吧""喝口水"之类的招呼话——前面已经有人说过了。说点具体的。',
+      );
+    } else {
+      // contribute: draw from frontText
+      lines.push(
+        '你的记忆里有你曾经想好"当面会怎么说"的话——请以那些内容为素材,用你自己的口吻说出来。',
+        '不要泛泛寒暄、不要说"坐吧""喝口水"之类所有人都会说的话。说点只有你才会说的内容。',
+      );
+      // Opening style for first utterance
+      const style = extra.openingStyle
+        ? OPENING_STYLES.find((s) => s.tag === extra.openingStyle)
+        : undefined;
+      if (style) {
+        lines.push(`你的打开方式:${style.instruction}`);
+      }
     }
   }
 
@@ -303,6 +353,7 @@ function buildUser(
   topicSeed: string,
   transcript: readonly RoomUtterance[],
   actionHint: ActionHint = 'contribute',
+  extra: BuildSystemExtra = {},
 ): string {
   const said =
     transcript.length === 0
@@ -325,10 +376,21 @@ function buildUser(
     '房间里已经说过的话:',
     said,
     '',
-    '只有你自己知道的记忆(别人看不到这些):',
-    memory,
-    '',
   ];
+
+  if (mode === 'front') {
+    parts.push(
+      '你之前想好了当面要怎么说(以下是你自己写的当面话):',
+      memory,
+      '',
+    );
+  } else {
+    parts.push(
+      '只有你自己知道的记忆(别人看不到这些):',
+      memory,
+      '',
+    );
+  }
 
   // Highlight the last thing that was said so the model can respond to it
   if (transcript.length > 0) {
@@ -345,10 +407,14 @@ function buildUser(
       parts.push('现在轮到你,接着聊,背着TA说一句。简短自然,像聊天不像念稿。');
     }
   } else {
-    if (actionHint === 'react') {
-      parts.push(`${context.subjectName}就在旁边,简单接一句。`);
+    if (extra.halfTruthSlot) {
+      parts.push(`${context.subjectName}就坐在面前。你忍不住了,用很短一句暗示一下你心里的话。`);
+    } else if (extra.deflectAfterHalfTruth) {
+      parts.push(`${context.subjectName}就坐在面前。赶紧岔开话题,说点别的。`);
+    } else if (actionHint === 'react') {
+      parts.push(`${context.subjectName}就坐在面前,自然地接一句。不要说"坐吧""喝口水"。`);
     } else {
-      parts.push(`${context.subjectName}就在旁边,当面客气地说一句。别评价TA,只说关心或闲聊的话。`);
+      parts.push(`${context.subjectName}就坐在面前,根据你想好的当面话,说一句。用你自己的方式说出来,不要照搬原文。`);
     }
   }
 
@@ -449,9 +515,10 @@ async function composeLine(
   actionHint: ActionHint = 'contribute',
   privateTexts: readonly string[] = [],
   secretLeakBudget?: { remaining: number },
+  extra: BuildSystemExtra = {},
 ): Promise<ComposedLine | undefined> {
-  const system = buildSystem(context, mode, topicSeed, actionHint);
-  const user = buildUser(context, mode, topicSeed, transcript, actionHint);
+  const system = buildSystem(context, mode, topicSeed, actionHint, extra);
+  const user = buildUser(context, mode, topicSeed, transcript, actionHint, extra);
 
   const first = await attemptResponse(llm, { system, user }, 2);
   if (!first.ok) return undefined;
@@ -551,13 +618,30 @@ function decideActionHint(
   mode: RoomMode,
 ): ActionHint {
   if (mode === 'front') {
-    // Front: ~70% react, only every 3rd or 4th turn contributes
-    return turnIndex % 3 === 0 ? 'contribute' : 'react';
+    // Front: ~50% contribute so frontText actually gets used
+    // First turn always contributes (opening); then alternate
+    if (turnIndex === 0) return 'contribute';
+    return turnIndex % 2 === 0 ? 'contribute' : 'react';
   }
   // Behind: first 2 turns contribute (establish topic), then alternate
   if (turnIndex < 2) return 'contribute';
   // Odd positions react, even contribute (roughly 50/50)
   return turnIndex % 2 === 1 ? 'react' : 'contribute';
+}
+
+/** Check if `text` has ≥minLen contiguous character overlap with any existing speech. */
+function hasDedupConflict(
+  text: string,
+  existing: readonly RoomUtterance[],
+  minLen: number = 5,
+): boolean {
+  for (const u of existing) {
+    if (u.kind !== 'speech') continue;
+    for (let start = 0; start + minLen <= text.length; start++) {
+      if (u.text.includes(text.slice(start, start + minLen))) return true;
+    }
+  }
+  return false;
 }
 
 /**
@@ -615,6 +699,16 @@ function pickNextSpeaker(
  * and assigns action hints to create a mix of testimony-anchored content and
  * casual filler.
  */
+/** Extra scheduling config for the front room. */
+interface FrontScheduleConfig {
+  /** Opening style assignment: witnessId -> style tag. */
+  openingStyles: Map<string, OpeningStyle>;
+  /** The witness who should say the half-truth (if any). */
+  halfTruthWitnessId: string | undefined;
+  /** Behind-room behindText entries keyed by witnessId for the half-truth prompt. */
+  behindMemory: Map<string, MemoryEntry[]>;
+}
+
 async function runSchedule(
   drafts: readonly UtteranceDraft[],
   subjectName: string,
@@ -627,12 +721,17 @@ async function runSchedule(
   stageLine: () => string,
   displayLabels: Map<string, string>,
   privateTexts: readonly string[] = [],
+  frontConfig?: FrontScheduleConfig,
 ): Promise<RoomUtterance[]> {
   const utterances: RoomUtterance[] = [];
   const turnCounts = new Map<string, number>();
   const maxPerWitness = turns;
   // At most 1 "hesitation" stage direction for secret leaks per room
   const secretLeakBudget = { remaining: mode === 'behind' ? 1 : 0 };
+  // Track whether the half-truth has been spoken
+  let halfTruthDone = false;
+  // Track whether the previous turn was the half-truth (so next person deflects)
+  let lastWasHalfTruth = false;
 
   for (let turnIndex = 0; utterances.length < cap; turnIndex += 1) {
     const draft = pickNextSpeaker(drafts, utterances, turnCounts, maxPerWitness, turnIndex);
@@ -657,10 +756,46 @@ async function runSchedule(
         anchors: [],
       });
       turnCounts.set(draft.witness.id, (turnCounts.get(draft.witness.id) ?? 0) + 1);
+      lastWasHalfTruth = false;
       continue;
     }
 
-    const actionHint = decideActionHint(turnIndex, cap, mode);
+    let actionHint = decideActionHint(turnIndex, cap, mode);
+
+    // Build extra hints for front mode
+    const extra: BuildSystemExtra = {};
+    if (mode === 'front' && frontConfig) {
+      // Is this the first utterance for this witness? Assign opening style
+      const witTurns = turnCounts.get(draft.witness.id) ?? 0;
+      if (witTurns === 0) {
+        extra.openingStyle = frontConfig.openingStyles.get(draft.witness.id);
+        actionHint = 'contribute'; // first utterance always contributes
+      }
+
+      // Half-truth logic: trigger on the chosen witness's second turn (or first if only 1 turn),
+      // but only if not already done
+      if (
+        !halfTruthDone &&
+        draft.witness.id === frontConfig.halfTruthWitnessId &&
+        witTurns >= 1 // second turn
+      ) {
+        extra.halfTruthSlot = true;
+        // Give this persona their behind-room memory for the half-truth hint
+        const behindMem = frontConfig.behindMemory.get(draft.witness.id) ?? [];
+        if (behindMem.length > 0) {
+          // Add behind memory as temporary context (doesn't go into the official memory)
+          context.memory = [
+            ...context.memory,
+            ...behindMem.map((m) => ({ qid: m.qid, text: `(你背后说过:${m.text})` })),
+          ];
+        }
+      }
+
+      // Deflect after half-truth
+      if (lastWasHalfTruth) {
+        extra.deflectAfterHalfTruth = true;
+      }
+    }
 
     // Get private texts for this specific witness's testimony
     const witnessPrivateTexts = mode === 'behind'
@@ -676,11 +811,46 @@ async function runSchedule(
       actionHint,
       witnessPrivateTexts,
       secretLeakBudget,
+      extra,
     );
     if (!line) {
       // unparseable twice: skip this turn but still count
       turnCounts.set(draft.witness.id, (turnCounts.get(draft.witness.id) ?? 0) + 1);
+      lastWasHalfTruth = false;
       continue;
+    }
+
+    // Dedup guard: check for ≥5 char contiguous overlap with existing utterances
+    if (line.kind === 'speech' && hasDedupConflict(line.text, utterances)) {
+      // Try one rewrite with an explicit instruction
+      const retryLine = await composeLine(
+        llm,
+        context,
+        mode,
+        topicSeed,
+        utterances,
+        actionHint,
+        witnessPrivateTexts,
+        secretLeakBudget,
+        extra,
+      );
+      if (retryLine && retryLine.kind === 'speech' && !hasDedupConflict(retryLine.text, utterances)) {
+        // Use the retry
+        Object.assign(line, retryLine);
+      } else {
+        // Still a dup: fall back to stage direction
+        line.kind = 'stage';
+        line.text = stageLine();
+        line.qids = [];
+      }
+    }
+
+    // Track half-truth
+    if (extra.halfTruthSlot && line.kind === 'speech') {
+      halfTruthDone = true;
+      lastWasHalfTruth = true;
+    } else {
+      lastWasHalfTruth = false;
     }
 
     // Build anchors from model-cited qids
@@ -862,6 +1032,49 @@ export async function openDoor(
     };
   });
 
+  // Build behind-room memory for half-truth selection
+  const behindMemoryByWit = new Map<string, MemoryEntry[]>();
+  for (const witness of witnesses) {
+    const witTestimonies = testimonies.filter((t) => t.witnessId === witness.id);
+    const behindMem = witTestimonies.flatMap((testimony) =>
+      testimony.answers
+        .filter((a) => a.behindText.length > 0)
+        .map((a) => ({ qid: a.qid, text: a.behindText })),
+    );
+    if (behindMem.length > 0) behindMemoryByWit.set(witness.id, behindMem);
+  }
+
+  // Choose half-truth witness: the one with the most behind-talk who also has frontText
+  const draftsWithFront = drafts.filter((d) => d.memory.length > 0);
+  let halfTruthWitnessId: string | undefined;
+  if (draftsWithFront.length > 0) {
+    let maxBehind = 0;
+    for (const d of draftsWithFront) {
+      const behindLen = (behindMemoryByWit.get(d.witness.id) ?? [])
+        .reduce((sum, m) => sum + m.text.length, 0);
+      if (behindLen > maxBehind) {
+        maxBehind = behindLen;
+        halfTruthWitnessId = d.witness.id;
+      }
+    }
+  }
+
+  // Assign opening styles to witnesses who have frontText
+  const openingStyles = new Map<string, OpeningStyle>();
+  const shuffledStyles = shuffleArray([...OPENING_STYLES]);
+  let styleIdx = 0;
+  for (const d of draftsWithFront) {
+    const style = shuffledStyles[styleIdx % shuffledStyles.length]!;
+    openingStyles.set(d.witness.id, style.tag);
+    styleIdx++;
+  }
+
+  const frontConfig: FrontScheduleConfig = {
+    openingStyles,
+    halfTruthWitnessId,
+    behindMemory: behindMemoryByWit,
+  };
+
   let stageCursor = 0;
   const frontTranscript = await runSchedule(
     drafts,
@@ -878,6 +1091,8 @@ export async function openDoor(
       return line;
     },
     displayLabels,
+    [], // no private texts in front mode
+    frontConfig,
   );
 
   return store.updateRoomFront(roomId, frontTranscript);

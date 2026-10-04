@@ -6,6 +6,10 @@ import {
   detectLeaks,
   witnessDivergence,
   replyChainRate,
+  repetitionRate,
+  hasContiguousOverlap,
+  frontTextAnchorRate,
+  halfTruthCheck,
   buildReport,
   checkCriteria,
 } from '../../../scripts/room-metrics';
@@ -171,6 +175,178 @@ describe('replyChainRate', () => {
     const r = replyChainRate([u({ text: '独白' })]);
     expect(r.eligible).toBe(0);
     expect(r.rate).toBe(0);
+  });
+});
+
+describe('hasContiguousOverlap', () => {
+  it('detects 5-char contiguous overlap', () => {
+    // "最近挺忙的" = 5 chars shared contiguously
+    expect(hasContiguousOverlap('他最近挺忙的吧', '确实最近挺忙的', 5)).toBe(true);
+  });
+
+  it('returns false when overlap is shorter than threshold', () => {
+    expect(hasContiguousOverlap('他最近忙', '她最近好', 5)).toBe(false);
+  });
+
+  it('returns false for empty strings', () => {
+    expect(hasContiguousOverlap('', '他最近挺忙的', 5)).toBe(false);
+  });
+});
+
+describe('repetitionRate', () => {
+  it('counts pairs with ≥5-char contiguous overlap', () => {
+    const utterances = [
+      u({ text: '他最近挺忙的', witnessId: 'w-a' }),
+      u({ text: '确实最近挺忙', witnessId: 'w-b' }), // overlaps with #0: "最近挺忙"=4 chars, not 5... let me use longer
+      u({ text: '完全不同的话题讨论', witnessId: 'w-c' }),
+    ];
+    // "最近挺忙" is 4 chars, need 5 for overlap
+    const r = repetitionRate(utterances);
+    expect(r.totalPairs).toBe(3); // 3 pairs: (0,1), (0,2), (1,2)
+  });
+
+  it('detects repeated phrases', () => {
+    const utterances = [
+      u({ text: '坐吧先喝口水', witnessId: 'w-a' }),
+      u({ text: '来了坐吧先喝口水', witnessId: 'w-b' }), // shares "坐吧先喝口水" (6 chars)
+      u({ text: '最近工作还顺利吗', witnessId: 'w-c' }),
+    ];
+    const r = repetitionRate(utterances);
+    expect(r.duplicatePairs).toBe(1); // only (0,1) overlaps
+    expect(r.totalPairs).toBe(3);
+    // rate = 1/3 ≈ 33%
+    expect(r.rate).toBeCloseTo(1 / 3, 2);
+  });
+
+  it('returns 0 for no overlaps', () => {
+    const utterances = [
+      u({ text: '天气真好', witnessId: 'w-a' }),
+      u({ text: '去吃饭吧', witnessId: 'w-b' }),
+    ];
+    const r = repetitionRate(utterances);
+    expect(r.duplicatePairs).toBe(0);
+    expect(r.rate).toBe(0);
+  });
+
+  it('skips stage directions', () => {
+    const utterances = [
+      u({ text: '坐吧先喝口水', witnessId: 'w-a' }),
+      u({ text: '坐吧先喝口水', kind: 'stage', witnessId: 'w-b' }),
+    ];
+    const r = repetitionRate(utterances);
+    expect(r.totalPairs).toBe(0); // only 1 speech, no pairs
+  });
+});
+
+describe('frontTextAnchorRate', () => {
+  it('counts lines anchored to frontText qids', () => {
+    const front = [
+      u({
+        text: '最近忙不忙啊',
+        witnessId: 'w-a',
+        tier: 'paraphrase',
+        anchors: [{ qid: 'q1', span: [0, 5] as [number, number] }],
+      }),
+      u({
+        text: '来了来了',
+        witnessId: 'w-b',
+        tier: 'extrapolate',
+        anchors: [],
+      }),
+      u({
+        text: '听说你换工作了',
+        witnessId: 'w-c',
+        tier: 'quote',
+        anchors: [{ qid: 'q2', span: [0, 7] as [number, number] }],
+      }),
+    ];
+    const frontTextEntries = [
+      { witnessId: 'w-a', qid: 'q1', frontText: '我会问他最近忙不忙' },
+      { witnessId: 'w-c', qid: 'q2', frontText: '我会说听说你换工作了' },
+    ];
+    const r = frontTextAnchorRate(front, frontTextEntries);
+    expect(r.anchored).toBe(2);
+    expect(r.total).toBe(3);
+    expect(r.rate).toBeCloseTo(2 / 3, 2);
+  });
+
+  it('rejects anchors to qids without frontText', () => {
+    const front = [
+      u({
+        text: '哟来了',
+        witnessId: 'w-a',
+        tier: 'paraphrase',
+        anchors: [{ qid: 'q1', span: [0, 3] as [number, number] }],
+      }),
+    ];
+    // q1 of w-a has no frontText entry
+    const r = frontTextAnchorRate(front, []);
+    expect(r.anchored).toBe(0);
+    expect(r.rate).toBe(0);
+  });
+
+  it('returns 0 for empty front', () => {
+    const r = frontTextAnchorRate([], []);
+    expect(r.total).toBe(0);
+    expect(r.rate).toBe(0);
+  });
+});
+
+describe('halfTruthCheck', () => {
+  it('passes with exactly 1 half-truth and no heavy echoes', () => {
+    const front = [
+      u({ text: '来了快坐', witnessId: 'w-a' }), // no overlap with behind
+      u({ text: '他从小就这样', witnessId: 'w-b' }), // 4-char overlap "从小就这", ≤25 chars
+      u({ text: '喝杯茶', witnessId: 'w-c' }),
+    ];
+    const behindTexts = [
+      { witnessId: 'w-b', qid: 'q1', behindText: '他从小就这样的,说不听' },
+    ];
+    const r = halfTruthCheck(front, behindTexts);
+    expect(r.halfTruthCount).toBe(1);
+    expect(r.heavyEchoCount).toBe(0);
+    expect(r.pass).toBe(true);
+  });
+
+  it('fails with 0 half-truths', () => {
+    const front = [
+      u({ text: '来了', witnessId: 'w-a' }),
+      u({ text: '快坐', witnessId: 'w-b' }),
+    ];
+    const behindTexts = [
+      { witnessId: 'w-b', qid: 'q1', behindText: '他最近变化很大感觉不对劲' },
+    ];
+    const r = halfTruthCheck(front, behindTexts);
+    expect(r.halfTruthCount).toBe(0);
+    expect(r.pass).toBe(false);
+  });
+
+  it('fails with heavy echo (≥8 char overlap)', () => {
+    // 26 chars (>25), so not a half-truth; has ≥8 char overlap with behind
+    const longText = '他借了两万还嘱咐我千万别跟别人提这事啊咱们都要注意一下'; // 26 chars
+    const front = [
+      u({ text: longText, witnessId: 'w-a' }),
+    ];
+    const behindTexts = [
+      { witnessId: 'w-a', qid: 'q1', behindText: '他借了两万还嘱咐我千万别跟他妈提' },
+    ];
+    const r = halfTruthCheck(front, behindTexts);
+    expect(r.heavyEchoCount).toBe(1);
+    expect(r.pass).toBe(false);
+  });
+
+  it('fails with 2 half-truths', () => {
+    const front = [
+      u({ text: '他从小就这样', witnessId: 'w-a' }),
+      u({ text: '性格从小就这样', witnessId: 'w-b' }),
+    ];
+    const behindTexts = [
+      { witnessId: 'w-a', qid: 'q1', behindText: '他从小就这样没法改' },
+      { witnessId: 'w-b', qid: 'q1', behindText: '她性格从小就这样的' },
+    ];
+    const r = halfTruthCheck(front, behindTexts);
+    expect(r.halfTruthCount).toBe(2);
+    expect(r.pass).toBe(false);
   });
 });
 

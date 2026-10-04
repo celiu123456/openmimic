@@ -9,6 +9,9 @@
  *   3. Secret leak detection
  *   4. Behind/front divergence (same-witness word overlap + evaluative-word ratio)
  *   5. Reply-chain rate (does a line respond to the previous 1-2 lines?)
+ *   6. Repetition rate (pairwise ≥5-char contiguous overlap between utterances)
+ *   7. Front frontText anchor rate (front lines sourced from frontText)
+ *   8. Half-truth check (exactly 1 front line echoes behindText, short)
  */
 
 import type { RoomUtterance, UtteranceTier } from '@openmimic/shared';
@@ -406,6 +409,163 @@ export function replyChainRate(utterances: readonly RoomUtterance[]): {
 }
 
 /* ------------------------------------------------------------------ */
+/* 6. Repetition rate                                                  */
+/* ------------------------------------------------------------------ */
+
+/**
+ * Check if two strings share a contiguous substring of at least `minLen` chars.
+ */
+export function hasContiguousOverlap(a: string, b: string, minLen: number): boolean {
+  if (a.length < minLen || b.length < minLen) return false;
+  for (let start = 0; start + minLen <= a.length; start++) {
+    if (b.includes(a.slice(start, start + minLen))) return true;
+  }
+  return false;
+}
+
+/**
+ * Fraction of speech-utterance pairs that share ≥5 contiguous characters.
+ * Only counts unique pairs (i,j) where i < j.
+ */
+export function repetitionRate(utterances: readonly RoomUtterance[]): {
+  duplicatePairs: number;
+  totalPairs: number;
+  rate: number;
+} {
+  const speeches = utterances.filter((u) => u.kind === 'speech');
+  let duplicatePairs = 0;
+  let totalPairs = 0;
+  for (let i = 0; i < speeches.length; i++) {
+    for (let j = i + 1; j < speeches.length; j++) {
+      totalPairs++;
+      if (hasContiguousOverlap(speeches[i]!.text, speeches[j]!.text, 5)) {
+        duplicatePairs++;
+      }
+    }
+  }
+  return {
+    duplicatePairs,
+    totalPairs,
+    rate: totalPairs > 0 ? duplicatePairs / totalPairs : 0,
+  };
+}
+
+/* ------------------------------------------------------------------ */
+/* 7. Front frontText anchor rate                                      */
+/* ------------------------------------------------------------------ */
+
+export interface FrontTextInfo {
+  witnessId: string;
+  qid: string;
+  frontText: string;
+}
+
+/**
+ * Among front-room speech utterances, what fraction are quote or paraphrase
+ * tier (i.e. anchored to testimony that has frontText)?
+ *
+ * `frontTextEntries` is the list of (witnessId, qid, frontText) tuples so we
+ * can verify anchors actually point to answers that have frontText.
+ */
+export function frontTextAnchorRate(
+  front: readonly RoomUtterance[],
+  frontTextEntries: readonly FrontTextInfo[],
+): { anchored: number; total: number; rate: number } {
+  const speeches = front.filter((u) => u.kind === 'speech');
+  if (speeches.length === 0) return { anchored: 0, total: 0, rate: 0 };
+
+  // Build a set of (witnessId, qid) that have frontText
+  const hasFrontText = new Set(
+    frontTextEntries.map((e) => `${e.witnessId}:${e.qid}`),
+  );
+
+  let anchored = 0;
+  for (const u of speeches) {
+    const tier = u.tier ?? 'extrapolate';
+    if (tier === 'quote' || tier === 'paraphrase') {
+      // Verify at least one anchor points to a qid with frontText
+      const hasValidAnchor = u.anchors?.some((a) =>
+        hasFrontText.has(`${u.witnessId}:${a.qid}`),
+      );
+      if (hasValidAnchor) anchored++;
+    }
+  }
+
+  return { anchored, total: speeches.length, rate: anchored / speeches.length };
+}
+
+/* ------------------------------------------------------------------ */
+/* 8. Half-truth check                                                 */
+/* ------------------------------------------------------------------ */
+
+export interface BehindTextInfo {
+  witnessId: string;
+  qid: string;
+  behindText: string;
+}
+
+export interface HalfTruthResult {
+  /** Number of front lines that echo behindText (≥4 chars, ≤25 chars). */
+  halfTruthCount: number;
+  /** Number of front lines that dangerously echo behindText (≥8 chars). */
+  heavyEchoCount: number;
+  /** Whether exactly 1 half-truth exists and no heavy echoes exist. */
+  pass: boolean;
+  details: string[];
+}
+
+/**
+ * Check the "half-truth" rule for the front room:
+ * - Exactly 1 front speech line should have ≥4-char overlap with its witness's
+ *   behindText AND be ≤25 chars long.
+ * - No other front speech line should have ≥8-char overlap with behindText.
+ */
+export function halfTruthCheck(
+  front: readonly RoomUtterance[],
+  behindTexts: readonly BehindTextInfo[],
+): HalfTruthResult {
+  const speeches = front.filter((u) => u.kind === 'speech');
+  const details: string[] = [];
+
+  // Group behindTexts by witnessId
+  const behindByWit = new Map<string, string[]>();
+  for (const bt of behindTexts) {
+    const arr = behindByWit.get(bt.witnessId) ?? [];
+    arr.push(bt.behindText);
+    behindByWit.set(bt.witnessId, arr);
+  }
+
+  let halfTruthCount = 0;
+  let heavyEchoCount = 0;
+
+  for (const u of speeches) {
+    const witBehind = behindByWit.get(u.witnessId) ?? [];
+    if (witBehind.length === 0) continue;
+
+    // Check for ≥8 char overlap (heavy echo - forbidden for non-half-truth lines)
+    const has8 = witBehind.some((bt) => hasContiguousOverlap(u.text, bt, 8));
+    // Check for ≥4 char overlap + ≤25 chars (half-truth candidate)
+    const has4 = witBehind.some((bt) => hasContiguousOverlap(u.text, bt, 4));
+    const isShort = u.text.length <= 25;
+
+    if (has4 && isShort) {
+      halfTruthCount++;
+      details.push(`half-truth: "${u.text}" (${u.witnessId})`);
+    } else if (has8) {
+      heavyEchoCount++;
+      details.push(`heavy-echo: "${u.text}" (${u.witnessId})`);
+    }
+  }
+
+  return {
+    halfTruthCount,
+    heavyEchoCount,
+    pass: halfTruthCount === 1 && heavyEchoCount === 0,
+    details,
+  };
+}
+
+/* ------------------------------------------------------------------ */
 /* Full report                                                         */
 /* ------------------------------------------------------------------ */
 
@@ -415,18 +575,23 @@ export interface RoomReport {
   length: LengthStats;
   leaks: LeakResult[];
   replyChain: { replyCount: number; eligible: number; rate: number };
+  repetition: { duplicatePairs: number; totalPairs: number; rate: number };
 }
 
 export interface FullReport {
   behind: RoomReport;
   front: RoomReport | null;
   divergence: WitnessDivergence[];
+  frontTextAnchoring: { anchored: number; total: number; rate: number } | null;
+  halfTruth: HalfTruthResult | null;
 }
 
 export function buildReport(
   behind: readonly RoomUtterance[],
   front: readonly RoomUtterance[] | undefined,
   privateFragments: readonly PrivateFragment[],
+  frontTextEntries?: readonly FrontTextInfo[],
+  behindTextEntries?: readonly BehindTextInfo[],
 ): FullReport {
   const behindReport: RoomReport = {
     phase: 'behind',
@@ -434,9 +599,13 @@ export function buildReport(
     length: lengthStats(behind),
     leaks: detectLeaks(behind, privateFragments),
     replyChain: replyChainRate(behind),
+    repetition: repetitionRate(behind),
   };
 
   let frontReport: RoomReport | null = null;
+  let frontAnchoring: FullReport['frontTextAnchoring'] = null;
+  let ht: FullReport['halfTruth'] = null;
+
   if (front && front.length > 0) {
     frontReport = {
       phase: 'front',
@@ -444,13 +613,26 @@ export function buildReport(
       length: lengthStats(front),
       leaks: detectLeaks(front, privateFragments),
       replyChain: replyChainRate(front),
+      repetition: repetitionRate(front),
     };
+    if (frontTextEntries) {
+      frontAnchoring = frontTextAnchorRate(front, frontTextEntries);
+    }
+    if (behindTextEntries) {
+      ht = halfTruthCheck(front, behindTextEntries);
+    }
   }
 
   const divergence =
     front && front.length > 0 ? witnessDivergence(behind, front) : [];
 
-  return { behind: behindReport, front: frontReport, divergence };
+  return {
+    behind: behindReport,
+    front: frontReport,
+    divergence,
+    frontTextAnchoring: frontAnchoring,
+    halfTruth: ht,
+  };
 }
 
 /* ------------------------------------------------------------------ */
@@ -476,6 +658,7 @@ export function formatReport(report: FullReport): string {
     lines.push(`| max length (chars) | ${r.length.max} |`);
     lines.push(`| secret leaks | ${r.leaks.length} |`);
     lines.push(`| reply chain rate | ${(r.replyChain.rate * 100).toFixed(0)}% (${r.replyChain.replyCount}/${r.replyChain.eligible}) |`);
+    lines.push(`| repetition rate | ${(r.repetition.rate * 100).toFixed(0)}% (${r.repetition.duplicatePairs}/${r.repetition.totalPairs} pairs) |`);
     lines.push('');
     if (r.leaks.length > 0) {
       lines.push('#### Leaks detected');
@@ -499,6 +682,36 @@ export function formatReport(report: FullReport): string {
       lines.push(
         `| ${d.witnessId} | ${d.behindCount} | ${d.frontCount} | ${(d.overlapRatio * 100).toFixed(0)}% | ${(d.frontEvaluativeRatio * 100).toFixed(0)}% |`,
       );
+    }
+    lines.push('');
+  }
+
+  if (report.frontTextAnchoring) {
+    const a = report.frontTextAnchoring;
+    lines.push('### Front frontText Anchoring');
+    lines.push('');
+    lines.push(`| Metric | Value |`);
+    lines.push(`|--------|-------|`);
+    lines.push(`| anchored lines | ${a.anchored} |`);
+    lines.push(`| total front speeches | ${a.total} |`);
+    lines.push(`| anchor rate | ${(a.rate * 100).toFixed(0)}% |`);
+    lines.push('');
+  }
+
+  if (report.halfTruth) {
+    const h = report.halfTruth;
+    lines.push('### Half-truth Check');
+    lines.push('');
+    lines.push(`| Metric | Value |`);
+    lines.push(`|--------|-------|`);
+    lines.push(`| half-truth count | ${h.halfTruthCount} (target: exactly 1) |`);
+    lines.push(`| heavy echo count | ${h.heavyEchoCount} (target: 0) |`);
+    lines.push(`| pass | ${h.pass ? 'YES' : 'NO'} |`);
+    if (h.details.length > 0) {
+      lines.push('');
+      for (const d of h.details) {
+        lines.push(`- ${d}`);
+      }
     }
     lines.push('');
   }
@@ -557,7 +770,42 @@ export function checkCriteria(report: FullReport): PassFail[] {
     detail: `${(rcr * 100).toFixed(0)}% (target >=30%, pass >=25%)`,
   });
 
-  // 5. Behind/front divergence: overlap < 50%
+  // 5. Repetition rate: behind <= 10%, front <= 10%
+  const brr = report.behind.repetition.rate;
+  checks.push({
+    name: 'behind-repetition',
+    pass: brr <= 0.10,
+    detail: `${(brr * 100).toFixed(0)}% (target <=10%)`,
+  });
+  if (report.front) {
+    const frr = report.front.repetition.rate;
+    checks.push({
+      name: 'front-repetition',
+      pass: frr <= 0.10,
+      detail: `${(frr * 100).toFixed(0)}% (target <=10%)`,
+    });
+  }
+
+  // 6. Front frontText anchoring >= 40%
+  if (report.frontTextAnchoring) {
+    const fta = report.frontTextAnchoring.rate;
+    checks.push({
+      name: 'front-text-anchoring',
+      pass: fta >= 0.40,
+      detail: `${(fta * 100).toFixed(0)}% (target >=40%)`,
+    });
+  }
+
+  // 7. Half-truth: exactly 1, no heavy echoes
+  if (report.halfTruth) {
+    checks.push({
+      name: 'front-half-truth',
+      pass: report.halfTruth.pass,
+      detail: `half-truths=${report.halfTruth.halfTruthCount}, heavy-echoes=${report.halfTruth.heavyEchoCount} (target: 1 half-truth, 0 heavy)`,
+    });
+  }
+
+  // 8. Behind/front divergence: overlap < 50%
   if (report.divergence.length > 0) {
     const avgOverlap =
       report.divergence.reduce((s, d) => s + d.overlapRatio, 0) /
