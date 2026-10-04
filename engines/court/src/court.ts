@@ -59,6 +59,7 @@ const RelationSchema = z.object({
   relation: z.enum(['agreement', 'perspective_difference', 'factual_conflict', 'unrelated']),
   topic: z.string().optional(),
   reason: z.string().optional(),
+  mergedText: z.string().optional(),
 });
 export type CourtRelation = z.infer<typeof RelationSchema>;
 
@@ -80,26 +81,29 @@ export type CourtVerdict = z.infer<typeof VerdictSchema>;
 /* Prompts                                                             */
 /* ------------------------------------------------------------------ */
 
-const FILING_SYSTEM_V2 = [
-  '你是人格法庭的立案书记员。输入是一位证人关于同一个人(下称"当事人")的证言。',
-  '你的任务:',
-  '1. 从证言中摘录具体事例(episodes):逐字复制原文中描述具体事件/经历的片段。',
-  '2. 把证言中关于当事人的可对质论断抽成候选论断(claims),写成带情境的观察,不写孤立形容词。',
-  '   kind=fact 只用于可核对的事件。',
-  '   ★ 论断的主语必须是当事人,不是证人自己。证人对自己的评价(如"这是我带人最差的一次")不得立为当事人的论断。',
-  '只输出 JSON 对象,不要输出任何解释或 markdown 代码块。',
-  '形如 {"episodes":[{"qid":"问题id","text":"逐字摘录","situation":"场合","audience":"对谁","timeHint":"时间提示"}],',
-  '"claims":[{"text":"论断","kind":"pattern","domain":"observable","context":{"audience":"对谁","situation":"场合","period":"时期"},',
-  '"evidenceTestimonyIds":["证言id"],"episodeTexts":["事例原文"]}]}',
-  '每个论断必须至少引用一条证言 id。episode.text 必须是证言原文的逐字子串。',
-  '请确保 episodes 和 claims 数组都非空(只要证言中有具体事件和可对质的描述)。',
-].join('\n');
+function buildFilingSystem(displayName: string): string {
+  return [
+    `你是人格法庭的立案书记员。输入是一位证人关于${displayName}的证言。`,
+    '你的任务:',
+    '1. 从证言中摘录具体事例(episodes):逐字复制原文中描述具体事件/经历的片段。',
+    `2. 把证言中关于${displayName}的可对质论断抽成候选论断(claims),写成带情境的观察,不写孤立形容词。`,
+    '   kind=fact 只用于可核对的事件。',
+    `   ★ 论断的主语必须是${displayName},不是证人自己。证人对自己的评价(如"这是我带人最差的一次")不得立为${displayName}的论断。`,
+    `   ★ 论断文本中,称呼被描述者用"${displayName}",称呼证人自己用其与${displayName}的关系名(见下方输入中的关系字段,如"发小""前上司"),不要用"当事人""证人"这类通称。`,
+    '只输出 JSON 对象,不要输出任何解释或 markdown 代码块。',
+    '形如 {"episodes":[{"qid":"问题id","text":"逐字摘录","situation":"场合","audience":"对谁","timeHint":"时间提示"}],',
+    '"claims":[{"text":"论断","kind":"pattern","domain":"observable","context":{"audience":"对谁","situation":"场合","period":"时期"},',
+    '"evidenceTestimonyIds":["证言id"],"episodeTexts":["事例原文"]}]}',
+    '每个论断必须至少引用一条证言 id。episode.text 必须是证言原文的逐字子串。',
+    '请确保 episodes 和 claims 数组都非空(只要证言中有具体事件和可对质的描述)。',
+  ].join('\n');
+}
 
 const RELATION_SYSTEM = [
   '你是人格法庭的关系判定智能体。',
   '输入是两条来自不同证人的候选论断。',
   '请判定它们的关系:',
-  '- agreement:两人说的是同一行为维度且观察方向一致,可合并;',
+  '- agreement:两位证人**各自独立观察到同一种行为模式**,方向一致,可合并。★仅仅话题相近不算;一方只是转述另一方在场的同一件事也不算;只有双方各自有独立的观察才算 agreement。判为 agreement 时,你必须写一句 mergedText:用一句话概括两位证人共同观察到的行为模式,不带任何一方的专属细节(不提具体人名/事件/数字);',
   '- perspective_difference:两人谈的是**同一行为维度**,但观察方向不同(例如同一个人的花钱态度,A说大方B说抠;同一个人的脾气,A说温和B说冷暴力)。★维度必须是一个具体行为(如"花钱""表达情绪""守约""对人态度"),不能是笼统概念;',
   '- factual_conflict:对同一件事实(发生没发生、怎么发生的)的矛盾;',
   '- unrelated:两条论断谈的是**不同的行为维度**,即使它们都在描述同一个人。例如"消防楼梯打电话"和"对外人话多"谈的是不同维度,判 unrelated。',
@@ -111,7 +115,8 @@ const RELATION_SYSTEM = [
   '反例(unrelated): "帮人兜底从不谈条件" vs "冷战十九天" → 不同维度(助人行为 vs 冲突处理) → unrelated',
   '',
   'topic 必须是一个具体维度,如"花钱""表达情绪""接受帮助""守约"等。不要写笼统的描述。',
-  '只输出 JSON 对象:{"relation":"...","topic":"...","reason":"..."}',
+  '只输出 JSON 对象:{"relation":"...","topic":"...","reason":"...","mergedText":"..."}',
+  'mergedText 仅在 agreement 时必须填写。',
 ].join('\n');
 
 const CONFRONTATION_SYSTEM = [
@@ -317,10 +322,10 @@ function lenientParseFilingResponse(raw: unknown): FilingResponse {
 /* Filing prompt                                                       */
 /* ------------------------------------------------------------------ */
 
-function buildFilingUser(witness: Witness, testimonies: readonly Testimony[]): string {
+function buildFilingUser(witness: Witness, testimonies: readonly Testimony[], displayName: string): string {
   const lines: string[] = [
-    `证人 id: ${witness.id}`,
-    `与当事人的关系: ${witness.relation}`,
+    `${witness.relation}(id: ${witness.id}）`,
+    `与${displayName}的关系: ${witness.relation}`,
   ];
   if (witness.stance) lines.push(`立场: ${witness.stance}`);
   lines.push('证言:');
@@ -337,17 +342,21 @@ function buildFilingUser(witness: Witness, testimonies: readonly Testimony[]): s
   return lines.join('\n');
 }
 
-function buildRelationUser(claimA: Claim, claimB: Claim): string {
+function buildRelationUser(claimA: Claim, claimB: Claim, witnessRelationMap: Map<string, string>): string {
+  const relA = witnessRelationMap.get(claimA.witnessIds?.[0] ?? '') ?? '?';
+  const relB = witnessRelationMap.get(claimB.witnessIds?.[0] ?? '') ?? '?';
   return [
-    `论断A (证人 ${claimA.witnessIds?.[0] ?? '?'}): ${claimA.text}`,
-    `论断B (证人 ${claimB.witnessIds?.[0] ?? '?'}): ${claimB.text}`,
+    `论断A (${relA}): ${claimA.text}`,
+    `论断B (${relB}): ${claimB.text}`,
   ].join('\n');
 }
 
-function buildConfrontationUser(claimA: Claim, claimB: Claim): string {
+function buildConfrontationUser(claimA: Claim, claimB: Claim, witnessRelationMap: Map<string, string>): string {
+  const relA = witnessRelationMap.get(claimA.witnessIds?.[0] ?? '') ?? '?';
+  const relB = witnessRelationMap.get(claimB.witnessIds?.[0] ?? '') ?? '?';
   return [
-    `论断A (证人 ${claimA.witnessIds?.[0] ?? '?'}): ${claimA.text}`,
-    `论断B (证人 ${claimB.witnessIds?.[0] ?? '?'}): ${claimB.text}`,
+    `论断A (${relA}): ${claimA.text}`,
+    `论断B (${relB}): ${claimB.text}`,
     '请判定这两条事实性冲突的结果。',
   ].join('\n');
 }
@@ -406,6 +415,9 @@ export async function runCourt(
   const startedAt = now();
   const transcript: CourtEvent[] = [];
 
+  const subject = store.getSubject(subjectId);
+  const displayName = subject?.displayName ?? subjectId;
+
   store.putCourtSession({
     id: sessionId,
     subjectId,
@@ -416,6 +428,11 @@ export async function runCourt(
   const witnesses = store.listWitnessesBySubject(subjectId);
   const allTestimonies = store.listBySubject(subjectId);
   const pairedClaimIds = new Set<string>();
+
+  const witnessRelationMap = new Map<string, string>();
+  for (const w of witnesses) {
+    witnessRelationMap.set(w.id, w.relation);
+  }
 
   /* ----------------------------- 1. Filing ----------------------------- */
   const candidates: InternalCandidate[] = [];
@@ -429,8 +446,8 @@ export async function runCourt(
     const filing = await attemptJson(
       llm,
       {
-        system: FILING_SYSTEM_V2,
-        user: buildFilingUser(witness, testimonies),
+        system: buildFilingSystem(displayName),
+        user: buildFilingUser(witness, testimonies, displayName),
         maxTokens: 4096,
       },
       (text) => {
@@ -610,7 +627,7 @@ export async function runCourt(
       llm,
       {
         system: RELATION_SYSTEM,
-        user: buildRelationUser(pair.claimA, pair.claimB),
+        user: buildRelationUser(pair.claimA, pair.claimB, witnessRelationMap),
         maxTokens: 1024,
       },
       (text) => RelationSchema.parse(extractJson(text)),
@@ -630,7 +647,17 @@ export async function runCourt(
     const relation = judgment.value;
 
     if (relation.relation === 'agreement') {
-      // Merge: keep claimA, add claimB's evidence and witnessIds
+      // mergedText is required for agreement; if missing/empty, treat as unrelated
+      if (!relation.mergedText || relation.mergedText.trim() === '') {
+        transcript.push({
+          type: 'defense',
+          claimId: pair.claimA.id,
+          text: `agreement 缺少 mergedText,按 unrelated 处理`,
+          at: now(),
+        });
+        continue;
+      }
+      // Merge: replace text with mergedText, union evidence/witnesses/episodes
       const merged = store.getClaim(pair.claimA.id);
       if (merged) {
         const bClaim = store.getClaim(pair.claimB.id);
@@ -639,6 +666,7 @@ export async function runCourt(
         const mergedEpisodeIds = [...new Set([...(merged.episodeIds ?? []), ...(bClaim?.episodeIds ?? [])])];
         store.putClaim({
           ...merged,
+          text: relation.mergedText,
           evidence: mergedEvidence,
           witnessIds: mergedWitnessIds,
           episodeIds: mergedEpisodeIds.length > 0 ? mergedEpisodeIds : undefined,
@@ -649,7 +677,7 @@ export async function runCourt(
       transcript.push({
         type: 'defense',
         claimId: pair.claimA.id,
-        text: `agreement: 与论断 ${pair.claimB.id} 合并 (${relation.reason ?? ''})`,
+        text: `agreement: 与论断 ${pair.claimB.id} 合并 → "${relation.mergedText}" (${relation.reason ?? ''})`,
         at: now(),
       });
 
@@ -684,7 +712,7 @@ export async function runCourt(
         llm,
         {
           system: CONFRONTATION_SYSTEM,
-          user: buildConfrontationUser(pair.claimA, pair.claimB),
+          user: buildConfrontationUser(pair.claimA, pair.claimB, witnessRelationMap),
           maxTokens: 1024,
         },
         (text) => ConfrontationVerdictSchema.parse(extractJson(text)),

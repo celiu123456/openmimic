@@ -69,6 +69,7 @@ const RELATION_AGREEMENT = JSON.stringify({
   relation: 'agreement',
   topic: 'generosity',
   reason: 'both witnesses agree she is generous',
+  mergedText: 'She is consistently generous in social situations.',
 });
 
 /** Relation: factual_conflict. */
@@ -92,6 +93,7 @@ const CONFRONTATION_QUALIFIED = JSON.stringify({
 });
 
 function seedThreeWitnessTrial(store: Store): void {
+  store.putSubject({ id: 's1', displayName: 'Alice' });
   store.putWitness({
     id: 'w1',
     subjectId: 's1',
@@ -255,7 +257,7 @@ describe('CourtEngine v2: three-witness trial', () => {
     expect(finished[0]?.id).toBe(session.id);
   });
 
-  it('agreement: claims merge evidence and retire one', async () => {
+  it('agreement: claims merge evidence, retire one, and use mergedText', async () => {
     const llm = new FakeLLM([
       FILING_W1,
       FILING_W2,
@@ -278,7 +280,40 @@ describe('CourtEngine v2: three-witness trial', () => {
       c.witnessIds && c.witnessIds.length >= 2,
     );
     expect(mergedClaim).toBeDefined();
+    // The merged claim text should be the mergedText, not either witness's original text
+    expect(mergedClaim!.text).toBe('She is consistently generous in social situations.');
     expect(session.report?.retired).toBeGreaterThanOrEqual(1);
+  });
+
+  it('agreement without mergedText is treated as unrelated (no merge)', async () => {
+    const agreementNoText = JSON.stringify({
+      relation: 'agreement',
+      topic: 'generosity',
+      reason: 'both witnesses agree',
+      // mergedText is missing
+    });
+
+    const llm = new FakeLLM([
+      FILING_W1,
+      FILING_W2,
+      FILING_W3,
+      agreementNoText,
+    ]);
+
+    const session = await runCourt('s1', store, llm, {
+      pairFinder: new KeywordClaimPairFinder(1),
+    });
+
+    const claims = store.listClaimsBySubject('s1')
+      .filter((c) => c.courtSessionId === session.id);
+    // No claims should be retired (no merge happened)
+    const retired = claims.filter((c) => c.status === 'retired');
+    expect(retired).toHaveLength(0);
+
+    // Transcript should mention the fallback
+    expect(session.transcript.some((e) =>
+      e.text.includes('缺少 mergedText'),
+    )).toBe(true);
   });
 
   it('factual_conflict + unresolved: both claims contested, conviction=0', async () => {
@@ -631,6 +666,7 @@ describe('Defect regressions', () => {
     // system prompt includes the instruction about subject-only claims
     const store = new Store();
     try {
+      store.putSubject({ id: 's1', displayName: 'Alice' });
       store.putWitness({
         id: 'w1', subjectId: 's1', relation: 'boss', consentLevel: 'quotable',
       });
@@ -651,8 +687,46 @@ describe('Defect regressions', () => {
         pairFinder: new KeywordClaimPairFinder(100),
       });
 
-      // The filing system prompt should contain the instruction
-      expect(llm.calls[0]?.system).toContain('论断的主语必须是当事人');
+      // The filing system prompt should use the subject's displayName
+      expect(llm.calls[0]?.system).toContain('论断的主语必须是Alice');
+      // And instruct to use relation names not "证人"
+      expect(llm.calls[0]?.system).toContain('关系名');
+    } finally {
+      store.close();
+    }
+  });
+
+  it('filing prompt uses subject displayName and witness relation', async () => {
+    const store = new Store();
+    try {
+      store.putSubject({ id: 's1', displayName: '林默' });
+      store.putWitness({
+        id: 'w1', subjectId: 's1', relation: '发小', consentLevel: 'quotable',
+      });
+      store.addTestimony({
+        id: 't1', witnessId: 'w1', subjectId: 's1',
+        answers: [{ qid: 'q1', behindText: 'He is generous and always pays.' }],
+      });
+
+      const llm = new FakeLLM([
+        JSON.stringify({
+          episodes: [{ qid: 'q1', text: 'generous and always pays' }],
+          claims: [{ text: '林默对朋友花钱大方。', kind: 'observation', evidenceTestimonyIds: ['t1'] }],
+        }),
+      ]);
+
+      await runCourt('s1', store, llm, {
+        pairFinder: new KeywordClaimPairFinder(100),
+      });
+
+      // System prompt should reference 林默 as the subject name
+      expect(llm.calls[0]?.system).toContain('关于林默的证言');
+      expect(llm.calls[0]?.system).toContain('论断的主语必须是林默');
+      // The prompt explicitly tells the LLM not to use "当事人"
+      expect(llm.calls[0]?.system).toContain('不要用"当事人"');
+      // User prompt should reference the witness relation
+      expect(llm.calls[0]?.user).toContain('发小');
+      expect(llm.calls[0]?.user).toContain('林默');
     } finally {
       store.close();
     }
