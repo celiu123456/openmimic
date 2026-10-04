@@ -1,6 +1,6 @@
 # README 声明逐条审计
 
-> 生成时间:2026-10-05 · 基线:main = e6c7cc3(154 测试)
+> 生成时间:2026-10-05 · 基线:main(189 测试)
 
 状态说明:
 - **已实现**:有代码路径,有测试覆盖
@@ -15,10 +15,10 @@
 |---|---|---|---|
 | 从 0 实现的对抗式多智能体人格引擎 | 部分 | `engines/court/src/court.ts` 全文 | 有对抗式管线,但"多智能体"实际是多次 LLM 调用(立案一次 + 每条论断质询一次),没有独立运行的智能体进程 |
 | 收集认识你的人的证言 | 已实现 | `engines/witness/src/testimony.ts` · `engines/witness/src/invite.ts` · `engines/witness/src/interview.ts` | 问卷采集 + 邀请链接 + AI 追问式访谈 |
-| 让多个智能体在"人格法庭"上交叉质询 | 部分 | `engines/court/src/court.ts:41-59` | 立案书记员(FILING_SYSTEM)提取候选论断,质询智能体(CHALLENGE_SYSTEM)做一次判定;没有独立的证人作答智能体,也没有仲裁智能体——质询和裁定是同一次 LLM 调用 |
-| 只有在对质中存活的侧面才进入人格 | 已实现 | `engines/court/src/court.ts:338-385` · `kernel/src/persona.ts:170-176` | 裁定 reject 的论断 status=retired;persona 组装只取 status=surviving |
-| 每一个数字人格都带证据链 | 已实现 | `shared/src/schemas.ts:136` · `kernel/src/store.ts:628-633` | Claim.evidence 至少一条且必须指向账本中存在的证言;putClaim 无锚则抛 NoEvidenceError |
-| 任何一条性格结论,都能回答"这是谁说的、原话是什么、被谁质疑过" | 部分 | `shared/src/schemas.ts:129-141` · `engines/court/src/court.ts:220-278` | claim.evidence 指向证言 id(可溯"谁说的");courtSessionId 指向法庭会话(质疑记录在 transcript);但"原话是什么"受 synthesis_only 授权限制,外部视角下被替换为 [withheld] |
+| 让多个智能体在"人格法庭"上交叉质询 | 部分 | `engines/court/src/court.ts` | v2 管线:filing(LLM 提取论断+事例) → pairing(embedding/关键词) → relation judgment(LLM 判定 agreement/perspective_difference/factual_conflict/unrelated) → confrontation(事实冲突进 LLM 对质)。仍非独立运行的智能体进程,是多步 LLM 调用 |
+| 只有在对质中存活的侧面才进入人格 | 已实现 | `engines/court/src/court.ts`(runCourt) · `kernel/src/persona.ts` | 裁定 contested 的论断不进入基线;persona 组装只取 status=surviving |
+| 每一个数字人格都带证据链 | 已实现 | `shared/src/schemas.ts`(ClaimSchema) · `kernel/src/store.ts`(putClaim) | Claim.evidence 至少一条且必须指向账本中存在的证言;putClaim 无锚则抛 NoEvidenceError;v2 新增 episodeIds/witnessIds 锚定 |
+| 任何一条性格结论,都能回答"这是谁说的、原话是什么、被谁质疑过" | 已实现 | `shared/src/schemas.ts`(ClaimSchema + EpisodeSchema) · `engines/court/src/court.ts` | claim.evidence + witnessIds 锚定证人;episodeIds 锚定事例(证言原文逐字子串);courtSessionId 指向法庭会话(质疑记录在 transcript + divergences);synthesis_only 授权下原话替换为 [withheld] |
 
 ## "你下载后能做什么"
 
@@ -61,7 +61,7 @@
 | 引擎 | 状态 | 代码依据 | 备注 |
 |---|---|---|---|
 | WitnessEngine | 已实现 | `engines/witness/src/plugin.ts` · `engines/witness/test/` | 采集、邀请、问卷、AI 追问访谈,注册为 collector 类型插件 |
-| CourtEngine | 部分 | `engines/court/src/court.ts` · `engines/court/src/plugin.ts` · `engines/court/test/court.test.ts` | 立案 + 一次质询判定 + 裁定;README 声称有"证人智能体、质询智能体、仲裁智能体"三类独立智能体,实际是两种 prompt 角色(书记员 + 质询)各做一次 LLM 调用 |
+| CourtEngine | 已实现 | `engines/court/src/court.ts` · `engines/court/src/conflict.ts` · `engines/court/src/plugin.ts` · `engines/court/test/court.test.ts` | v2 管线:filing(提取论断+事例) → pairing(EmbeddingClaimPairFinder/KeywordClaimPairFinder) → relation judgment → confrontation → conviction computation;divergence map 保留视角差异;仍为多步 LLM 调用而非独立智能体进程 |
 | GraphEngine | 计划 | `engines/graph/` 只有 .gitkeep | 无代码;README 声称"人格是图的实时派生物……改一条证言自动重算"无实现 |
 | RoomEngine | 已实现 | `engines/room/src/room.ts` · `engines/room/src/plugin.ts` · `engines/room/test/room.test.ts` | 背后/当面双模式,round-robin 调度,consent overlap 防护,crisis/diagnosis 词表 |
 | GateEngine(独立引擎) | 计划 | `engines/gate/` 只有 .gitkeep | 授权逻辑在 `kernel/src/gate.ts`,但未封装为独立引擎插件;否决流 / contested 流程 / 论断权限墙均无实现 |
@@ -70,21 +70,22 @@
 
 | 声明 | 状态 | 代码依据 | 备注 |
 |---|---|---|---|
-| 证人智能体(各持一位真实证言人的材料) | 部分 | `engines/court/src/court.ts:236-278` | 每个证人的证言被送入立案 prompt,但没有独立的证人"作答"智能体——立案书记员一次提取所有论断 |
-| 质询智能体(专攻证言间矛盾) | 部分 | `engines/court/src/court.ts:284-335` | 有一次 LLM 质询判定(survive/qualify/reject),但不是持续对话的智能体 |
-| 仲裁智能体(裁定哪些侧面成立) | 部分 | `engines/court/src/court.ts:338-385` | 裁定由质询同一次 LLM 调用完成,没有独立仲裁角色 |
-| 置信分(conviction) | 部分 | `shared/src/schemas.ts:239-249` | survive=0.8、qualify=0.65、unchallenged_cap=0.6 为写死常量;没有基于实际质询轮次的动态计算(decay 函数存在但 W1 只跑一轮,始终 decay=0) |
-| 冲突检索(用于找质询材料) | 部分 | `engines/court/src/conflict.ts:83-113` | KeywordConflictFinder 做关键词二元组重叠;ConflictFinder 接口存在但 embedding 实现未接入 |
+| 证人智能体(各持一位真实证言人的材料) | 部分 | `engines/court/src/court.ts`(filing) | 每个证人的证言被送入 filing prompt 提取论断+事例,但没有独立的证人"作答"智能体 |
+| 质询智能体(专攻证言间矛盾) | 已实现 | `engines/court/src/court.ts`(relation judgment + confrontation) | v2: pairing 找到论断对后 LLM 判定关系;factual_conflict 进入 confrontation 对质 |
+| 仲裁智能体(裁定哪些侧面成立) | 部分 | `engines/court/src/court.ts`(computeConviction) | 裁定由 confrontation LLM 调用 + computeConviction 纯函数完成,没有独立仲裁角色 |
+| 置信分(conviction) | 已实现 | `engines/court/src/court.ts`(computeConviction) | v2: 纯函数,base 0.5,+0.12/witness cap 0.9,无 episode cap 0.55,全 elicited ×0.85,未 paired cap 0.6,contested=0;有 6 条 computeConviction 专项测试 |
+| 冲突检索(用于找质询材料) | 已实现 | `engines/court/src/conflict.ts` | v2: EmbeddingClaimPairFinder(余弦相似度,threshold 0.55)和 KeywordClaimPairFinder(关键词重叠,minimumOverlap 2)双实现;跳过同证人和共享证据的论断对 |
+| 分歧图(divergence map) | 已实现 | `engines/court/src/court.ts` · `shared/src/schemas.ts`(DivergenceSchema) · `server/src/server.ts`(GET /api/subjects/:id/divergences) · `web/src/views/CourtReportView.vue` | 视角差异生成 divergence 记录(type=perspective/factual,resolution=kept_both/contested),前端 /court/:id 页面展示(红=事实冲突,蓝=视角差异) |
 | GraphEngine 实时重算 | 计划 | — | 无代码 |
-| contested 否决流 | 计划 | `shared/src/schemas.ts:126` | ClaimStatus 枚举包含 `contested`,但无任何代码将 claim 设为 contested 或执行否决流程 |
-| 论断权限墙(心理健康主题只记事实不生成准诊断) | 部分 | `engines/room/src/wordlist.ts` · `engines/room/src/room.ts:248-270` | 危机词拒绝开房间(RoomRefusedError);诊断词触发重写/降级为 stage direction;但这是 RoomEngine 的行为,不是独立的 GateEngine 权限墙 |
-| 集体沉默检测 | 部分 | `shared/src/schemas.ts:113-122` · `web/src/answers.ts:88-89` | avoidedQids 在证言上记录跳过的问题 id;前端采集并传入;但无消费端(没有代码统计或分析集体沉默) |
+| contested 否决流 | 部分 | `engines/court/src/court.ts`(confrontation) · `shared/src/schemas.ts` | v2: 事实冲突经 confrontation 对质后,unresolved 的论断自动标 contested(conviction=0);本人手动否决流程仍无代码 |
+| 论断权限墙(心理健康主题只记事实不生成准诊断) | 部分 | `engines/room/src/wordlist.ts` · `engines/room/src/room.ts` | 危机词拒绝开房间;诊断词触发重写/降级;但这是 RoomEngine 的行为,不是独立的 GateEngine 权限墙 |
+| 集体沉默检测 | 部分 | `shared/src/schemas.ts` · `web/src/answers.ts` | avoidedQids 在证言上记录跳过的问题 id;前端采集并传入;但无消费端 |
 
 ## .persona 人格包
 
 | 声明 | 状态 | 代码依据 | 备注 |
 |---|---|---|---|
-| 导出为 .persona 包(含脱敏证言摘要、基线、体检报告、授权范围) | 已实现 | `server/src/persona-package.ts:134-182` | 包含 claims(基线)、styleSamples(授权原话)、report(体检报告)、witnesses(含 consentLevel);证言摘要实为 claims 而非原始证言 |
+| 导出为 .persona 包(含脱敏证言摘要、基线、体检报告、授权范围) | 已实现 | `server/src/persona-package.ts` | v2: 包含 claims(基线)、episodes(quotable 事例)、divergences(分歧)、corpus(当事人原话,作 styleSamples)、report(体检报告)、witnesses(含 consentLevel);向后兼容 v1 |
 | 社区可发布公共人格包 | 计划 | — | 无社区分发机制 |
 
 ## "和现有路线的区别"表
@@ -104,19 +105,19 @@
 | 证言人提交时选择授权级别 | 已实现 | `shared/src/schemas.ts:53`(ConsentLevelSchema: quotable / synthesis_only) · `engines/witness/src/testimony.ts` | — |
 | 背后房间只使用授权展示的材料 | 已实现 | `kernel/src/gate.ts:23-52` · `server/src/external.ts:71-104` | synthesis_only 在 external scope 下被替换为 [withheld] |
 | 每条人格结论可回溯到证言原文与来源 | 已实现 | `shared/src/schemas.ts:136` · `kernel/src/store.ts:628-633` | Claim.evidence 必须非空且指向存在的证言 |
-| 分歧保留不裁决谁对 | 已实现 | `engines/court/src/court.ts:347-370` | qualify 保留限定条件,rejected 标记 retired 但不删除;引擎不替用户裁决事实 |
+| 分歧保留不裁决谁对 | 已实现 | `engines/court/src/court.ts`(relation judgment) · `shared/src/schemas.ts`(DivergenceSchema) | v2: perspective_difference 生成 divergence 记录保留双方观点(resolution=kept_both);factual_conflict 经对质后 qualified 或 contested;引擎不替用户裁决事实 |
 | AI 生成内容与原始证言物理隔离 | 已实现 | `kernel/src/store.ts:184-195`(append-only triggers) · `shared/src/schemas.ts:104-105`(correctionOf 链) | 证言表有 DELETE/UPDATE 触发器;room transcript 是独立表;AI 产物不回灌证言 |
 | 复刻在世他人用于私人预演;公开分发需本人授权 | 部分 | — | 无技术措施强制"公开分发需本人授权"——这是文字声明,不是代码强制 |
-| 本人可否决关于自己的论断→降级 contested 态 | 计划 | `shared/src/schemas.ts:126` | contested 仅为枚举值,无否决流程代码 |
+| 本人可否决关于自己的论断→降级 contested 态 | 部分 | `shared/src/schemas.ts`(ClaimStatusSchema) · `engines/court/src/court.ts`(confrontation) | v2: 事实冲突经 confrontation 对质后 unresolved 的论断自动标 contested(conviction=0);本人手动否决流程尚无代码 |
 | 危机词命中即切危机模式 | 已实现 | `engines/room/src/wordlist.ts:18-43` · `engines/room/src/room.ts:365-370` | 话题种子含危机词则拒绝开房间 |
 
 ## 借鉴与致谢
 
 | 声明 | 状态 | 代码依据 | 备注 |
 |---|---|---|---|
-| conviction 置信分(借鉴衔枝) | 已实现 | `shared/src/schemas.ts:239-249` | 常量实现,借鉴了名称和概念 |
-| contested 状态命名(借鉴衔枝) | 已实现 | `shared/src/schemas.ts:126` | 枚举值存在 |
-| 反证搜索(借鉴衔枝) | 计划 | — | 无代码 |
+| conviction 置信分(借鉴衔枝) | 已实现 | `engines/court/src/court.ts`(computeConviction) | v2: 纯函数动态计算,base 0.5,按证人数/episode/pairing 状态调整 |
+| contested 状态命名(借鉴衔枝) | 已实现 | `shared/src/schemas.ts`(ClaimStatusSchema) · `engines/court/src/court.ts` | v2: 事实冲突对质后 unresolved→contested(conviction=0) |
+| 反证搜索(借鉴衔枝) | 已实现 | `engines/court/src/conflict.ts` | v2: EmbeddingClaimPairFinder + KeywordClaimPairFinder 双实现 |
 | 盲推导审计(借鉴衔枝) | 计划 | — | 无代码 |
 | contested 否决流(借鉴衔枝) | 计划 | — | 枚举值有,流程无 |
 | 论断权限墙(借鉴衔枝) | 计划 | — | 危机词在 RoomEngine 中,但非独立权限墙 |
@@ -141,7 +142,7 @@
 
 | 声明 | 状态 | 代码依据 | 备注 |
 |---|---|---|---|
-| 语料箱(本人原话可展示的段落) | 计划 | — | 不存在独立的"语料箱"功能;`kernel/src/persona.ts:95-113` 的"说话风格参照"取自 quotable 证人的短句,不是当事人本人的原话 |
+| 语料箱(本人原话可展示的段落) | 已实现 | `shared/src/schemas.ts`(CorpusItemSchema) · `kernel/src/store.ts`(putCorpusItem/listCorpusItemsBySubject) · `server/src/server.ts`(POST/GET /api/subjects/:id/corpus) · `kernel/src/persona.ts` | corpus_items 表物理独立于证言表;persona 组装 v2 的"他本人说过的话"段落和说话风格参照均取自 corpus;林默演示含 10 条 corpus items |
 
 ---
 
@@ -149,6 +150,6 @@
 
 | 状态 | 条数 |
 |---|---|
-| 已实现 | 28 |
-| 部分 | 16 |
-| 计划 | 15 |
+| 已实现 | 35 |
+| 部分 | 10 |
+| 计划 | 12 |

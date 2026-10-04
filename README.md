@@ -6,7 +6,7 @@
 
 *A general-purpose persona engine. Rebuild anyone. Rehearse anything.*
 
-从 0 实现的对抗式人格引擎。它不用你的自述训练"你"——它收集认识你的人的证言,从每位证人的证言中抽取候选论断,找到其他证人的相关材料后由模型做一次质询判定,结果带证据链入库。只有在质询中存活的侧面才进入人格基线。每一个数字人格都带证据链:任何一条性格结论,都能回答"这是谁说的、被谁质疑过"(论断级锚定到证言条目)。
+从 0 实现的对抗式人格引擎。它不用你的自述训练"你"——它收集认识你的人的证言,从每位证人的证言中提取候选论断和具体事例(episode),用 embedding 或关键词重叠找到不同证人之间的相关材料后做关系判定(agreement / perspective_difference / factual_conflict / unrelated)。事实性冲突进入对质;视角差异作为分歧(divergence)保留而非裁决;一致观点合并强化。存活的论断带 conviction 置信分入库,每一个数字人格都带证据链:任何一条性格结论,都能回答"这是谁说的、原话是什么、被谁质疑过"(论断级锚定到证言条目和事例)。
 
 把一个人复刻出来,你可以:围观他不在场时别人怎么聊他,推门进去看所有人当面换一套说法,在重要对话发生前先和"他"过一遍。平行组织(把一整个团队复刻后预演决策)见 Roadmap。
 
@@ -82,9 +82,9 @@ resp = client.chat.completions.create(
 | 证言账本(append-only ledger + SQLite triggers) | 已实现 |
 | 授权门(synthesis_only 遮蔽,court/external 双 scope) | 已实现 |
 | 插件装配(最小版:manifest 注册,无依赖注入与卸载) | 已实现 |
-| 人格组装(claim baseline → system prompt) | 已实现 |
+| 人格组装(async, audience-grouped claims + episodes + divergences + corpus → 6000 char system prompt) | 已实现 |
 | WitnessEngine(采集 + 邀请 + AI 追问访谈) | 已实现 |
-| CourtEngine(立案 + 关键词冲突检索 + 一次质询判定) | 已实现 |
+| CourtEngine(v2: filing with episodes + embedding/keyword pairing + relation judgment + confrontation + divergence map + conviction computation) | 已实现 |
 | RoomEngine(背后/当面双模式 + 危机词 + 诊断词防护) | 已实现 |
 | GraphEngine(证言图谱,改一条证言自动重算关联人格) | 计划 |
 | GateEngine 独立引擎(contested 否决流 + 论断权限墙) | 计划 |
@@ -95,25 +95,26 @@ resp = client.chat.completions.create(
 | 引擎 | 职责 |
 |---|---|
 | **WitnessEngine** | 证言采集与立场标注:每条证言记录来源、关系、立场,原文永久可溯 |
-| **CourtEngine** | 对抗式质询:从证言中提取候选论断(LLM 立案),用关键词重叠找到其他证人的冲突材料后做一次 LLM 质询判定(survive / qualify / reject)。存活的论断进入人格基线,每个人格出厂带体检报告(CourtReport:质询次数 / 存活数 / 证据覆盖率)。当前冲突检索为关键词二元组重叠,embedding 接口已定义但未接入 |
+| **CourtEngine** | v2 对抗式质询管线:4 阶段——(1) filing: 从每位证人的证言中提取候选论断和 episode(具体事例,必须是证言原文的逐字子串);(2) pairing: 用 embedding 余弦相似度或关键词重叠找到不同证人之间的相关论断对;(3) relation judgment: LLM 判定论断对关系(agreement / perspective_difference / factual_conflict / unrelated),事实冲突进入 confrontation 对质;(4) conviction computation: 纯函数,base 0.5,按证人数/episode/配对状态计算置信分。视角差异生成 divergence 记录保留双方观点;一致论断合并证据。体检报告(CourtReport)含存活/限定/争议/退役论断数、episode 数、divergence 数 |
 | **GraphEngine** | 计划:证言图谱,使人格成为图的实时派生物(改一条证言自动重算关联人格)。当前无代码 |
 | **RoomEngine** | 房间模拟:背后/当面双模式群体对话;危机词命中拒绝开房间,诊断词触发重写或降级为舞台指令 |
 | **GateEngine** | 计划:独立引擎形式的授权与溯源门。当前授权逻辑在内核 `kernel/src/gate.ts` 中(synthesis_only 遮蔽已实现);本人否决论断→降级 contested 态、论断权限墙等流程尚无代码 |
 
 ## .persona 人格包
 
-人格是可分发的文件。构建完成的人格可导出为 `.persona` 包,包含:surviving claims(基线)、quotable 证人的风格样本、体检报告(CourtReport)、证人元信息(关系 / 立场 / 授权级别);原始证言不随包分发。他人下载即可导入并生成房间或通过 OpenAI 端点对话。社区分发机制(计划)。
+人格是可分发的文件。构建完成的人格可导出为 `.persona` 包(version 2),包含:surviving claims(基线)、quotable episodes(事例)、divergences(分歧)、corpus items(当事人本人原话,作为说话风格参照)、体检报告(CourtReport)、证人元信息(关系 / 立场 / 授权级别);原始证言不随包分发。包格式向后兼容 version 1。他人下载即可导入并生成房间或通过 OpenAI 端点对话。社区分发机制(计划)。
 
 ## 和现有路线的区别
 
-| | 数据来源 | 能回答"这是谁说的" | 背后/当面区分 | 规模形态 |
-|---|---|---|---|---|
-| 自训练分身(Second-Me 类) | 本人自述数据 | ✗ | ✗ | 单人 |
-| 记忆层(Mem0 类) | 交互事实 | 部分 | ✗ | 单 agent |
-| 群体模拟(MiroFish 类) | prompt 设定 | ✗ | ✗ | 百万量级设定体 |
-| **OpenMimic** | **他人证言** | **每一条**[^1] | **✓** | **单人/单房间(组织级见 Roadmap)** |
+| | 数据来源 | 能回答"这是谁说的" | 分歧处理 | 背后/当面区分 | 规模形态 |
+|---|---|---|---|---|---|
+| 自训练分身(Second-Me 类) | 本人自述数据 | ✗ | 无分歧(单源) | ✗ | 单人 |
+| 记忆层(Mem0 类) | 交互事实 | 部分 | 覆盖或丢弃 | ✗ | 单 agent |
+| 群体模拟(MiroFish 类) | prompt 设定 | ✗ | 无分歧(设定) | ✗ | 百万量级设定体 |
+| **OpenMimic** | **他人证言** | **每一条**[^1] | **保留双方观点(divergence map)**[^2] | **✓** | **单人/单房间(组织级见 Roadmap)** |
 
-[^1]: 论断级锚定到证言条目。
+[^1]: 论断级锚定到证言条目和 episode。
+[^2]: 视角差异保留不裁决;事实冲突经对质后标 contested 或 qualified。
 
 自训练路线的自述数据中不包含他人的背后看法,因此无法构建"你不在的房间"。
 
@@ -151,18 +152,18 @@ resp = client.chat.completions.create(
 
 ### 已完成
 
-- 内核:证言账本(append-only + triggers)、授权门(synthesis_only 遮蔽)、插件装配(最小版)、人格组装(claim → prompt)
+- 内核:证言账本(append-only + triggers)、授权门(synthesis_only 遮蔽)、插件装配(最小版)、人格组装 v2(async, audience-grouped claims + episodes + divergences + corpus, 6000 char budget)
 - WitnessEngine:问卷采集、邀请链接、AI 追问访谈
-- CourtEngine:立案 + 关键词冲突检索 + 一次质询判定 + 体检报告
+- CourtEngine v2:filing with episodes + embedding/keyword pairing + relation judgment + confrontation + divergence map + conviction computation(纯函数)
 - RoomEngine:背后/当面双模式 + 危机词拒绝 + 诊断词重写/降级
 - 对外挂载:OpenAI 兼容端点、MCP Server(stdio)、纯库 import
-- .persona 人格包导出/导入(含 consent 过滤)
-- 内置演示(虚构人物林默,无 API Key 可体验)
+- .persona 人格包 v2 导出/导入(含 consent 过滤、episodes、divergences、corpus)
+- 语料箱(corpus):当事人本人原话,作为说话风格参照,物理上独立于证言表
+- Embedding 冲突检索:EmbeddingClaimPairFinder(余弦相似度)和 KeywordClaimPairFinder(关键词重叠)双实现
+- 内置演示(虚构人物林默,18 episodes + 5 divergences + 10 corpus items,无 API Key 可体验)
 
 ### 进行中
 
-- 冲突检索从关键词重叠升级到 embedding(ConflictFinder 接口已定义)
-- 置信分从固定常量改为基于质询轮次的动态计算(decay 函数已存在,多轮质询未开放)
 - avoidedQids 集体沉默信号消费端(采集侧已就绪)
 
 ### 计划
