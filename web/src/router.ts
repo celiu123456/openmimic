@@ -14,6 +14,11 @@ export const router = createRouter({
       component: () => import('./views/InterviewView.vue'),
     },
     { path: '/room/:id', name: 'room', component: () => import('./views/RoomView.vue') },
+    {
+      path: '/court/:id',
+      name: 'court-report',
+      component: () => import('./views/CourtReportView.vue'),
+    },
     { path: '/:pathMatch(.*)*', redirect: '/' },
   ],
   scrollBehavior: () => ({ top: 0 }),
