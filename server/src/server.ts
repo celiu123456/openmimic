@@ -354,7 +354,10 @@ function buildRouter(
   router.get('/api/rooms/:id', (context) => {
     const room = store.getRoom(context.params.id ?? '');
     if (!room) throw new HttpError(404, 'room_not_found', '房间不存在');
-    return { status: 200, body: room };
+    // The page should not have to carry the subject's name in the URL; the
+    // room payload names its own subject.
+    const subject = store.getSubject(room.subjectId);
+    return { status: 200, body: { ...room, subjectDisplayName: subject?.displayName ?? '' } };
   });
 
   /* ---------------------------------------------------------------- */

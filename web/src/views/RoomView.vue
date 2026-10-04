@@ -73,7 +73,7 @@ const feedEnd = ref<HTMLElement | null>(null);
 
 const subjectName = computed(() =>
   resolveSubjectName(
-    route.query.name,
+    (room.value as { subjectDisplayName?: string } | null)?.subjectDisplayName,
     room.value ? subjectNameFor(localStorage, room.value.subjectId) : undefined,
   ),
 );
