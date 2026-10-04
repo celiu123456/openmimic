@@ -61,7 +61,7 @@
 | 引擎 | 状态 | 代码依据 | 备注 |
 |---|---|---|---|
 | WitnessEngine | 已实现 | `engines/witness/src/plugin.ts` · `engines/witness/test/` | 采集、邀请、问卷、AI 追问访谈,注册为 collector 类型插件 |
-| CourtEngine | 已实现 | `engines/court/src/court.ts` · `engines/court/src/conflict.ts` · `engines/court/src/plugin.ts` · `engines/court/test/court.test.ts` | v2 管线:filing(提取论断+事例) → pairing(EmbeddingClaimPairFinder/KeywordClaimPairFinder) → relation judgment → confrontation → conviction computation;divergence map 保留视角差异;仍为多步 LLM 调用而非独立智能体进程 |
+| CourtEngine | 已实现 | `engines/court/src/court.ts` · `engines/court/src/conflict.ts` · `engines/court/src/plugin.ts` · `engines/court/test/court.test.ts` | v2 管线:filing(提取论断+事例,per-item lenient parsing) → pairing(LLMClaimPairFinder/EmbeddingClaimPairFinder/KeywordClaimPairFinder 三级回落) → relation judgment(要求同一行为维度) → confrontation → conviction computation;divergence map 保留视角差异;仍为多步 LLM 调用而非独立智能体进程 |
 | GraphEngine | 计划 | `engines/graph/` 只有 .gitkeep | 无代码;README 声称"人格是图的实时派生物……改一条证言自动重算"无实现 |
 | RoomEngine | 已实现 | `engines/room/src/room.ts` · `engines/room/src/plugin.ts` · `engines/room/test/room.test.ts` | 背后/当面双模式,round-robin 调度,consent overlap 防护,crisis/diagnosis 词表 |
 | GateEngine(独立引擎) | 计划 | `engines/gate/` 只有 .gitkeep | 授权逻辑在 `kernel/src/gate.ts`,但未封装为独立引擎插件;否决流 / contested 流程 / 论断权限墙均无实现 |
@@ -74,7 +74,7 @@
 | 质询智能体(专攻证言间矛盾) | 已实现 | `engines/court/src/court.ts`(relation judgment + confrontation) | v2: pairing 找到论断对后 LLM 判定关系;factual_conflict 进入 confrontation 对质 |
 | 仲裁智能体(裁定哪些侧面成立) | 部分 | `engines/court/src/court.ts`(computeConviction) | 裁定由 confrontation LLM 调用 + computeConviction 纯函数完成,没有独立仲裁角色 |
 | 置信分(conviction) | 已实现 | `engines/court/src/court.ts`(computeConviction) | v2: 纯函数,base 0.5,+0.12/witness cap 0.9,无 episode cap 0.55,全 elicited ×0.85,未 paired cap 0.6,contested=0;有 6 条 computeConviction 专项测试 |
-| 冲突检索(用于找质询材料) | 已实现 | `engines/court/src/conflict.ts` | v2: EmbeddingClaimPairFinder(余弦相似度,threshold 0.55)和 KeywordClaimPairFinder(关键词重叠,minimumOverlap 2)双实现;跳过同证人和共享证据的论断对 |
+| 冲突检索(用于找质询材料) | 已实现 | `engines/court/src/conflict.ts` | v2: LLMClaimPairFinder(一次 LLM 调用找语义相关对,无 embedding 时的默认)、EmbeddingClaimPairFinder(余弦相似度,threshold 0.55)和 KeywordClaimPairFinder(关键词重叠,minimumOverlap 2)三级实现;跳过同证人和共享证据的论断对 |
 | 分歧图(divergence map) | 已实现 | `engines/court/src/court.ts` · `shared/src/schemas.ts`(DivergenceSchema) · `server/src/server.ts`(GET /api/subjects/:id/divergences) · `web/src/views/CourtReportView.vue` | 视角差异生成 divergence 记录(type=perspective/factual,resolution=kept_both/contested),前端 /court/:id 页面展示(红=事实冲突,蓝=视角差异) |
 | GraphEngine 实时重算 | 计划 | — | 无代码 |
 | contested 否决流 | 部分 | `engines/court/src/court.ts`(confrontation) · `shared/src/schemas.ts` | v2: 事实冲突经 confrontation 对质后,unresolved 的论断自动标 contested(conviction=0);本人手动否决流程仍无代码 |

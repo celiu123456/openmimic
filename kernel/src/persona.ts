@@ -120,16 +120,26 @@ function renderClaimLine(claim: Claim): string {
   return `- ${kindTag}${claim.text}（置信 ${round2(claim.conviction).toFixed(2)}${qualifier}）`;
 }
 
-function renderAudienceGroupedClaims(
+/**
+ * Group claims by witness relation (who sees this behavior), not by
+ * the arbitrary audience text in claim context.
+ *
+ * The witness relation is the grouping key ("这是谁眼里的他").
+ * The claim's context.audience/situation are rendered as inline context
+ * within each claim line, not as group headings.
+ */
+function renderWitnessGroupedClaims(
   claims: Claim[],
+  witnessMap: Map<string, string>,
   interlocutor?: string,
 ): string {
-  // Group by audience
+  // Group by witness relation (primary witness)
   const groups = new Map<string, Claim[]>();
   for (const claim of claims) {
-    const audience = claim.context?.audience ?? '通用';
-    if (!groups.has(audience)) groups.set(audience, []);
-    groups.get(audience)!.push(claim);
+    const primaryWitnessId = claim.witnessIds?.[0];
+    const relation = primaryWitnessId ? (witnessMap.get(primaryWitnessId) ?? '证人') : '通用';
+    if (!groups.has(relation)) groups.set(relation, []);
+    groups.get(relation)!.push(claim);
   }
 
   // Sort groups: interlocutor match first, then '通用', then rest
@@ -239,7 +249,15 @@ async function rankEpisodes(
     return scored.map((s) => s.ep);
   }
 
-  // Default: rank by backing claim conviction
+  // Default (no query): round-robin by witness so every witness is represented,
+  // then fill remaining slots by backing claim conviction.
+  const byWitness = new Map<string, Episode[]>();
+  for (const ep of episodes) {
+    if (!byWitness.has(ep.witnessId)) byWitness.set(ep.witnessId, []);
+    byWitness.get(ep.witnessId)!.push(ep);
+  }
+
+  // Sort each witness's episodes by backing claim conviction
   const claimConvictionMap = new Map<string, number>();
   for (const claim of claims) {
     for (const epId of claim.episodeIds ?? []) {
@@ -247,11 +265,32 @@ async function rankEpisodes(
       claimConvictionMap.set(epId, Math.max(current, claim.conviction));
     }
   }
-  const sorted = [...episodes].sort(
-    (a, b) =>
+  for (const eps of byWitness.values()) {
+    eps.sort((a, b) =>
       (claimConvictionMap.get(b.id) ?? 0) - (claimConvictionMap.get(a.id) ?? 0),
-  );
-  return sorted;
+    );
+  }
+
+  // Round-robin: take one episode from each witness in turn
+  const result: Episode[] = [];
+  const witnessIds = [...byWitness.keys()];
+  const indices = new Map<string, number>();
+  for (const wid of witnessIds) indices.set(wid, 0);
+
+  let added = true;
+  while (added) {
+    added = false;
+    for (const wid of witnessIds) {
+      const idx = indices.get(wid)!;
+      const eps = byWitness.get(wid)!;
+      if (idx < eps.length) {
+        result.push(eps[idx]!);
+        indices.set(wid, idx + 1);
+        added = true;
+      }
+    }
+  }
+  return result;
 }
 
 /* ------------------------------------------------------------------ */
@@ -357,7 +396,7 @@ export async function assemblePersonaContext(
   const selfReport = subject?.selfReport ?? '';
 
   // Build sections content
-  const claimsText = renderAudienceGroupedClaims(eligible, opts.interlocutor);
+  const claimsText = renderWitnessGroupedClaims(eligible, witnessMap, opts.interlocutor);
   const episodesText = renderEpisodes(rankedEpisodes, witnessMap);
   const divergencesText = renderDivergences(promptDivergences, witnessMap);
   const corpusText = renderCorpus(corpusItems);
@@ -394,7 +433,7 @@ export async function assemblePersonaContext(
       claimCount -= 1;
       truncated = true;
       const trimmedClaims = eligible.slice(0, claimCount);
-      sections.claims = renderAudienceGroupedClaims(trimmedClaims, opts.interlocutor);
+      sections.claims = renderWitnessGroupedClaims(trimmedClaims, witnessMap, opts.interlocutor);
       prompt = assembleSections(sections, includeEpisodes, includeClaims, includeCorpus, includeSelfReport);
     }
     if (claimCount === 0) {

@@ -246,7 +246,7 @@ describe('assemblePersonaContext v2', () => {
     expect(meta.truncated).toBe(false);
   });
 
-  it('groups claims by audience and puts interlocutor match first', async () => {
+  it('groups claims by witness relation and puts interlocutor match first', async () => {
     seedSubject(store);
     addWitness(store, 'w1', '同事');
     addWitness(store, 'w2', '母亲');
@@ -262,16 +262,16 @@ describe('assemblePersonaContext v2', () => {
     });
 
     const { systemPrompt } = await assemblePersonaContext(SUBJECT, store, {
-      interlocutor: '家人',
+      interlocutor: '母亲',
     });
 
     expect(systemPrompt).toContain('他在不同人面前');
-    // The family group should be marked
+    // The mother group should be marked as current interlocutor
     expect(systemPrompt).toContain('你现在面对的是这类人');
-    // Family section should appear before colleagues
-    const familyPos = systemPrompt.indexOf('对家人');
-    const colleaguePos = systemPrompt.indexOf('对同事');
-    expect(familyPos).toBeLessThan(colleaguePos);
+    // Mother section should appear before colleagues (grouped by witness relation)
+    const motherPos = systemPrompt.indexOf('母亲');
+    const colleaguePos = systemPrompt.indexOf('同事');
+    expect(motherPos).toBeLessThan(colleaguePos);
   });
 
   it('includes episodes from quotable witnesses in the prompt', async () => {
@@ -384,5 +384,65 @@ describe('assemblePersonaContext v2', () => {
     expect(systemPrompt).toContain('守时');
     expect(systemPrompt).toContain('不主动断言任何一方的说法');
     expect(meta.divergenceCount).toBe(1);
+  });
+
+  it('round-robin episodes by witness when no query is given', async () => {
+    seedSubject(store);
+    addWitness(store, 'w1', '发小');
+    addWitness(store, 'w2', '前上司');
+    addWitness(store, 'w3', '母亲');
+    addTestimony(store, 't1', 'w1',
+      '有一次他帮我搬家。他请我吃了大餐。他还借了我两万。');
+    addTestimony(store, 't2', 'w2',
+      '他在公司加班到凌晨。他评审会上一言不发。');
+    addTestimony(store, 't3', 'w3',
+      '他给我转了五千块。');
+    addClaim(store, 'c1', '林默很忠诚。', ['t1'], 0.8, {
+      witnessIds: ['w1'],
+      episodeIds: ['ep-w1-1', 'ep-w1-2', 'ep-w1-3'],
+    });
+    addClaim(store, 'c2', '林默工作拼命。', ['t2'], 0.8, {
+      witnessIds: ['w2'],
+      episodeIds: ['ep-w2-1', 'ep-w2-2'],
+    });
+    addClaim(store, 'c3', '林默孝顺。', ['t3'], 0.8, {
+      witnessIds: ['w3'],
+      episodeIds: ['ep-w3-1'],
+    });
+
+    // Add episodes from each witness
+    for (const [id, wid, tid, text] of [
+      ['ep-w1-1', 'w1', 't1', '有一次他帮我搬家'],
+      ['ep-w1-2', 'w1', 't1', '他请我吃了大餐'],
+      ['ep-w1-3', 'w1', 't1', '他还借了我两万'],
+      ['ep-w2-1', 'w2', 't2', '他在公司加班到凌晨'],
+      ['ep-w2-2', 'w2', 't2', '他评审会上一言不发'],
+      ['ep-w3-1', 'w3', 't3', '他给我转了五千块'],
+    ] as const) {
+      store.putEpisode({
+        id, subjectId: SUBJECT, witnessId: wid, testimonyId: tid,
+        qid: 'q1', text, elicited: false,
+      });
+    }
+
+    const { systemPrompt } = await assemblePersonaContext(SUBJECT, store);
+
+    // All three witnesses should have episodes in the prompt
+    expect(systemPrompt).toContain('发小');
+    expect(systemPrompt).toContain('前上司');
+    expect(systemPrompt).toContain('母亲');
+
+    // Check that episodes from different witnesses appear in round-robin order
+    // (w1's first, then w2's first, then w3's first, then w1's second, etc.)
+    const ep1Pos = systemPrompt.indexOf('有一次他帮我搬家');
+    const ep2Pos = systemPrompt.indexOf('他在公司加班到凌晨');
+    const ep3Pos = systemPrompt.indexOf('他给我转了五千块');
+    expect(ep1Pos).toBeGreaterThan(-1);
+    expect(ep2Pos).toBeGreaterThan(-1);
+    expect(ep3Pos).toBeGreaterThan(-1);
+
+    // Each witness's first episode should come before any witness's third
+    const ep1Third = systemPrompt.indexOf('他还借了我两万');
+    expect(ep3Pos).toBeLessThan(ep1Third);
   });
 });

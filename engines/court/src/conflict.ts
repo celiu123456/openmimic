@@ -1,5 +1,6 @@
 import type { Claim, Testimony } from '@openmimic/shared';
 import { cosine, type EmbeddingClient } from '@openmimic/kernel';
+import type { LLMClient } from './llm';
 
 /** A candidate claim under examination. */
 export interface CandidateClaim {
@@ -191,4 +192,118 @@ export class KeywordClaimPairFinder implements ClaimPairFinder {
     }
     return pairs;
   }
+}
+
+/* ------------------------------------------------------------------ */
+/* LLM-based claim pair finder                                         */
+/* ------------------------------------------------------------------ */
+
+const LLM_PAIR_SYSTEM = [
+  '你是人格法庭的论断配对智能体。',
+  '输入是一组编号论断,每条标注了所属证人。',
+  '请找出来自不同证人、谈的是同一行为主题的论断对。',
+  '输出 JSON 数组,每个元素形如 {"a": 编号, "b": 编号}。',
+  '只配对来自不同证人的论断。如果没有可配对的,输出空数组 []。',
+  '只输出 JSON 数组,不要输出任何解释或 markdown 代码块。',
+].join('\n');
+
+interface LLMPairItem {
+  a: number;
+  b: number;
+}
+
+/**
+ * LLM-based claim pair finder: uses a single LLM call to identify
+ * semantically related claim pairs from different witnesses.
+ * Default pair finder when no embedding is available (keyword version
+ * becomes the last-resort fallback when LLM is also unavailable).
+ */
+export class LLMClaimPairFinder implements ClaimPairFinder {
+  constructor(
+    private readonly llm: LLMClient,
+    /** Maximum number of claims to send in one batch. */
+    private readonly batchSize: number = 60,
+  ) {}
+
+  async findPairs(claims: readonly Claim[]): Promise<ClaimPair[]> {
+    if (claims.length < 2) return [];
+
+    // Build numbered list for the LLM
+    const lines: string[] = [];
+    for (let i = 0; i < claims.length; i++) {
+      const c = claims[i]!;
+      const witnessLabel = c.witnessIds?.[0] ?? '?';
+      lines.push(`${i}: [证人 ${witnessLabel}] ${c.text}`);
+    }
+
+    const userPrompt = lines.join('\n');
+
+    try {
+      const response = await this.llm.complete({
+        system: LLM_PAIR_SYSTEM,
+        user: userPrompt,
+        maxTokens: 2048,
+      });
+
+      const raw = tryParseJson(response);
+      if (!Array.isArray(raw)) {
+        // LLM returned unparseable output, fall back to keyword pairing
+        return new KeywordClaimPairFinder().findPairs(claims);
+      }
+
+      const pairs: ClaimPair[] = [];
+      const seen = new Set<string>();
+
+      for (const item of raw) {
+        if (typeof item !== 'object' || item === null) continue;
+        const { a, b } = item as LLMPairItem;
+        if (typeof a !== 'number' || typeof b !== 'number') continue;
+        if (a < 0 || a >= claims.length || b < 0 || b >= claims.length) continue;
+        if (a === b) continue;
+
+        const claimA = claims[a]!;
+        const claimB = claims[b]!;
+
+        // Must be from different witnesses
+        if (claimA.witnessIds?.[0] === claimB.witnessIds?.[0] && claimA.witnessIds?.[0] !== undefined) continue;
+
+        // Dedup
+        const key = a < b ? `${a}-${b}` : `${b}-${a}`;
+        if (seen.has(key)) continue;
+        seen.add(key);
+
+        pairs.push({ claimA, claimB });
+      }
+
+      return pairs;
+    } catch {
+      // If LLM call fails, fall back to keyword pairing
+      return new KeywordClaimPairFinder().findPairs(claims);
+    }
+  }
+}
+
+/** Minimal JSON extraction for the pair finder (avoids circular import). */
+function tryParseJson(text: string): unknown {
+  const trimmed = text.trim();
+  try {
+    return JSON.parse(trimmed);
+  } catch { /* fall through */ }
+
+  const fenced = /```(?:json)?\s*([\s\S]*?)```/i.exec(trimmed);
+  if (fenced?.[1]) {
+    try { return JSON.parse(fenced[1].trim()); } catch { /* fall through */ }
+  }
+
+  const start = trimmed.search(/[[{]/);
+  if (start >= 0) {
+    const candidate = trimmed.slice(start);
+    for (const closing of [']', '}'] as const) {
+      const end = candidate.lastIndexOf(closing);
+      if (end > 0) {
+        try { return JSON.parse(candidate.slice(0, end + 1)); } catch { /* try next */ }
+      }
+    }
+  }
+  return undefined;
 }

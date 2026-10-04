@@ -4,6 +4,8 @@ import { z } from 'zod';
 export interface LLMCompletionRequest {
   system: string;
   user: string;
+  /** Optional max tokens for the response. */
+  maxTokens?: number;
 }
 
 /** One chat message forwarded verbatim to an OpenAI-compatible upstream. */
@@ -29,6 +31,13 @@ export interface OpenAICompatClientOptions {
   fetchImpl?: typeof fetch;
   /** Optional request timeout in milliseconds. */
   timeoutMs?: number;
+  /**
+   * Whether to send `thinking.type=disabled` in the request body.
+   * When true, the DeepSeek thinking/reasoning feature is turned off so
+   * that output tokens are not consumed by chain-of-thought content.
+   * Default: auto-detected from baseUrl (enabled for deepseek endpoints).
+   */
+  disableThinking?: boolean;
 }
 
 const ChatCompletionResponseSchema = z.object({
@@ -54,6 +63,7 @@ export class OpenAICompatClient implements LLMClient {
   private readonly model: string;
   private readonly fetchImpl: typeof fetch;
   private readonly timeoutMs: number;
+  private readonly disableThinking: boolean;
 
   constructor(options: OpenAICompatClientOptions = {}) {
     this.baseUrl = (options.baseUrl ?? process.env.LLM_BASE_URL ?? '').replace(/\/+$/, '');
@@ -61,6 +71,9 @@ export class OpenAICompatClient implements LLMClient {
     this.model = options.model ?? process.env.LLM_MODEL ?? '';
     this.fetchImpl = options.fetchImpl ?? fetch;
     this.timeoutMs = options.timeoutMs ?? 30_000;
+    // Auto-detect DeepSeek endpoints to disable thinking by default
+    this.disableThinking = options.disableThinking ??
+      (/deepseek/i.test(this.baseUrl) || /deepseek/i.test(this.model));
   }
 
   /** Whether both a base URL and a model name are configured. */
@@ -104,27 +117,37 @@ export class OpenAICompatClient implements LLMClient {
     });
   }
 
-  async complete({ system, user }: LLMCompletionRequest): Promise<string> {
+  async complete({ system, user, maxTokens }: LLMCompletionRequest): Promise<string> {
     if (!this.baseUrl) throw new Error('LLM_BASE_URL is not configured');
     if (!this.model) throw new Error('LLM_MODEL is not configured');
 
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), this.timeoutMs);
     try {
+      const body: Record<string, unknown> = {
+        model: this.model,
+        temperature: 0,
+        messages: [
+          { role: 'system', content: system },
+          { role: 'user', content: user },
+        ],
+      };
+      if (maxTokens !== undefined) {
+        body.max_tokens = maxTokens;
+      }
+      // Disable thinking/reasoning for DeepSeek models so output tokens
+      // are not consumed by chain-of-thought content
+      if (this.disableThinking) {
+        body.thinking = { type: 'disabled' };
+      }
+
       const response = await this.fetchImpl(`${this.baseUrl}/chat/completions`, {
         method: 'POST',
         headers: {
           'content-type': 'application/json',
           ...(this.apiKey ? { authorization: `Bearer ${this.apiKey}` } : {}),
         },
-        body: JSON.stringify({
-          model: this.model,
-          temperature: 0,
-          messages: [
-            { role: 'system', content: system },
-            { role: 'user', content: user },
-          ],
-        }),
+        body: JSON.stringify(body),
         signal: controller.signal,
       });
 

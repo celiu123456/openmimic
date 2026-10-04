@@ -17,6 +17,7 @@ import {
   EmbeddingClaimPairFinder,
   KeywordClaimPairFinder,
   KeywordConflictFinder,
+  LLMClaimPairFinder,
   type ClaimPairFinder,
   type ConflictFinder,
 } from './conflict';
@@ -80,26 +81,36 @@ export type CourtVerdict = z.infer<typeof VerdictSchema>;
 /* ------------------------------------------------------------------ */
 
 const FILING_SYSTEM_V2 = [
-  '你是人格法庭的立案书记员。输入是一位证人关于同一个人的证言。',
+  '你是人格法庭的立案书记员。输入是一位证人关于同一个人(下称"当事人")的证言。',
   '你的任务:',
   '1. 从证言中摘录具体事例(episodes):逐字复制原文中描述具体事件/经历的片段。',
-  '2. 把证言中的可对质论断抽成候选论断(claims),写成带情境的观察,不写孤立形容词。',
+  '2. 把证言中关于当事人的可对质论断抽成候选论断(claims),写成带情境的观察,不写孤立形容词。',
   '   kind=fact 只用于可核对的事件。',
+  '   ★ 论断的主语必须是当事人,不是证人自己。证人对自己的评价(如"这是我带人最差的一次")不得立为当事人的论断。',
   '只输出 JSON 对象,不要输出任何解释或 markdown 代码块。',
   '形如 {"episodes":[{"qid":"问题id","text":"逐字摘录","situation":"场合","audience":"对谁","timeHint":"时间提示"}],',
   '"claims":[{"text":"论断","kind":"pattern","domain":"observable","context":{"audience":"对谁","situation":"场合","period":"时期"},',
   '"evidenceTestimonyIds":["证言id"],"episodeTexts":["事例原文"]}]}',
   '每个论断必须至少引用一条证言 id。episode.text 必须是证言原文的逐字子串。',
+  '请确保 episodes 和 claims 数组都非空(只要证言中有具体事件和可对质的描述)。',
 ].join('\n');
 
 const RELATION_SYSTEM = [
   '你是人格法庭的关系判定智能体。',
   '输入是两条来自不同证人的候选论断。',
   '请判定它们的关系:',
-  '- agreement:两人说的本质相同,可合并;',
-  '- perspective_difference:两人从不同角度看同一个人,都对,不需要裁决;',
+  '- agreement:两人说的是同一行为维度且观察方向一致,可合并;',
+  '- perspective_difference:两人谈的是**同一行为维度**,但观察方向不同(例如同一个人的花钱态度,A说大方B说抠;同一个人的脾气,A说温和B说冷暴力)。★维度必须是一个具体行为(如"花钱""表达情绪""守约""对人态度"),不能是笼统概念;',
   '- factual_conflict:对同一件事实(发生没发生、怎么发生的)的矛盾;',
-  '- unrelated:无关。',
+  '- unrelated:两条论断谈的是**不同的行为维度**,即使它们都在描述同一个人。例如"消防楼梯打电话"和"对外人话多"谈的是不同维度,判 unrelated。',
+  '',
+  '★判断标准:先确认两条论断是否聚焦同一个具体行为维度。如果不是同一维度,直接判 unrelated。',
+  '',
+  '正例(perspective_difference): "对朋友花钱大方" vs "对女朋友精确AA" → 同一维度(花钱态度),方向不同 → perspective_difference, topic="消费态度"',
+  '反例(unrelated): "在消防楼梯独自打电话" vs "对外人话很多" → 不同维度(压力行为 vs 社交沟通) → unrelated',
+  '反例(unrelated): "帮人兜底从不谈条件" vs "冷战十九天" → 不同维度(助人行为 vs 冲突处理) → unrelated',
+  '',
+  'topic 必须是一个具体维度,如"花钱""表达情绪""接受帮助""守约"等。不要写笼统的描述。',
   '只输出 JSON 对象:{"relation":"...","topic":"...","reason":"..."}',
 ].join('\n');
 
@@ -254,6 +265,55 @@ function degradeToEpisodes(
 }
 
 /* ------------------------------------------------------------------ */
+/* Lenient filing response parser                                      */
+/* ------------------------------------------------------------------ */
+
+type FilingResponse = z.infer<typeof FilingResponseSchema>;
+
+/**
+ * Parse a filing response leniently: validate each episode and claim
+ * individually, keeping the valid ones and discarding invalid items.
+ * This prevents a single malformed item (e.g. wrong qid format,
+ * missing text) from causing the entire witness to produce zero claims.
+ *
+ * Throws only if the response is not an object at all.
+ */
+function lenientParseFilingResponse(raw: unknown): FilingResponse {
+  if (raw === null || typeof raw !== 'object') {
+    throw new Error('Filing response is not an object');
+  }
+
+  const obj = raw as Record<string, unknown>;
+  const episodes: z.infer<typeof CandidateEpisodeSchema>[] = [];
+  const claims: z.infer<typeof CandidateClaimSchema>[] = [];
+
+  // Parse episodes individually
+  const rawEpisodes = Array.isArray(obj.episodes) ? obj.episodes : [];
+  for (const ep of rawEpisodes) {
+    const result = CandidateEpisodeSchema.safeParse(ep);
+    if (result.success) {
+      episodes.push(result.data);
+    }
+  }
+
+  // Parse claims individually
+  const rawClaims = Array.isArray(obj.claims) ? obj.claims : [];
+  for (const cl of rawClaims) {
+    const result = CandidateClaimSchema.safeParse(cl);
+    if (result.success) {
+      claims.push(result.data);
+    }
+  }
+
+  // If we got nothing at all, still consider it a failure so degradation kicks in
+  if (episodes.length === 0 && claims.length === 0) {
+    throw new Error('Filing response contained no valid episodes or claims');
+  }
+
+  return { episodes, claims };
+}
+
+/* ------------------------------------------------------------------ */
 /* Filing prompt                                                       */
 /* ------------------------------------------------------------------ */
 
@@ -368,8 +428,16 @@ export async function runCourt(
 
     const filing = await attemptJson(
       llm,
-      { system: FILING_SYSTEM_V2, user: buildFilingUser(witness, testimonies) },
-      (text) => FilingResponseSchema.parse(extractJson(text)),
+      {
+        system: FILING_SYSTEM_V2,
+        user: buildFilingUser(witness, testimonies),
+        maxTokens: 4096,
+      },
+      (text) => {
+        const raw = extractJson(text);
+        // Use lenient parsing: validate each item individually
+        return lenientParseFilingResponse(raw);
+      },
       options.filingAttempts ?? 2,
     );
 
@@ -527,7 +595,7 @@ export async function runCourt(
     options.pairFinder ??
     (options.embedding
       ? new EmbeddingClaimPairFinder(options.embedding)
-      : new KeywordClaimPairFinder());
+      : new LLMClaimPairFinder(llm));
 
   const pairs = await pairFinder.findPairs(persistedClaims);
 
@@ -543,6 +611,7 @@ export async function runCourt(
       {
         system: RELATION_SYSTEM,
         user: buildRelationUser(pair.claimA, pair.claimB),
+        maxTokens: 1024,
       },
       (text) => RelationSchema.parse(extractJson(text)),
       1,
@@ -616,6 +685,7 @@ export async function runCourt(
         {
           system: CONFRONTATION_SYSTEM,
           user: buildConfrontationUser(pair.claimA, pair.claimB),
+          maxTokens: 1024,
         },
         (text) => ConfrontationVerdictSchema.parse(extractJson(text)),
         1,

@@ -4,9 +4,11 @@
  *
  * Reads LLM configuration from `.env`. Copies 林默's six witnesses and
  * testimony into a fresh subject, runs court v2, assembles the persona
- * prompt, and writes the results to `docs/p1a-real-run.md`.
+ * prompt, and writes the results to `docs/p1a-real-run.md` (or a custom
+ * output file specified as the first CLI argument).
  *
- * Usage: npx tsx scripts/real-smoke.ts
+ * Usage: npx tsx scripts/real-smoke.ts [output-filename]
+ *   e.g. npx tsx scripts/real-smoke.ts docs/p1a-real-run-2.md
  *
  * If the LLM is not configured or the API call fails, the script exits
  * with a message and does NOT create the output file.
@@ -51,9 +53,16 @@ async function main() {
     process.exit(1);
   }
 
-  console.log(`LLM: ${baseUrl} model=${model}`);
+  // Determine output file from CLI arg or default
+  const outputArg = process.argv[2];
+  const outPath = outputArg
+    ? resolve(process.cwd(), outputArg)
+    : resolve(import.meta.dirname ?? '.', '..', 'docs', 'p1a-real-run.md');
 
-  const chat = new OpenAICompatClient({ baseUrl, apiKey, model });
+  console.log(`LLM: ${baseUrl} model=${model}`);
+  console.log(`Output: ${outPath}`);
+
+  const chat = new OpenAICompatClient({ baseUrl, apiKey, model, timeoutMs: 120_000 });
   if (!chat.configured || !chat.hasApiKey) {
     console.error('real-smoke: OpenAICompatClient reports not configured');
     process.exit(1);
@@ -93,10 +102,12 @@ async function main() {
   const origTestimonies = demoTestimonies();
   const witnessIdMap = new Map<string, string>();
   const testimonyIdMap = new Map<string, string>();
+  const witnessRelationMap = new Map<string, string>();
 
   for (const w of origWitnesses) {
     const newId = randomUUID();
     witnessIdMap.set(w.id, newId);
+    witnessRelationMap.set(newId, w.relation);
     store.putWitness({ ...w, id: newId, subjectId: newSubjectId });
   }
 
@@ -126,9 +137,31 @@ async function main() {
   const claims = store.listClaimsBySubject(newSubjectId);
   const episodes = store.listEpisodesBySubject(newSubjectId);
   const divergences = store.listDivergencesBySubject(newSubjectId);
+  const witnesses = store.listWitnessesBySubject(newSubjectId);
+
+  // Per-witness claim count
+  const claimsByWitness = new Map<string, number>();
+  for (const w of witnesses) {
+    const count = claims.filter(
+      (c) => c.status !== 'retired' && c.witnessIds?.includes(w.id),
+    ).length;
+    claimsByWitness.set(w.id, count);
+  }
+
+  // Conviction distribution
+  const survivingClaims = claims.filter((c) => c.status === 'surviving');
+  const convictions = survivingClaims.map((c) => c.conviction);
+  const aboveHalf = convictions.filter((v) => v > 0.5).length;
+  const mergedClaims = survivingClaims.filter(
+    (c) => (c.witnessIds?.length ?? 0) >= 2,
+  );
+
+  // Count LLM calls from transcript
+  const filingCalls = session.transcript.filter(
+    (e) => e.type === 'claim_proposed' && !e.text.includes('裁定'),
+  ).length;
 
   // Write output
-  const outPath = resolve(import.meta.dirname ?? '.', '..', 'docs', 'p1a-real-run.md');
   const lines = [
     '# P1a Real Smoke Run',
     '',
@@ -146,23 +179,42 @@ async function main() {
     `Episodes: ${episodes.length}`,
     `Divergences: ${divergences.length}`,
     '',
+    '### Per-Witness Claim Count',
+    '',
+    ...witnesses.map((w) =>
+      `- ${w.relation} (${w.id.slice(0, 8)}): ${claimsByWitness.get(w.id) ?? 0} claims`,
+    ),
+    '',
+    '### Conviction Distribution',
+    '',
+    `- Total surviving: ${survivingClaims.length}`,
+    `- With conviction > 0.50: ${aboveHalf}`,
+    `- Merged (witnessCount >= 2): ${mergedClaims.length}`,
+    `- Convictions: ${convictions.sort((a, b) => b - a).map((v) => v.toFixed(2)).join(', ')}`,
+    '',
     '### Claims',
     '',
     ...claims.map((c) =>
-      `- [${c.status}] (${c.conviction.toFixed(2)}) ${c.text}${c.qualifiers?.length ? ` [限定: ${c.qualifiers.join('; ')}]` : ''}`,
+      `- [${c.status}] (${c.conviction.toFixed(2)}) [witnesses: ${c.witnessIds?.length ?? 0}] ${c.text}${c.qualifiers?.length ? ` [限定: ${c.qualifiers.join('; ')}]` : ''}`,
     ),
     '',
     '### Divergences',
     '',
     ...divergences.map((d) =>
-      `- [${d.type}/${d.resolution ?? 'none'}] ${d.topic}: ${d.positions.map((p) => p.summary).join(' / ')}`,
+      `- [${d.type}/${d.resolution ?? 'none'}] ${d.topic}: ${d.positions.map((p) => `${witnessRelationMap.get(p.witnessId) ?? p.witnessId.slice(0, 8)}: ${p.summary}`).join(' / ')}`,
     ),
     '',
     '### Episodes',
     '',
     ...episodes.map((e) =>
-      `- [${e.witnessId.slice(0, 8)}] ${e.text.slice(0, 80)}${e.text.length > 80 ? '...' : ''}`,
+      `- [${witnessRelationMap.get(e.witnessId) ?? e.witnessId.slice(0, 8)}] ${e.text.slice(0, 80)}${e.text.length > 80 ? '...' : ''}`,
     ),
+    '',
+    '## Transcript (errors and raw output excerpts)',
+    '',
+    ...session.transcript
+      .filter((e) => e.text.includes('失败') || e.text.includes('丢弃') || e.text.includes('降级'))
+      .map((e) => `- [${e.type}] ${e.witnessId ? `witness=${e.witnessId.slice(0, 8)}` : ''} ${e.text.slice(0, 500)}`),
     '',
     '## Persona Prompt',
     '',
