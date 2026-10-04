@@ -1,3 +1,4 @@
+/// <reference path="../types/better-sqlite3.d.ts" />
 import Database from 'better-sqlite3';
 import type { Database as DatabaseConnection } from 'better-sqlite3';
 import {
@@ -292,10 +293,12 @@ export class Store {
    * empty or references a testimony that is not in the ledger.
    */
   putClaim(claim: Claim): Claim {
-    const parsed = ClaimSchema.parse(claim);
-    if (parsed.evidence.length < 1) {
-      throw new NoEvidenceError(`claim ${parsed.id} has no evidence`);
+    // Check the anchor before schema validation so that an empty evidence list
+    // always surfaces as NoEvidenceError rather than a generic parse failure.
+    if (!Array.isArray(claim.evidence) || claim.evidence.length < 1) {
+      throw new NoEvidenceError(`claim ${claim.id} has no evidence`);
     }
+    const parsed = ClaimSchema.parse(claim);
     for (const testimonyId of parsed.evidence) {
       if (!this.getTestimony(testimonyId)) {
         throw new NoEvidenceError(
