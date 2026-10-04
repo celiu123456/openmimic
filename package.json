@@ -1,0 +1,16 @@
+{
+  "name": "openmimic",
+  "private": true,
+  "version": "0.0.1",
+  "description": "A general-purpose persona engine. Rebuild anyone. Rehearse anything.",
+  "license": "Apache-2.0",
+  "engines": { "node": ">=22" },
+  "workspaces": [
+    "kernel",
+    "engines/*",
+    "server",
+    "web",
+    "plugins/*",
+    "shared"
+  ]
+}

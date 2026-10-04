@@ -1,0 +1,10 @@
+OpenMimic
+Copyright 2026 OpenMimic contributors
+
+Licensed under the Apache License, Version 2.0.
+
+Audit and anti-drift mechanism design (counter-evidence search, blind
+re-derivation audit, conviction decay, contested veto state) adapted from
+Twig (https://github.com/qimingjiu/twig-memory, MIT) — see the
+"借鉴与致谢 / Acknowledgements" section of README.md and Twig's
+ATTRIBUTION.md for the mechanism-level attribution map.
