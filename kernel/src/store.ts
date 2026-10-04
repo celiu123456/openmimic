@@ -132,6 +132,7 @@ interface WitnessRow {
   consent_level: string;
   known_from_year: number | null;
   known_to_year: number | null;
+  anonymous_in_room: number | null;
 }
 
 interface CourtSessionRow {
@@ -405,6 +406,10 @@ export class Store {
     if (!witnessColumns.includes('known_to_year')) {
       this.db.exec('ALTER TABLE witnesses ADD COLUMN known_to_year INTEGER');
     }
+    // P3a: anonymousInRoom flag
+    if (!witnessColumns.includes('anonymous_in_room')) {
+      this.db.exec('ALTER TABLE witnesses ADD COLUMN anonymous_in_room INTEGER');
+    }
   }
 
   /* ---------------------------------------------------------------- */
@@ -447,16 +452,17 @@ export class Store {
   putWitness(witness: Witness): Witness {
     const parsed = WitnessSchema.parse(witness);
     this.db
-      .prepare<[string, string, string, string | null, string, number | null, number | null]>(
-        `INSERT INTO witnesses (id, subject_id, relation, stance, consent_level, known_from_year, known_to_year)
-         VALUES (?, ?, ?, ?, ?, ?, ?)
+      .prepare<[string, string, string, string | null, string, number | null, number | null, number | null]>(
+        `INSERT INTO witnesses (id, subject_id, relation, stance, consent_level, known_from_year, known_to_year, anonymous_in_room)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?)
          ON CONFLICT(id) DO UPDATE SET
-           subject_id      = excluded.subject_id,
-           relation        = excluded.relation,
-           stance          = excluded.stance,
-           consent_level   = excluded.consent_level,
-           known_from_year = excluded.known_from_year,
-           known_to_year   = excluded.known_to_year`,
+           subject_id        = excluded.subject_id,
+           relation          = excluded.relation,
+           stance            = excluded.stance,
+           consent_level     = excluded.consent_level,
+           known_from_year   = excluded.known_from_year,
+           known_to_year     = excluded.known_to_year,
+           anonymous_in_room = excluded.anonymous_in_room`,
       )
       .run(
         parsed.id,
@@ -466,6 +472,7 @@ export class Store {
         parsed.consentLevel,
         parsed.knownFromYear ?? null,
         parsed.knownToYear ?? null,
+        parsed.anonymousInRoom ? 1 : null,
       );
     return parsed;
   }
@@ -1066,6 +1073,7 @@ export class Store {
       consentLevel: row.consent_level,
       knownFromYear: row.known_from_year ?? undefined,
       knownToYear: row.known_to_year === null ? undefined : row.known_to_year,
+      anonymousInRoom: row.anonymous_in_room === 1 ? true : undefined,
     };
   }
 
