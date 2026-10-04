@@ -1,0 +1,31 @@
+# OpenMimic MCP server for DeepSeek Harness (dsh)
+#
+# Append this block to your profile's cordis.patch.yml
+# (e.g. ~/.dsh/profiles/headless/cordis.patch.yml).
+#
+# The `- insert:` directive adds a new plugin entry. If the entry already
+# exists from a previous paste, remove the old one first or change the id.
+#
+# The MCP server starts as a child process speaking JSON-RPC 2.0 over stdio.
+# Without LLM env vars the server still works — persona_list, persona_context,
+# and room_run (demo data) are fully functional; only persona_speak requires
+# a configured upstream model.
+#
+# Requires: Node >= 22, tsx (bundled with OpenMimic's devDependencies).
+
+- insert:
+    - id: mcp-openmimic
+      name: '@deepseek-ai/dsh-mcp-client'
+      config:
+        serverName: openmimic
+        transport: stdio
+        command: npx
+        args: ['tsx', 'server/src/mcp/main.ts']
+        cwd: /path/to/openmimic          # <-- change to your clone
+        env:
+          OPENMIMIC_DB: /path/to/openmimic/data/openmimic.db  # <-- or any writable path
+          # Optional: provide an OpenAI-compatible endpoint for persona_speak.
+          # The key must resolve at YAML parse time; use !!js to read an env var:
+          #   LLM_BASE_URL: https://api.deepseek.com/v1
+          #   LLM_API_KEY: !!js process.env.LLM_API_KEY
+          #   LLM_MODEL: deepseek-chat
