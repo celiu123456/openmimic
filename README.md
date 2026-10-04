@@ -20,7 +20,7 @@
 
 **平行组织(计划)** — 导入一个 50 人团队,全员互相证言,50 场法庭并行开审,得到一个平行组织。扔进去一句"下季度裁员 10%",看背后的房间们怎么连锁反应:谁先慌、谁串联、消息沿哪条人际链泄出去。MiroFish 用百万个 prompt 设定的智能体模拟社会;OpenMimic 用一屋子有证据基础的真人格,模拟你真实所在的那个组织。
 
-**装进任何应用** — 本机起一个 OpenAI 兼容端点(可用),`BASE_URL` 一指、模型名填 `persona/<name>`,任何现存 AI 应用开口就是这个人,零代码。另有 MCP Server(可用)与纯库 import(可用)两种挂载方式;`.persona` 人格包可导出导入(可用)。OpenClaw skill(计划)、dsh bundle(计划)尚未实现。
+**装进任何应用** — 本机起一个 OpenAI 兼容端点(可用),`BASE_URL` 一指、模型名填 `persona/<name>`,任何现存 AI 应用开口就是这个人,零代码。另有 MCP Server(可用)、纯库 import(可用,`@openmimic/core` 的 `createOpenMimic()` 不起端口不开服务器)两种挂载方式;`.persona` 人格包可导出导入(可用)。OpenClaw skill(计划)、dsh bundle(计划)尚未实现。
 
 ## 快速开始
 
@@ -81,14 +81,14 @@ resp = client.chat.completions.create(
 |---|---|
 | 证言账本(append-only ledger + SQLite triggers) | 已实现 |
 | 授权门(synthesis_only 遮蔽,court/external 双 scope) | 已实现 |
-| 插件装配(最小版:manifest 注册,无依赖注入与卸载) | 已实现 |
+| 插件装配(v1: inject/provide 依赖注入,topo sort,unload,Registry 扩展点,config tree) | 已实现 |
 | 人格组装(async, witness-relation-grouped claims + round-robin episodes + divergences + corpus → 6000 char system prompt) | 已实现 |
 | WitnessEngine(采集 + 邀请 + AI 追问访谈) | 已实现 |
 | CourtEngine(v2: filing with episodes + LLM/embedding/keyword pairing + relation judgment + confrontation + divergence map + conviction computation) | 已实现 |
 | RoomEngine(背后/当面双模式 + 危机词 + 诊断词防护) | 已实现 |
 | GraphEngine(证言图谱,改一条证言自动重算关联人格) | 计划 |
 | GateEngine 独立引擎(contested 否决流 + 论断权限墙) | 计划 |
-| 第三方插件位(社区采集器、剧本、桥接器) | 计划 |
+| 第三方插件位(社区采集器、剧本、桥接器) | 已实现(三个示例插件) |
 
 ### 引擎表
 
@@ -152,15 +152,17 @@ resp = client.chat.completions.create(
 
 ### 已完成
 
-- 内核:证言账本(append-only + triggers)、授权门(synthesis_only 遮蔽)、插件装配(最小版)、人格组装 v2(async, audience-grouped claims + episodes + divergences + corpus, 6000 char budget)
+- 内核:证言账本(append-only + triggers)、授权门(synthesis_only 遮蔽)、插件装配 v1(inject/provide 依赖注入、topo sort、unload、Registry 扩展点、YAML config tree)、人格组装 v2(async, audience-grouped claims + episodes + divergences + corpus, 6000 char budget)
 - WitnessEngine:问卷采集、邀请链接、AI 追问访谈
 - CourtEngine v2:filing with episodes + embedding/keyword pairing + relation judgment + confrontation + divergence map + conviction computation(纯函数)
 - RoomEngine:背后/当面双模式 + 危机词拒绝 + 诊断词重写/降级
-- 对外挂载:OpenAI 兼容端点、MCP Server(stdio)、纯库 import
+- 对外挂载:OpenAI 兼容端点、MCP Server(stdio)、纯库 import(`@openmimic/core` createOpenMimic)
 - .persona 人格包 v2 导出/导入(含 consent 过滤、episodes、divergences、corpus)
 - 语料箱(corpus):当事人本人原话,作为说话风格参照,物理上独立于证言表
 - Embedding 冲突检索:EmbeddingClaimPairFinder(余弦相似度)和 KeywordClaimPairFinder(关键词重叠)双实现
 - 内置演示(虚构人物林默,18 episodes + 5 divergences + 10 corpus items,无 API Key 可体验)
+- 三个示例插件:collector-freetext(自由文本证言)、scenario-review(评审会剧本)、example-bridge(法庭完成→webhook)
+- YAML 配置树:openmimic.yml → openmimic.local.yml → OPENMIMIC_CONFIG 三层合并
 
 ### 进行中
 
@@ -171,8 +173,7 @@ resp = client.chat.completions.create(
 - GraphEngine:证言图谱,人格作为图的实时派生物
 - GateEngine 独立引擎:contested 否决流(本人否决论断→降级 contested 态)、论断权限墙
 - 平行组织:多房间级联,组织级并行法庭
-- 采集器/剧本插件 API 冻结
-- 插件市场 + 第三方插件位
+- 插件市场
 - OpenClaw skill、dsh bundle
 - 社区人格包分发机制
 - DEPLOY-FOR-AI 文档

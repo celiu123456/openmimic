@@ -1,6 +1,6 @@
 # README 声明逐条审计
 
-> 生成时间:2026-10-05 · 基线:main(189 测试)
+> 生成时间:2026-10-05 · 基线:main(226 测试)
 
 状态说明:
 - **已实现**:有代码路径,有测试覆盖
@@ -30,9 +30,9 @@
 | 历史人物构建(.persona 导入) | 已实现 | `server/src/persona-package.ts:212-280` | 导入 .persona 包创建新 subject,claims 锚定到导入收据 |
 | 预演万局(跟数字老板谈加薪等) | 已实现 | `server/src/server.ts:497-601`(OpenAI 兼容端点) · `kernel/src/persona.ts` | 通过 persona/<id> 模型端点对话 |
 | 平行组织 | 计划 | — | README 已标 roadmap,代码中无多房间级联或组织级并行 |
-| OpenAI 兼容端点 | 已实现 | `server/src/server.ts:478-601` | /v1/models + /v1/chat/completions,支持 stream |
-| MCP Server | 已实现 | `server/src/mcp/protocol.ts` · `server/src/mcp/main.ts` | JSON-RPC 2.0 over stdio,手写实现,有测试(`server/test/mcp.test.ts`) |
-| 纯库 import | 已实现 | `kernel/src/index.ts` · 各 engine `index.ts` | 每个包可独立 import |
+| OpenAI 兼容端点 | 已实现 | `server/src/mount-openai.ts` | /v1/models + /v1/chat/completions,支持 stream;已重构为 mount plugin |
+| MCP Server | 已实现 | `server/src/mount-mcp.ts` · `server/src/mcp/protocol.ts` · `server/src/mcp/main.ts` | JSON-RPC 2.0 over stdio;已重构为 mount plugin;可通过 config 禁用 |
+| 纯库 import | 已实现 | `packages/core/src/index.ts` · `kernel/src/index.ts` | `@openmimic/core` 的 createOpenMimic() 不起端口,30 行即可嵌入(见 examples/embed-as-library) |
 | .persona 人格包 | 已实现 | `server/src/persona-package.ts` · `server/test/persona-package.test.ts` | 导出/导入双向,consent 过滤,round-trip 测试覆盖 |
 | OpenClaw skill | 计划 | — | 无代码 |
 | dsh bundle | 计划 | — | 无代码 |
@@ -52,9 +52,9 @@
 |---|---|---|---|
 | 微内核:证言账本 | 已实现 | `kernel/src/store.ts:127-195`(schema + append-only triggers) | SQLite 后端,DELETE/UPDATE trigger 阻止篡改 |
 | 微内核:人格图谱 | 计划 | — | 无独立图谱数据结构;persona 组装是 claim 列表到 prompt 的一次性拼接(`kernel/src/persona.ts`) |
-| 微内核:插件装配 | 部分 | `kernel/src/plugin-host.ts` | 最小版:注册 manifest + setup 回调;无依赖注入、无卸载、无生命周期管理 |
+| 微内核:插件装配 | 已实现 | `kernel/src/plugin-host.ts` · `kernel/src/config.ts` | v1: inject/provide 依赖注入,topo sort(Kahn),unload(反向 dispose + 依赖检查),Registry 扩展点(collectors/scenarios),YAML config tree(三层合并) |
 | 微内核:授权门 | 已实现 | `kernel/src/gate.ts` · `kernel/test/gate.test.ts` | synthesis_only 遮蔽,court/external 双 scope |
-| 官方五引擎(WitnessEngine / CourtEngine / GraphEngine / RoomEngine / GateEngine) | 部分 | 见下表 | 只有三个引擎有代码;GraphEngine 和 GateEngine 作为独立引擎目录为空 |
+| 官方五引擎(WitnessEngine / CourtEngine / GraphEngine / RoomEngine / GateEngine) | 部分 | 见下表 | 三个引擎已重写为标准 Plugin 对象(inject/provide);GraphEngine 和 GateEngine 作为独立引擎目录为空 |
 
 ### 引擎逐项
 
@@ -150,6 +150,6 @@
 
 | 状态 | 条数 |
 |---|---|
-| 已实现 | 35 |
-| 部分 | 10 |
+| 已实现 | 37 |
+| 部分 | 8 |
 | 计划 | 12 |
