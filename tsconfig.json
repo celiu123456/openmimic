@@ -9,7 +9,8 @@
       "@openmimic/engine-room": ["./engines/room/src/index.ts"],
       "@openmimic/engine-witness": ["./engines/witness/src/index.ts"],
       "@openmimic/server": ["./server/src/index.ts"],
-      "@openmimic/fixtures": ["./fixtures/limo.ts"]
+      "@openmimic/fixtures": ["./fixtures/limo.ts"],
+      "@openmimic/eval": ["./eval/src/index.ts"]
     }
   },
   "include": [
@@ -26,6 +27,8 @@
     "fixtures/**/*.ts",
     "server/src/**/*.ts",
     "server/test/**/*.ts",
+    "eval/src/**/*.ts",
+    "eval/test/**/*.ts",
     "vitest.config.ts"
   ],
   "exclude": ["node_modules", "**/dist/**"]

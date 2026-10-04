@@ -14,6 +14,7 @@ export default defineConfig({
       '@openmimic/engine-witness': resolveSource('./engines/witness/src/index.ts'),
       '@openmimic/server': resolveSource('./server/src/index.ts'),
       '@openmimic/fixtures': resolveSource('./fixtures/limo.ts'),
+      '@openmimic/eval': resolveSource('./eval/src/index.ts'),
     },
   },
   test: {
@@ -24,6 +25,7 @@ export default defineConfig({
       'engines/**/*.test.ts',
       'server/**/*.test.ts',
       'web/**/*.test.ts',
+      'eval/**/*.test.ts',
     ],
     exclude: ['**/node_modules/**', '**/dist/**'],
   },
