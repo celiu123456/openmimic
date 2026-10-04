@@ -1,6 +1,6 @@
 # OpenMimic
 
-> **状态:早期开发中(v0.0.1),下表为逐项实现状态** — 详见 [docs/claims-audit.md](docs/claims-audit.md)
+> **状态:早期开发中(v0.0.2-p1a),下表为逐项实现状态** — 详见 [docs/claims-audit.md](docs/claims-audit.md)
 
 **通用人格仿真引擎:复刻任何人,预演万局。**
 
