@@ -97,15 +97,15 @@ describe('demo seed and room API (no LLM key)', () => {
     // The pre-generated court is stored and its report adds up.
     const session = store.listCourtSessionsBySubject(DEMO_SUBJECT_ID)[0];
     expect(session?.report).toMatchObject({
-      totalClaims: 6,
+      totalClaims: 7,
       surviving: 3,
       qualified: 2,
-      rejected: 1,
+      contested: 2,
       challengeCount: 6,
       evidenceCoverage: 1,
     });
     const claims = store.listClaimsBySubject(DEMO_SUBJECT_ID);
-    expect(claims).toHaveLength(6);
+    expect(claims).toHaveLength(7);
     for (const claim of claims) {
       for (const evidence of claim.evidence) {
         expect(store.getTestimony(evidence)).toBeDefined();

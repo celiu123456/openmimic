@@ -52,7 +52,9 @@ describe('claim repository — no anchor, no claim', () => {
   it('persists a claim whose evidence all exists', () => {
     const stored = store.putClaim(makeClaim());
     expect(stored.evidence).toEqual(['t1']);
-    expect(store.getClaim('c1')).toEqual(stored);
+    // getClaim may add defaults for optional fields (e.g. kind='pattern'),
+    // so we use toMatchObject rather than strict toEqual.
+    expect(store.getClaim('c1')).toMatchObject(stored);
     expect(store.listClaimsBySubject('s1')).toHaveLength(1);
   });
 });

@@ -122,7 +122,7 @@ describe('.persona package export / import', () => {
     expect(pkg.subject.displayName).toBe('林默');
     // The subject's own account never travels in the package.
     expect('selfReport' in pkg.subject).toBe(false);
-    // Surviving claims only: 5 of the demo's 6 (one is retired).
+    // Surviving claims only: 5 of the demo's 7 (2 are contested).
     expect(pkg.claims).toHaveLength(5);
     expect(pkg.claims.every((claim) => claim.status === 'surviving')).toBe(true);
     // Six witnesses, metadata only.
@@ -131,11 +131,12 @@ describe('.persona package export / import', () => {
       expect('answers' in witness).toBe(false);
       expect(Array.isArray(witness.evidenceIds)).toBe(true);
     }
-    // Style samples: two per quotable witness, each a short authorized line.
-    expect(pkg.styleSamples).toHaveLength(12);
-    // The raw testimony entry is not shipped: only the short sentences that
-    // fit the style-sample window travel. This fragment lives inside a
-    // too-long sentence of the original answer and never appears in a sample.
+    // v2: style samples come from corpus items (subject's own words).
+    expect(pkg.styleSamples).toHaveLength(10);
+    // v2: episodes and divergences are included.
+    expect(pkg.episodes!.length).toBeGreaterThanOrEqual(1);
+    expect(pkg.divergences!.length).toBeGreaterThanOrEqual(1);
+    // The raw testimony entry is not shipped.
     expect(response.text).not.toContain('借了两万');
   });
 
@@ -149,10 +150,9 @@ describe('.persona package export / import', () => {
     expect(response.text).not.toContain(SECRET);
 
     const pkg = response.body as unknown as PersonaPackage;
-    // Only the quotable witness contributes a style sample.
-    expect(pkg.styleSamples).toEqual([
-      { relation: '朋友', text: '他平时话不多,但答应的事一定办' },
-    ]);
+    // v2: style samples come from corpus (subject's own words).
+    // No corpus was added, so style samples are empty.
+    expect(pkg.styleSamples).toEqual([]);
   });
 
   it('imports a package into an anchored new subject with placeholder receipts', () => {
@@ -203,7 +203,9 @@ describe('.persona package export / import', () => {
     expect(second).toBeDefined();
 
     expect(normalizeClaims(second!.claims)).toEqual(normalizeClaims(first!.claims));
-    expect(second!.styleSamples).toEqual(first!.styleSamples);
+    // v2: style samples come from corpus; import does not copy corpus items
+    // into the new subject's store, so the re-exported package has none.
+    expect(second!.styleSamples).toEqual([]);
     // An imported subject's report says so: coverage is nominal, not real.
     expect(second!.report?.imported).toBe(true);
   });

@@ -35,7 +35,10 @@ async function api(
 }
 
 const filing = (text: string, testimonyId: string): string =>
-  JSON.stringify([{ text, evidenceTestimonyIds: [testimonyId] }]);
+  JSON.stringify({
+    episodes: [],
+    claims: [{ text, evidenceTestimonyIds: [testimonyId] }],
+  });
 
 function seedTrial(store: Store): void {
   store.putSubject({ id: 's1', displayName: '被测者' });
@@ -187,7 +190,7 @@ describe('court API', () => {
     const demo = await api(base, 'POST', `/api/subjects/${DEMO_SUBJECT_ID}/court`);
     expect(demo.status).toBe(200);
     expect(asObject(demo.body.session).id).toBe(DEMO_COURT_SESSION_ID);
-    expect(asArray(demo.body.claims)).toHaveLength(6);
+    expect(asArray(demo.body.claims)).toHaveLength(7);
 
     const created = await api(base, 'POST', '/api/subjects', { displayName: '普通对象' });
     const subjectId = created.body.id as string;
@@ -207,13 +210,14 @@ describe('court API', () => {
     const response = await api(base, 'GET', `/api/subjects/${DEMO_SUBJECT_ID}/claims`);
     expect(response.status).toBe(200);
     const claims = asArray(response.body.claims);
+    // Only status=surviving reach the baseline; contested and retired are excluded
     expect(claims).toHaveLength(5);
     for (const claim of claims) {
       expect(claim.status).toBe('surviving');
       expect(Array.isArray(claim.evidence)).toBe(true);
       expect((claim.evidence as string[]).length).toBeGreaterThanOrEqual(1);
     }
-    // The one retired demo claim never reaches the baseline.
+    // Contested claim about emotional stability does not reach the baseline.
     expect(response.text).not.toContain('林默情绪稳定、很少发火。');
     // Evidence is expressed as ids; the testimony originals are not expanded.
     expect(response.text).not.toContain('behindText');
