@@ -5,7 +5,9 @@
     "paths": {
       "@openmimic/shared": ["./shared/src/index.ts"],
       "@openmimic/kernel": ["./kernel/src/index.ts"],
-      "@openmimic/engine-court": ["./engines/court/src/index.ts"]
+      "@openmimic/engine-court": ["./engines/court/src/index.ts"],
+      "@openmimic/engine-witness": ["./engines/witness/src/index.ts"],
+      "@openmimic/server": ["./server/src/index.ts"]
     }
   },
   "include": [
@@ -15,6 +17,10 @@
     "kernel/types/**/*.d.ts",
     "engines/court/src/**/*.ts",
     "engines/court/test/**/*.ts",
+    "engines/witness/src/**/*.ts",
+    "engines/witness/test/**/*.ts",
+    "server/src/**/*.ts",
+    "server/test/**/*.ts",
     "vitest.config.ts"
   ],
   "exclude": ["node_modules", "**/dist/**"]
