@@ -23,3 +23,9 @@ export class PluginRegistrationError extends OpenMimicError {}
 
 /** Raised when code references a room that does not exist. */
 export class UnknownRoomError extends OpenMimicError {}
+
+/**
+ * Raised when an episode's text is not a verbatim substring of its
+ * source testimony answer, or when the `elicited` flag does not match.
+ */
+export class NoAnchorError extends OpenMimicError {}

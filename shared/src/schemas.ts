@@ -157,8 +157,8 @@ export const ClaimSchema = z.object({
   qualifiers: z.array(z.string()).optional(),
   status: ClaimStatusSchema,
   courtSessionId: z.string().min(1),
-  /** Claim classification; defaults to 'pattern' for old data. */
-  kind: ClaimKindSchema.default('pattern'),
+  /** Claim classification; old data without this field is treated as 'pattern'. */
+  kind: ClaimKindSchema.optional(),
   /** Observable / internal / evaluative domain. */
   domain: ClaimDomainSchema.optional(),
   /** Situational context (audience, situation, period). */

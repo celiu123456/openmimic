@@ -3,7 +3,10 @@ import Database from 'better-sqlite3';
 import type { Database as DatabaseConnection } from 'better-sqlite3';
 import {
   ClaimSchema,
+  CorpusItemSchema,
   CourtSessionSchema,
+  DivergenceSchema,
+  EpisodeSchema,
   InviteSchema,
   RoomSchema,
   SubjectSchema,
@@ -11,7 +14,10 @@ import {
   WitnessSchema,
   type Claim,
   type ConsentLevel,
+  type CorpusItem,
   type CourtSession,
+  type Divergence,
+  type Episode,
   type Invite,
   type Room,
   type RoomUtterance,
@@ -22,7 +28,7 @@ import {
 } from '@openmimic/shared';
 import { EventBus } from './events';
 import { AuthorizationGate } from './gate';
-import { NoEvidenceError, UnknownRoomError, UnknownTestimonyError } from './errors';
+import { NoAnchorError, NoEvidenceError, UnknownRoomError, UnknownTestimonyError } from './errors';
 
 /** Store configuration. Defaults to an ephemeral in-memory database. */
 export interface StoreOptions {
@@ -73,6 +79,42 @@ interface ClaimRow {
   qualifiers: string | null;
   status: string;
   court_session_id: string;
+  kind: string | null;
+  domain: string | null;
+  context: string | null;
+  witness_ids: string | null;
+  episode_ids: string | null;
+}
+
+interface EpisodeRow {
+  id: string;
+  subject_id: string;
+  witness_id: string;
+  testimony_id: string;
+  qid: string;
+  text: string;
+  elicited: number;
+  situation: string | null;
+  audience: string | null;
+  time_hint: string | null;
+}
+
+interface DivergenceRow {
+  id: string;
+  subject_id: string;
+  court_session_id: string;
+  topic: string;
+  type: string;
+  positions: string;
+  resolution: string | null;
+}
+
+interface CorpusItemRow {
+  id: string;
+  subject_id: string;
+  text: string;
+  source: string;
+  created_at: string;
 }
 
 interface SubjectRow {
@@ -88,6 +130,8 @@ interface WitnessRow {
   relation: string;
   stance: string | null;
   consent_level: string;
+  known_from_year: number | null;
+  known_to_year: number | null;
 }
 
 interface CourtSessionRow {
@@ -236,6 +280,43 @@ CREATE TABLE IF NOT EXISTS interview_sessions (
 
 CREATE INDEX IF NOT EXISTS idx_interview_sessions_token
   ON interview_sessions (invite_token);
+
+CREATE TABLE IF NOT EXISTS episodes (
+  id           TEXT PRIMARY KEY,
+  subject_id   TEXT NOT NULL,
+  witness_id   TEXT NOT NULL,
+  testimony_id TEXT NOT NULL,
+  qid          TEXT NOT NULL,
+  text         TEXT NOT NULL,
+  elicited     INTEGER NOT NULL DEFAULT 0,
+  situation    TEXT,
+  audience     TEXT,
+  time_hint    TEXT
+);
+
+CREATE INDEX IF NOT EXISTS idx_episodes_subject ON episodes (subject_id);
+
+CREATE TABLE IF NOT EXISTS divergences (
+  id               TEXT PRIMARY KEY,
+  subject_id       TEXT NOT NULL,
+  court_session_id TEXT NOT NULL,
+  topic            TEXT NOT NULL,
+  type             TEXT NOT NULL CHECK (type IN ('perspective', 'factual')),
+  positions        TEXT NOT NULL,
+  resolution       TEXT
+);
+
+CREATE INDEX IF NOT EXISTS idx_divergences_subject ON divergences (subject_id);
+
+CREATE TABLE IF NOT EXISTS corpus_items (
+  id         TEXT PRIMARY KEY,
+  subject_id TEXT NOT NULL,
+  text       TEXT NOT NULL,
+  source     TEXT NOT NULL CHECK (source IN ('pasted', 'imported')),
+  created_at TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_corpus_items_subject ON corpus_items (subject_id);
 `;
 
 /**
@@ -293,6 +374,37 @@ export class Store {
     if (!roomColumns.includes('imported')) {
       this.db.exec('ALTER TABLE rooms ADD COLUMN imported INTEGER');
     }
+    // P1a: claims table extensions
+    const claimColumns = this.db
+      .prepare<[], { name: string }>("SELECT name FROM pragma_table_info('claims')")
+      .all()
+      .map((row) => row.name);
+    if (!claimColumns.includes('kind')) {
+      this.db.exec("ALTER TABLE claims ADD COLUMN kind TEXT DEFAULT 'pattern'");
+    }
+    if (!claimColumns.includes('domain')) {
+      this.db.exec('ALTER TABLE claims ADD COLUMN domain TEXT');
+    }
+    if (!claimColumns.includes('context')) {
+      this.db.exec('ALTER TABLE claims ADD COLUMN context TEXT');
+    }
+    if (!claimColumns.includes('witness_ids')) {
+      this.db.exec('ALTER TABLE claims ADD COLUMN witness_ids TEXT');
+    }
+    if (!claimColumns.includes('episode_ids')) {
+      this.db.exec('ALTER TABLE claims ADD COLUMN episode_ids TEXT');
+    }
+    // P1a: witnesses table extensions
+    const witnessColumns = this.db
+      .prepare<[], { name: string }>("SELECT name FROM pragma_table_info('witnesses')")
+      .all()
+      .map((row) => row.name);
+    if (!witnessColumns.includes('known_from_year')) {
+      this.db.exec('ALTER TABLE witnesses ADD COLUMN known_from_year INTEGER');
+    }
+    if (!witnessColumns.includes('known_to_year')) {
+      this.db.exec('ALTER TABLE witnesses ADD COLUMN known_to_year INTEGER');
+    }
   }
 
   /* ---------------------------------------------------------------- */
@@ -335,14 +447,16 @@ export class Store {
   putWitness(witness: Witness): Witness {
     const parsed = WitnessSchema.parse(witness);
     this.db
-      .prepare<[string, string, string, string | null, string]>(
-        `INSERT INTO witnesses (id, subject_id, relation, stance, consent_level)
-         VALUES (?, ?, ?, ?, ?)
+      .prepare<[string, string, string, string | null, string, number | null, number | null]>(
+        `INSERT INTO witnesses (id, subject_id, relation, stance, consent_level, known_from_year, known_to_year)
+         VALUES (?, ?, ?, ?, ?, ?, ?)
          ON CONFLICT(id) DO UPDATE SET
-           subject_id    = excluded.subject_id,
-           relation      = excluded.relation,
-           stance        = excluded.stance,
-           consent_level = excluded.consent_level`,
+           subject_id      = excluded.subject_id,
+           relation        = excluded.relation,
+           stance          = excluded.stance,
+           consent_level   = excluded.consent_level,
+           known_from_year = excluded.known_from_year,
+           known_to_year   = excluded.known_to_year`,
       )
       .run(
         parsed.id,
@@ -350,6 +464,8 @@ export class Store {
         parsed.relation,
         parsed.stance ?? null,
         parsed.consentLevel,
+        parsed.knownFromYear ?? null,
+        parsed.knownToYear ?? null,
       );
     return parsed;
   }
@@ -640,10 +756,10 @@ export class Store {
     }
 
     this.db
-      .prepare<[string, string, string, number, string, string | null, string, string]>(
+      .prepare<[string, string, string, number, string, string | null, string, string, string | null, string | null, string | null, string | null, string | null]>(
         `INSERT INTO claims
-           (id, subject_id, text, conviction, evidence, qualifiers, status, court_session_id)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+           (id, subject_id, text, conviction, evidence, qualifiers, status, court_session_id, kind, domain, context, witness_ids, episode_ids)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
          ON CONFLICT(id) DO UPDATE SET
            subject_id       = excluded.subject_id,
            text             = excluded.text,
@@ -651,7 +767,12 @@ export class Store {
            evidence         = excluded.evidence,
            qualifiers       = excluded.qualifiers,
            status           = excluded.status,
-           court_session_id = excluded.court_session_id`,
+           court_session_id = excluded.court_session_id,
+           kind             = excluded.kind,
+           domain           = excluded.domain,
+           context          = excluded.context,
+           witness_ids      = excluded.witness_ids,
+           episode_ids      = excluded.episode_ids`,
       )
       .run(
         parsed.id,
@@ -662,6 +783,11 @@ export class Store {
         parsed.qualifiers ? JSON.stringify(parsed.qualifiers) : null,
         parsed.status,
         parsed.courtSessionId,
+        parsed.kind ?? 'pattern',
+        parsed.domain ?? null,
+        parsed.context ? JSON.stringify(parsed.context) : null,
+        parsed.witnessIds ? JSON.stringify(parsed.witnessIds) : null,
+        parsed.episodeIds ? JSON.stringify(parsed.episodeIds) : null,
       );
 
     return parsed;
@@ -742,6 +868,173 @@ export class Store {
     return this.gate.redactAll(testimonies, viewerScope);
   }
 
+  /* ---------------------------------------------------------------- */
+  /* Episodes                                                          */
+  /* ---------------------------------------------------------------- */
+
+  /**
+   * Persist an episode.
+   *
+   * Validates that `text` is a verbatim substring of the corresponding
+   * testimony answer. If `elicited` is true, the text must be in
+   * `followupText`; if false, in `behindText`. Throws {@link NoAnchorError}
+   * when validation fails.
+   */
+  putEpisode(episode: Episode): Episode {
+    const parsed = EpisodeSchema.parse(episode);
+    const testimony = this.getTestimony(parsed.testimonyId);
+    if (!testimony) {
+      throw new NoAnchorError(`episode ${parsed.id} references unknown testimony ${parsed.testimonyId}`);
+    }
+    const answer = testimony.answers.find((a) => a.qid === parsed.qid);
+    if (!answer) {
+      throw new NoAnchorError(`episode ${parsed.id}: qid ${parsed.qid} not found in testimony ${parsed.testimonyId}`);
+    }
+    // Validate verbatim substring against the correct source field
+    if (parsed.elicited) {
+      if (!answer.followupText || !answer.followupText.includes(parsed.text)) {
+        throw new NoAnchorError(`episode ${parsed.id}: text is not a verbatim substring of followupText`);
+      }
+    } else {
+      if (!answer.behindText.includes(parsed.text)) {
+        throw new NoAnchorError(`episode ${parsed.id}: text is not a verbatim substring of behindText`);
+      }
+    }
+
+    this.db
+      .prepare<[string, string, string, string, string, string, number, string | null, string | null, string | null]>(
+        `INSERT INTO episodes (id, subject_id, witness_id, testimony_id, qid, text, elicited, situation, audience, time_hint)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+         ON CONFLICT(id) DO UPDATE SET
+           subject_id   = excluded.subject_id,
+           witness_id   = excluded.witness_id,
+           testimony_id = excluded.testimony_id,
+           qid          = excluded.qid,
+           text         = excluded.text,
+           elicited     = excluded.elicited,
+           situation    = excluded.situation,
+           audience     = excluded.audience,
+           time_hint    = excluded.time_hint`,
+      )
+      .run(
+        parsed.id,
+        parsed.subjectId,
+        parsed.witnessId,
+        parsed.testimonyId,
+        parsed.qid,
+        parsed.text,
+        parsed.elicited ? 1 : 0,
+        parsed.situation ?? null,
+        parsed.audience ?? null,
+        parsed.timeHint ?? null,
+      );
+    return parsed;
+  }
+
+  getEpisode(id: string): Episode | undefined {
+    const row = this.db
+      .prepare<[string], EpisodeRow>('SELECT * FROM episodes WHERE id = ?')
+      .get(id);
+    return row ? this.rowToEpisode(row) : undefined;
+  }
+
+  listEpisodesBySubject(subjectId: string): Episode[] {
+    return this.db
+      .prepare<[string], EpisodeRow>(
+        'SELECT * FROM episodes WHERE subject_id = ? ORDER BY rowid ASC',
+      )
+      .all(subjectId)
+      .map((row) => this.rowToEpisode(row));
+  }
+
+  /* ---------------------------------------------------------------- */
+  /* Divergences                                                       */
+  /* ---------------------------------------------------------------- */
+
+  putDivergence(divergence: Divergence): Divergence {
+    const parsed = DivergenceSchema.parse(divergence);
+    this.db
+      .prepare<[string, string, string, string, string, string, string | null]>(
+        `INSERT INTO divergences (id, subject_id, court_session_id, topic, type, positions, resolution)
+         VALUES (?, ?, ?, ?, ?, ?, ?)
+         ON CONFLICT(id) DO UPDATE SET
+           subject_id       = excluded.subject_id,
+           court_session_id = excluded.court_session_id,
+           topic            = excluded.topic,
+           type             = excluded.type,
+           positions        = excluded.positions,
+           resolution       = excluded.resolution`,
+      )
+      .run(
+        parsed.id,
+        parsed.subjectId,
+        parsed.courtSessionId,
+        parsed.topic,
+        parsed.type,
+        JSON.stringify(parsed.positions),
+        parsed.resolution ?? null,
+      );
+    return parsed;
+  }
+
+  getDivergence(id: string): Divergence | undefined {
+    const row = this.db
+      .prepare<[string], DivergenceRow>('SELECT * FROM divergences WHERE id = ?')
+      .get(id);
+    return row ? this.rowToDivergence(row) : undefined;
+  }
+
+  listDivergencesBySubject(subjectId: string): Divergence[] {
+    return this.db
+      .prepare<[string], DivergenceRow>(
+        'SELECT * FROM divergences WHERE subject_id = ? ORDER BY rowid ASC',
+      )
+      .all(subjectId)
+      .map((row) => this.rowToDivergence(row));
+  }
+
+  /* ---------------------------------------------------------------- */
+  /* Corpus items — the subject's own words, separate from testimony    */
+  /* ---------------------------------------------------------------- */
+
+  putCorpusItem(item: CorpusItem): CorpusItem {
+    const parsed = CorpusItemSchema.parse(item);
+    this.db
+      .prepare<[string, string, string, string, string]>(
+        `INSERT INTO corpus_items (id, subject_id, text, source, created_at)
+         VALUES (?, ?, ?, ?, ?)
+         ON CONFLICT(id) DO UPDATE SET
+           subject_id = excluded.subject_id,
+           text       = excluded.text,
+           source     = excluded.source,
+           created_at = excluded.created_at`,
+      )
+      .run(
+        parsed.id,
+        parsed.subjectId,
+        parsed.text,
+        parsed.source,
+        parsed.createdAt,
+      );
+    return parsed;
+  }
+
+  getCorpusItem(id: string): CorpusItem | undefined {
+    const row = this.db
+      .prepare<[string], CorpusItemRow>('SELECT * FROM corpus_items WHERE id = ?')
+      .get(id);
+    return row ? this.rowToCorpusItem(row) : undefined;
+  }
+
+  listCorpusItemsBySubject(subjectId: string): CorpusItem[] {
+    return this.db
+      .prepare<[string], CorpusItemRow>(
+        'SELECT * FROM corpus_items WHERE subject_id = ? ORDER BY created_at ASC, rowid ASC',
+      )
+      .all(subjectId)
+      .map((row) => this.rowToCorpusItem(row));
+  }
+
   /** Release the underlying database connection. */
   close(): void {
     if (this.db.open) {
@@ -771,6 +1064,8 @@ export class Store {
       relation: row.relation,
       stance: row.stance ?? undefined,
       consentLevel: row.consent_level,
+      knownFromYear: row.known_from_year ?? undefined,
+      knownToYear: row.known_to_year === null ? undefined : row.known_to_year,
     };
   }
 
@@ -815,6 +1110,11 @@ export class Store {
       qualifiers: row.qualifiers ? (JSON.parse(row.qualifiers) as unknown) : undefined,
       status: row.status,
       courtSessionId: row.court_session_id,
+      kind: row.kind ?? 'pattern',
+      domain: row.domain ?? undefined,
+      context: row.context ? (JSON.parse(row.context) as unknown) : undefined,
+      witnessIds: row.witness_ids ? (JSON.parse(row.witness_ids) as unknown) : undefined,
+      episodeIds: row.episode_ids ? (JSON.parse(row.episode_ids) as unknown) : undefined,
     });
   }
 
@@ -841,6 +1141,43 @@ export class Store {
         : undefined,
       createdAt: row.created_at,
       imported: row.imported === 1 ? true : undefined,
+    });
+  }
+
+  private rowToEpisode(row: EpisodeRow): Episode {
+    return EpisodeSchema.parse({
+      id: row.id,
+      subjectId: row.subject_id,
+      witnessId: row.witness_id,
+      testimonyId: row.testimony_id,
+      qid: row.qid,
+      text: row.text,
+      elicited: row.elicited === 1,
+      situation: row.situation ?? undefined,
+      audience: row.audience ?? undefined,
+      timeHint: row.time_hint ?? undefined,
+    });
+  }
+
+  private rowToDivergence(row: DivergenceRow): Divergence {
+    return DivergenceSchema.parse({
+      id: row.id,
+      subjectId: row.subject_id,
+      courtSessionId: row.court_session_id,
+      topic: row.topic,
+      type: row.type,
+      positions: JSON.parse(row.positions) as unknown,
+      resolution: row.resolution ?? undefined,
+    });
+  }
+
+  private rowToCorpusItem(row: CorpusItemRow): CorpusItem {
+    return CorpusItemSchema.parse({
+      id: row.id,
+      subjectId: row.subject_id,
+      text: row.text,
+      source: row.source,
+      createdAt: row.created_at,
     });
   }
 }
