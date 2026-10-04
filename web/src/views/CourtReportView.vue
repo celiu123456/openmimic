@@ -37,10 +37,19 @@ interface ContestedListItem {
   conviction: number;
 }
 
+interface SilenceSignalItem {
+  id: string;
+  qid: string;
+  skipRatio: number;
+  totalWitnesses: number;
+  skipperIds: string[];
+}
+
 const route = useRoute();
 const subjectId = route.params.id as string;
 const divergences = ref<Divergence[]>([]);
 const claims = ref<Claim[]>([]);
+const silenceSignals = ref<SilenceSignalItem[]>([]);
 const witnessMap = ref(new Map<string, string>());
 const loading = ref(true);
 const error = ref('');
@@ -65,9 +74,20 @@ async function checkGateEnabled(): Promise<boolean> {
   }
 }
 
+async function fetchSilenceSignals(): Promise<SilenceSignalItem[]> {
+  try {
+    const result = await fetchJson<{ signals: SilenceSignalItem[] }>(
+      `/api/subjects/${encodeURIComponent(subjectId)}/silence-signals`,
+    );
+    return result.signals ?? [];
+  } catch {
+    return [];
+  }
+}
+
 onMounted(async () => {
   try {
-    const [divResult, claimResult, gateOk] = await Promise.all([
+    const [divResult, claimResult, gateOk, signals] = await Promise.all([
       fetchJson<{ divergences: Divergence[] }>(
         `/api/subjects/${encodeURIComponent(subjectId)}/divergences`,
       ),
@@ -75,10 +95,12 @@ onMounted(async () => {
         `/api/subjects/${encodeURIComponent(subjectId)}/claims`,
       ),
       checkGateEnabled(),
+      fetchSilenceSignals(),
     ]);
     divergences.value = divResult.divergences;
     claims.value = claimResult.claims;
     gateEnabled.value = gateOk;
+    silenceSignals.value = signals;
   } catch (err) {
     error.value = err instanceof Error ? err.message : String(err);
   } finally {
@@ -208,6 +230,20 @@ async function uncontestClaim(claimId: string): Promise<void> {
             <button class="withdraw-btn" @click="uncontestClaim(claim.id)">
               撤回否决
             </button>
+          </li>
+        </ul>
+      </section>
+
+      <!-- Silence signals section -->
+      <section v-if="silenceSignals.length > 0" class="silence-section">
+        <h2>无人谈及的话题 ({{ silenceSignals.length }})</h2>
+        <ul>
+          <li v-for="signal in silenceSignals" :key="signal.id" class="silence-item">
+            <span class="silence-qid">{{ signal.qid }}</span>
+            <span class="silence-stats">
+              {{ signal.skipperIds.length }}/{{ signal.totalWitnesses }} 位证人跳过
+              ({{ Math.round(signal.skipRatio * 100) }}%)
+            </span>
           </li>
         </ul>
       </section>
@@ -369,6 +405,37 @@ async function uncontestClaim(claimId: string): Promise<void> {
 .withdraw-btn:hover {
   border-color: #27ae60;
   color: #27ae60;
+}
+
+/* Silence section */
+.silence-section {
+  margin-top: 1.5rem;
+}
+
+.silence-section ul {
+  list-style: none;
+  padding: 0;
+}
+
+.silence-item {
+  margin: 0.4rem 0;
+  padding: 0.4rem 0.75rem;
+  background: #f8f9fa;
+  border-left: 3px solid #95a5a6;
+  border-radius: 0 4px 4px 0;
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+}
+
+.silence-qid {
+  font-weight: 600;
+  color: #555;
+}
+
+.silence-stats {
+  font-size: 0.85em;
+  color: #888;
 }
 
 .divergence-map h2 {
