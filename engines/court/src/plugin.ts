@@ -1,14 +1,50 @@
-import type { PluginHost, Store } from '@openmimic/kernel';
+import type { Plugin, Store } from '@openmimic/kernel';
 import type { CourtSession } from '@openmimic/shared';
 import type { ConflictFinder } from './conflict';
 import { runCourt, type RunCourtOptions } from './court';
 import type { LLMClient } from './llm';
 
+/** The CourtEngine as exposed to embedders once assembled. */
+export interface CourtEngine {
+  runCourt(subjectId: string, options?: RunCourtOptions): Promise<CourtSession>;
+}
+
+/** Court plugin config. */
+export interface CourtPluginConfig {
+  pairThreshold?: number;
+  conflictFinder?: ConflictFinder;
+}
+
 /**
- * Official CourtEngine manifest. It is registered through the very same
- * {@link PluginHost} path third-party plugins use — there is no privileged
- * engine backdoor.
+ * Standard Plugin object for the official CourtEngine.
+ *
+ * Registered through the same plugin path third-party plugins use — there
+ * is no privileged engine backdoor.
  */
+export const courtPlugin: Plugin<CourtPluginConfig> = {
+  name: 'court',
+  kind: 'engine',
+  version: '0.0.1',
+  inject: ['store', 'llm'],
+  apply(ctx, config) {
+    const store = ctx.get<Store>('store');
+    const llm = ctx.get<LLMClient>('llm');
+    const engine: CourtEngine = {
+      runCourt: (subjectId, options = {}) =>
+        runCourt(subjectId, store, llm, {
+          conflictFinder: config?.conflictFinder,
+          ...options,
+        }),
+    };
+    ctx.provide('court', engine);
+  },
+};
+
+/* ------------------------------------------------------------------ */
+/* Legacy compat — kept so old code paths continue to compile          */
+/* ------------------------------------------------------------------ */
+
+/** @deprecated Use {@link courtPlugin} instead. */
 export const COURT_ENGINE_MANIFEST = {
   name: 'court',
   kind: 'engine',
@@ -16,7 +52,7 @@ export const COURT_ENGINE_MANIFEST = {
   description: 'Adversarial cross-examination court',
 } as const;
 
-/** Shared context the kernel hands to every plugin. */
+/** @deprecated */
 export interface CourtEngineContext {
   store: Store;
   llm: LLMClient;
@@ -24,23 +60,19 @@ export interface CourtEngineContext {
   conflictFinder?: ConflictFinder;
 }
 
-/** The CourtEngine as exposed to embedders once assembled. */
-export interface CourtEngine {
-  runCourt(subjectId: string, options?: RunCourtOptions): Promise<CourtSession>;
-}
-
-/** Register the official CourtEngine with a plugin host. */
+/** @deprecated Use {@link courtPlugin} instead. */
 export async function registerCourtEngine(
-  host: PluginHost<CourtEngineContext>,
+  host: { register: (manifest: unknown, setup: (ctx: unknown) => void | Promise<void>) => Promise<void> },
 ): Promise<void> {
-  await host.register(COURT_ENGINE_MANIFEST, (context) => {
+  await host.register(COURT_ENGINE_MANIFEST, (context: unknown) => {
+    const ctx = context as CourtEngineContext;
     const engine: CourtEngine = {
       runCourt: (subjectId, options = {}) =>
-        runCourt(subjectId, context.store, context.llm, {
-          conflictFinder: context.conflictFinder,
+        runCourt(subjectId, ctx.store, ctx.llm, {
+          conflictFinder: ctx.conflictFinder,
           ...options,
         }),
     };
-    context.engines[COURT_ENGINE_MANIFEST.name] = engine;
+    ctx.engines[COURT_ENGINE_MANIFEST.name] = engine;
   });
 }

@@ -1,16 +1,14 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { PluginHost, Store } from '@openmimic/kernel';
+import { EventBus, PluginHost, Store } from '@openmimic/kernel';
 import {
   DEFAULT_INVITE_TTL_MS,
   FRIEND_V1,
   InviteInvalidError,
-  WITNESS_COLLECTOR_MANIFEST,
   createInvite,
-  registerWitnessCollector,
   resolveInvite,
   submitTestimony,
+  witnessPlugin,
   type WitnessCollector,
-  type WitnessCollectorContext,
 } from '@openmimic/engine-witness';
 
 describe('friend questionnaire v1', () => {
@@ -163,17 +161,18 @@ describe('testimony intake', () => {
 });
 
 describe('WitnessEngine plugin assembly', () => {
-  it('registers as a collector through the shared plugin path', async () => {
+  it('loads the official witness plugin and exposes it as a service', async () => {
     const store = new Store();
     try {
-      const context: WitnessCollectorContext = { store, collectors: {} };
-      const host = new PluginHost<WitnessCollectorContext>(context);
-      await registerWitnessCollector(host);
+      const events = new EventBus();
+      const host = new PluginHost(events);
+      host.providePreset('store', store);
+      await host.load(witnessPlugin);
 
-      expect(host.has(WITNESS_COLLECTOR_MANIFEST.name)).toBe(true);
+      expect(host.has('witness')).toBe(true);
       expect(host.get('witness')?.kind).toBe('collector');
 
-      const collector = context.collectors.witness as WitnessCollector;
+      const collector = host.getService<WitnessCollector>('witness');
       const invite = collector.createInvite('s1');
       expect(collector.resolveInvite(invite.token).subjectId).toBe('s1');
       expect(collector.questionnaire.questions).toHaveLength(10);

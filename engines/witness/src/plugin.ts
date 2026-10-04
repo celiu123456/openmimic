@@ -1,4 +1,4 @@
-import type { PluginHost, Store } from '@openmimic/kernel';
+import type { Plugin, Store } from '@openmimic/kernel';
 import {
   createInvite,
   resolveInvite,
@@ -27,20 +27,6 @@ import {
   type SubmitTestimonyOptions,
   type SubmitTestimonyResult,
 } from './testimony';
-
-/**
- * Official WitnessEngine manifest.
- *
- * Registered as a `collector`, not an `engine`: this is the intake surface
- * that gathers evidence from friends, and it goes through the same
- * {@link PluginHost} path as any third-party plugin.
- */
-export const WITNESS_COLLECTOR_MANIFEST = {
-  name: 'witness',
-  kind: 'collector',
-  version: '0.0.1',
-  description: 'Friend questionnaire, reusable invites and testimony intake',
-} as const;
 
 /** The collector surface once a {@link Store} is bound to it. */
 export interface WitnessCollector {
@@ -88,25 +74,54 @@ export function createWitnessCollector(
   };
 }
 
-/** Shared context the kernel hands to every plugin. */
+/**
+ * Standard Plugin object for the official WitnessCollector.
+ *
+ * Registered as `kind: 'collector'`: this is the intake surface that gathers
+ * evidence from friends, and it goes through the same plugin path as any
+ * third-party plugin.
+ */
+export const witnessPlugin: Plugin = {
+  name: 'witness',
+  kind: 'collector',
+  version: '0.0.1',
+  inject: ['store'],
+  apply(ctx) {
+    const store = ctx.get<Store>('store');
+    const llm = ctx.has('llm') ? ctx.get<LLMClient>('llm') : undefined;
+    const collector = createWitnessCollector(store, llm ? { llm } : {});
+    ctx.provide('witness', collector);
+  },
+};
+
+/* ------------------------------------------------------------------ */
+/* Legacy compat — kept so old code paths continue to compile          */
+/* ------------------------------------------------------------------ */
+
+/** @deprecated Use {@link witnessPlugin} instead. */
+export const WITNESS_COLLECTOR_MANIFEST = {
+  name: 'witness',
+  kind: 'collector',
+  version: '0.0.1',
+  description: 'Friend questionnaire, reusable invites and testimony intake',
+} as const;
+
+/** @deprecated */
 export interface WitnessCollectorContext {
   store: Store;
   collectors: Record<string, unknown>;
-  /**
-   * Model used to phrase follow-ups. Optional: without it the interview is a
-   * pure question tree and never asks the witness a follow-up.
-   */
   llm?: LLMClient;
 }
 
-/** Register the official WitnessEngine with a plugin host. */
+/** @deprecated Use {@link witnessPlugin} instead. */
 export async function registerWitnessCollector(
-  host: PluginHost<WitnessCollectorContext>,
+  host: { register: (manifest: unknown, setup: (ctx: unknown) => void | Promise<void>) => Promise<void> },
 ): Promise<void> {
-  await host.register(WITNESS_COLLECTOR_MANIFEST, (context) => {
-    context.collectors[WITNESS_COLLECTOR_MANIFEST.name] = createWitnessCollector(
-      context.store,
-      context.llm ? { llm: context.llm } : {},
+  await host.register(WITNESS_COLLECTOR_MANIFEST, (context: unknown) => {
+    const ctx = context as WitnessCollectorContext;
+    ctx.collectors[WITNESS_COLLECTOR_MANIFEST.name] = createWitnessCollector(
+      ctx.store,
+      ctx.llm ? { llm: ctx.llm } : {},
     );
   });
 }

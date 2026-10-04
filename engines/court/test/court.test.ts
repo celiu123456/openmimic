@@ -7,18 +7,16 @@
  */
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import type { CourtSession } from '@openmimic/shared';
-import { FakeEmbedding, PluginHost, Store } from '@openmimic/kernel';
+import { EventBus, FakeEmbedding, PluginHost, Store } from '@openmimic/kernel';
 import {
-  COURT_ENGINE_MANIFEST,
   EmbeddingClaimPairFinder,
   FakeLLM,
   KeywordClaimPairFinder,
   computeConviction,
+  courtPlugin,
   extractJson,
-  registerCourtEngine,
   runCourt,
   type CourtEngine,
-  type CourtEngineContext,
 } from '@openmimic/engine-court';
 
 /* ------------------------------------------------------------------ */
@@ -533,27 +531,26 @@ describe('KeywordClaimPairFinder', () => {
 /* ------------------------------------------------------------------ */
 
 describe('CourtEngine plugin assembly', () => {
-  it('registers the official engine through the shared plugin path and runs it', async () => {
+  it('loads the official court plugin and runs it', async () => {
     const store = new Store();
     try {
       seedThreeWitnessTrial(store);
-      const context: CourtEngineContext = {
-        store,
-        llm: new FakeLLM([
-          FILING_W1,
-          FILING_W2,
-          FILING_W3,
-          RELATION_PERSPECTIVE,
-        ]),
-        engines: {},
-      };
-      const host = new PluginHost<CourtEngineContext>(context);
-      await registerCourtEngine(host);
+      const events = new EventBus();
+      const host = new PluginHost(events);
+      host.providePreset('store', store);
+      host.providePreset('llm', new FakeLLM([
+        FILING_W1,
+        FILING_W2,
+        FILING_W3,
+        RELATION_PERSPECTIVE,
+      ]));
 
-      expect(host.has(COURT_ENGINE_MANIFEST.name)).toBe(true);
+      await host.load(courtPlugin);
+
+      expect(host.has('court')).toBe(true);
       expect(host.get('court')?.kind).toBe('engine');
 
-      const engine = context.engines.court as CourtEngine;
+      const engine = host.getService<CourtEngine>('court');
       expect(typeof engine.runCourt).toBe('function');
 
       const session = await engine.runCourt('s1', {

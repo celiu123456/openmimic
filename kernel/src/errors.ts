@@ -21,6 +21,12 @@ export class UnknownTestimonyError extends OpenMimicError {}
 /** Raised when a plugin is registered twice or with an invalid manifest. */
 export class PluginRegistrationError extends OpenMimicError {}
 
+/** Raised when a plugin's inject list names a service that is not yet provided. */
+export class MissingServiceError extends OpenMimicError {}
+
+/** Raised when loadAll detects a cyclic dependency among plugins. */
+export class CyclicDependencyError extends OpenMimicError {}
+
 /** Raised when code references a room that does not exist. */
 export class UnknownRoomError extends OpenMimicError {}
 

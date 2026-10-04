@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { PluginHost, Store, UnknownRoomError } from '@openmimic/kernel';
+import { EventBus, PluginHost, Store, UnknownRoomError } from '@openmimic/kernel';
 import {
   CONSENT_FALLBACK_STAGE,
   CRISIS_WORDS,
@@ -8,14 +8,12 @@ import {
   FIXED_STAGE_LINES,
   FakeLLM,
   MENTAL_HEALTH_WORDS,
-  ROOM_ENGINE_MANIFEST,
   RoomRefusedError,
   containsConsentOverlap,
   openDoor,
-  registerRoomEngine,
+  roomPlugin,
   runBehindRoom,
   type RoomEngine,
-  type RoomEngineContext,
 } from '@openmimic/engine-room';
 
 const line = (text: string): string => JSON.stringify({ text });
@@ -361,17 +359,19 @@ describe('mental-health word list', () => {
 });
 
 describe('RoomEngine plugin assembly', () => {
-  it('registers as an engine through the shared plugin path', async () => {
+  it('loads the official room plugin and runs it', async () => {
     const store = new Store();
     try {
       seedSubject(store, [{ id: 'w-a', relation: '发小', behind: ['甲的记忆'] }]);
-      const context: RoomEngineContext = { store, llm: new FakeLLM([line('甲说')]), engines: {} };
-      const host = new PluginHost<RoomEngineContext>(context);
-      await registerRoomEngine(host);
+      const events = new EventBus();
+      const host = new PluginHost(events);
+      host.providePreset('store', store);
+      host.providePreset('llm', new FakeLLM([line('甲说')]));
+      await host.load(roomPlugin);
 
-      expect(host.has(ROOM_ENGINE_MANIFEST.name)).toBe(true);
+      expect(host.has('room')).toBe(true);
       expect(host.get('room')?.kind).toBe('engine');
-      const engine = context.engines.room as RoomEngine;
+      const engine = host.getService<RoomEngine>('room');
       const room = await engine.runBehindRoom('s1', { maxTurnsPerWitness: 1 });
       expect(room.behindTranscript).toHaveLength(1);
     } finally {
