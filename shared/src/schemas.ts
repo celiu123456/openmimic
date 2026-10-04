@@ -64,6 +64,8 @@ export const WitnessSchema = z.object({
   knownFromYear: z.number().int().optional(),
   /** Year the acquaintance ended; null means still ongoing. */
   knownToYear: z.number().int().nullable().optional(),
+  /** When true, the witness's relation label is hidden in rooms. */
+  anonymousInRoom: z.boolean().optional(),
 });
 export type Witness = z.infer<typeof WitnessSchema>;
 
@@ -290,6 +292,17 @@ export type CourtSession = z.infer<typeof CourtSessionSchema>;
 export const RoomStatusSchema = z.enum(['behind_only', 'door_opened']);
 export type RoomStatus = z.infer<typeof RoomStatusSchema>;
 
+/** Expression tier: how close a room utterance is to a witness's own words. */
+export const UtteranceTierSchema = z.enum(['quote', 'paraphrase', 'extrapolate']);
+export type UtteranceTier = z.infer<typeof UtteranceTierSchema>;
+
+/** An anchor linking an utterance to a specific testimony question. */
+export const UtteranceAnchorSchema = z.object({
+  testimonyId: z.string().min(1),
+  qid: z.string().min(1),
+});
+export type UtteranceAnchor = z.infer<typeof UtteranceAnchorSchema>;
+
 /**
  * One turn inside a room transcript.
  *
@@ -297,6 +310,12 @@ export type RoomStatus = z.infer<typeof RoomStatusSchema>;
  * is a stage direction (a silence, a deflection, a polite change of subject).
  * Both are attribution-carrying on purpose: a stage entry still names the
  * witness it belongs to, so "who did not say it" stays answerable.
+ *
+ * `tier` classifies how close the line is to raw testimony: 'quote' means
+ * verbatim overlap with a quotable witness's words, 'paraphrase' means anchored
+ * to a specific testimony question but reworded, 'extrapolate' means
+ * unanchored filler (greetings, agreement, stage directions). Stage entries are
+ * always 'extrapolate'. Old data without `tier` reads as 'extrapolate'.
  */
 export const RoomUtteranceSchema = z.object({
   witnessId: z.string().min(1),
@@ -304,6 +323,10 @@ export const RoomUtteranceSchema = z.object({
   text: z.string(),
   kind: z.enum(['speech', 'stage']),
   at: z.string().min(1),
+  /** Expression tier; absent on old data, treated as 'extrapolate'. */
+  tier: UtteranceTierSchema.optional(),
+  /** Which testimony answers this utterance draws from; empty for extrapolate. */
+  anchors: z.array(UtteranceAnchorSchema).optional(),
 });
 export type RoomUtterance = z.infer<typeof RoomUtteranceSchema>;
 

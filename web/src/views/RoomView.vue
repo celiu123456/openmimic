@@ -4,6 +4,7 @@ import { useRoute } from 'vue-router';
 import { ApiError, api, type RoomPayload, type RoomUtterance } from '../api';
 import {
   DOOR_WAIT_LINE,
+  ROOM_DISCLAIMER,
   ReplayScheduler,
   behindHeadline,
   beginDoor,
@@ -11,6 +12,7 @@ import {
   canShowContrast,
   doorFailed,
   doorOpened,
+  formatTierDistribution,
   frontHeadline,
   hideContrast,
   initialDoorState,
@@ -20,6 +22,8 @@ import {
   resolveSubjectName,
   showContrast,
   subjectNameFor,
+  tierDistribution,
+  tierLabel,
   witnessTone,
   type DoorState,
   type ReplayState,
@@ -117,6 +121,13 @@ const showContrastButton = computed(
 const showActions = computed(
   () => showSkip.value || showDoorButton.value || showContrastButton.value || doorError.value !== '',
 );
+
+const activeTierDist = computed(() => {
+  const lines = mode.value === 'front' ? frontReady.value : behindLines.value;
+  return tierDistribution(lines);
+});
+
+const tierDistText = computed(() => formatTierDistribution(activeTierDist.value));
 
 function prefersReducedMotion(): boolean {
   return (
@@ -280,17 +291,22 @@ onBeforeUnmount(() => {
 
     <template v-else>
       <main v-if="mode !== 'contrast'" class="room room-stage">
+        <p class="room-disclaimer">{{ ROOM_DISCLAIMER }}</p>
         <p class="topic-seed">话题:{{ room?.topicSeed }}</p>
 
         <section class="transcript" aria-live="polite">
           <template v-for="(line, index) in visibleLines" :key="`${mode}-${index}`">
-            <p v-if="line.kind === 'stage'" class="stage-line">{{ line.text }}</p>
+            <p v-if="line.kind === 'stage'" class="stage-line">
+              <span class="tier-badge extrapolate">{{ tierLabel(line.tier) }}</span>
+              {{ line.text }}
+            </p>
             <article
               v-else
               class="bubble"
               :class="[`tone-${witnessTone(line.witnessId)}`, mode === 'front' ? 'mode-front' : 'mode-behind']"
             >
               <span class="speaker">{{ line.displayLabel }}</span>
+              <span class="tier-badge" :class="line.tier ?? 'extrapolate'">{{ tierLabel(line.tier) }}</span>
               <p class="bubble-text">{{ line.text }}</p>
             </article>
           </template>
@@ -302,6 +318,9 @@ onBeforeUnmount(() => {
             <span class="typing-dots"><i /><i /><i /></span>
           </p>
         </section>
+        <p v-if="activeState.finished && activeTierDist.total > 0" class="tier-summary">
+          本场占比:{{ tierDistText }}
+        </p>
         <div ref="feedEnd" class="feed-end" />
       </main>
 
@@ -320,7 +339,10 @@ onBeforeUnmount(() => {
               <span class="col-note">{{ subjectName }} 不在场</span>
             </header>
             <template v-for="(line, index) in behindLines" :key="`cb-${index}`">
-              <p v-if="line.kind === 'stage'" class="stage-line small">{{ line.text }}</p>
+              <p v-if="line.kind === 'stage'" class="stage-line small">
+                <span class="tier-badge extrapolate">{{ tierLabel(line.tier) }}</span>
+                {{ line.text }}
+              </p>
               <article
                 v-else
                 class="contrast-line mode-behind"
@@ -333,6 +355,7 @@ onBeforeUnmount(() => {
                 @click="toggleActive(line)"
               >
                 <span class="speaker">{{ line.displayLabel }}</span>
+                <span class="tier-badge" :class="line.tier ?? 'extrapolate'">{{ tierLabel(line.tier) }}</span>
                 <p class="bubble-text">{{ line.text }}</p>
               </article>
             </template>
@@ -344,7 +367,10 @@ onBeforeUnmount(() => {
               <span class="col-note">{{ subjectName }} 推门进来之后</span>
             </header>
             <template v-for="(line, index) in frontReady" :key="`cf-${index}`">
-              <p v-if="line.kind === 'stage'" class="stage-line small">{{ line.text }}</p>
+              <p v-if="line.kind === 'stage'" class="stage-line small">
+                <span class="tier-badge extrapolate">{{ tierLabel(line.tier) }}</span>
+                {{ line.text }}
+              </p>
               <article
                 v-else
                 class="contrast-line mode-front"
@@ -357,6 +383,7 @@ onBeforeUnmount(() => {
                 @click="toggleActive(line)"
               >
                 <span class="speaker">{{ line.displayLabel }}</span>
+                <span class="tier-badge" :class="line.tier ?? 'extrapolate'">{{ tierLabel(line.tier) }}</span>
                 <p class="bubble-text">{{ line.text }}</p>
               </article>
             </template>

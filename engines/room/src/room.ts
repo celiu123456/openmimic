@@ -5,11 +5,14 @@ import {
   containsConsentOverlap,
   type Room,
   type RoomUtterance,
+  type Testimony,
+  type UtteranceAnchor,
   type Witness,
 } from '@openmimic/shared';
 import { UnknownRoomError, type Store } from '@openmimic/kernel';
 import { RoomRefusedError } from './errors';
 import type { LLMClient, LLMCompletionRequest } from './llm';
+import { classifyUtterance, type WitnessTestimony } from './tier';
 import { findCrisisWord, findDiagnosisWord } from './wordlist';
 
 /* ------------------------------------------------------------------ */
@@ -56,6 +59,77 @@ export const FIXED_STAGE_LINES: readonly string[] = [
 ];
 
 /* ------------------------------------------------------------------ */
+/* Anonymous witness display labels                                    */
+/* ------------------------------------------------------------------ */
+
+const ANON_LETTERS = ['甲', '乙', '丙', '丁', '戊', '己', '庚', '辛', '壬', '癸'] as const;
+
+/**
+ * Build a display label for an anonymous witness.
+ *
+ * When `knownFromYear` is available: "一位认识他 N 年的人"
+ * Otherwise: "一位认识他的人"
+ *
+ * When there are ≥2 anonymous witnesses, they are distinguished by
+ * 甲/乙/丙/… suffixes. The order is shuffled per room generation.
+ */
+export function anonymousDisplayLabel(
+  index: number,
+  anonymousCount: number,
+  knownFromYear?: number,
+): string {
+  const currentYear = new Date().getFullYear();
+  const years = knownFromYear !== undefined ? currentYear - knownFromYear : undefined;
+  const base = years !== undefined && years > 0
+    ? `一位认识他 ${years} 年的人`
+    : '一位认识他的人';
+
+  if (anonymousCount >= 2) {
+    const letter = ANON_LETTERS[index % ANON_LETTERS.length] ?? String(index);
+    return `${base}${letter}`;
+  }
+  return base;
+}
+
+/**
+ * Fisher-Yates shuffle (returns a new array).
+ * Uses a seeded approach when a seed function is provided.
+ */
+function shuffleArray<T>(arr: readonly T[]): T[] {
+  const result = [...arr];
+  for (let i = result.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [result[i], result[j]] = [result[j] as T, result[i] as T];
+  }
+  return result;
+}
+
+/**
+ * Build a witness-id-to-displayLabel map that respects `anonymousInRoom`.
+ * Anonymous witnesses get shuffled indices.
+ */
+export function buildDisplayLabels(
+  witnesses: readonly Witness[],
+): Map<string, string> {
+  const labels = new Map<string, string>();
+  const anonymousWitnesses = witnesses.filter((w) => w.anonymousInRoom);
+  const shuffledAnon = shuffleArray(anonymousWitnesses);
+
+  for (const witness of witnesses) {
+    if (witness.anonymousInRoom) {
+      const anonIndex = shuffledAnon.indexOf(witness);
+      labels.set(
+        witness.id,
+        anonymousDisplayLabel(anonIndex, anonymousWitnesses.length, witness.knownFromYear),
+      );
+    } else {
+      labels.set(witness.id, witness.relation);
+    }
+  }
+  return labels;
+}
+
+/* ------------------------------------------------------------------ */
 /* Options                                                             */
 /* ------------------------------------------------------------------ */
 
@@ -85,14 +159,22 @@ export interface OpenDoorOptions {
 /* LLM plumbing                                                        */
 /* ------------------------------------------------------------------ */
 
-const TextResponseSchema = z.object({ text: z.string().min(1) });
+const TextResponseSchema = z.object({
+  text: z.string().min(1),
+  qids: z.array(z.string().min(1)).optional(),
+});
+
+export interface ParsedRoomResponse {
+  text: string;
+  qids: string[];
+}
 
 /**
- * Pull `{"text": "..."}` out of a response that may be wrapped in prose or a
- * markdown fence. Throws when there is no usable object, which the caller
- * turns into one retry and then a skipped turn.
+ * Pull `{"text": "...", "qids": [...]}` out of a response that may be wrapped
+ * in prose or a markdown fence. Throws when there is no usable object, which
+ * the caller turns into one retry and then a skipped turn.
  */
-export function parseRoomText(raw: string): string {
+export function parseRoomResponse(raw: string): ParsedRoomResponse {
   const trimmed = raw.trim();
   const attempts = [trimmed];
   const braced = /\{[\s\S]*\}/.exec(trimmed);
@@ -102,7 +184,8 @@ export function parseRoomText(raw: string): string {
 
   for (const candidate of attempts) {
     try {
-      return TextResponseSchema.parse(JSON.parse(candidate) as unknown).text;
+      const parsed = TextResponseSchema.parse(JSON.parse(candidate) as unknown);
+      return { text: parsed.text, qids: parsed.qids ?? [] };
     } catch {
       /* try the next, more forgiving candidate */
     }
@@ -110,17 +193,22 @@ export function parseRoomText(raw: string): string {
   throw new Error('room response did not contain a {"text": ...} object');
 }
 
+/** @deprecated Use {@link parseRoomResponse} instead. */
+export function parseRoomText(raw: string): string {
+  return parseRoomResponse(raw).text;
+}
+
 type Attempt<T> = { ok: true; value: T } | { ok: false; error: Error };
 
-async function attemptText(
+async function attemptResponse(
   llm: LLMClient,
   request: LLMCompletionRequest,
   attempts: number,
-): Promise<Attempt<string>> {
+): Promise<Attempt<ParsedRoomResponse>> {
   let error: Error = new Error('no attempt was made');
   for (let attempt = 0; attempt < Math.max(1, attempts); attempt += 1) {
     try {
-      return { ok: true, value: parseRoomText(await llm.complete(request)) };
+      return { ok: true, value: parseRoomResponse(await llm.complete(request)) };
     } catch (caught) {
       error = caught instanceof Error ? caught : new Error(String(caught));
     }
@@ -134,11 +222,16 @@ async function attemptText(
 
 type RoomMode = 'behind' | 'front';
 
+export interface MemoryEntry {
+  qid: string;
+  text: string;
+}
+
 interface PersonaContext {
   witness: Witness;
   subjectName: string;
   /** Raw evidence this persona alone may draw on (behindText or frontText). */
-  memory: string[];
+  memory: MemoryEntry[];
 }
 
 function buildSystem(context: PersonaContext, mode: RoomMode, topicSeed: string): string {
@@ -164,7 +257,7 @@ function buildSystem(context: PersonaContext, mode: RoomMode, topicSeed: string)
   if (witness.consentLevel === 'synthesis_only') {
     lines.push('你之前的话只授权用于合成转述,你只能用自己的话重讲,绝不能复述原话。');
   }
-  lines.push('只输出 JSON,形如 {"text":"你要说的话"},不要输出任何别的内容。');
+  lines.push('只输出 JSON,形如 {"text":"你要说的话","qids":["q1"]},qids 填你这句话依据的记忆编号(没有就给空数组)。不要输出任何别的内容。');
   return lines.join('\n');
 }
 
@@ -188,7 +281,7 @@ function buildUser(
   const memory =
     context.memory.length === 0
       ? '(你没有什么可讲的)'
-      : context.memory.map((entry) => `- ${entry}`).join('\n');
+      : context.memory.map((entry) => `- [${entry.qid}] ${entry.text}`).join('\n');
 
   return [
     `话题:${topicSeed}`,
@@ -218,6 +311,7 @@ function rewriteInstruction(consentHit: boolean, diagnosisWord: string | undefin
 interface ComposedLine {
   kind: 'speech' | 'stage';
   text: string;
+  qids: string[];
 }
 
 /**
@@ -240,18 +334,19 @@ async function composeLine(
   const system = buildSystem(context, mode, topicSeed);
   const user = buildUser(context, mode, topicSeed, transcript);
 
-  const first = await attemptText(llm, { system, user }, 2);
+  const first = await attemptResponse(llm, { system, user }, 2);
   if (!first.ok) return undefined;
 
   // The verbatim-overlap rule protects `synthesis_only` words only: a
   // `quotable` witness is allowed to be quoted back in their own voice.
+  const memoryTexts = context.memory.map((m) => m.text);
   const consentHit =
     context.witness.consentLevel === 'synthesis_only' &&
-    containsConsentOverlap(first.value, context.memory);
-  const diagnosisWord = findDiagnosisWord(first.value);
-  if (!consentHit && !diagnosisWord) return { kind: 'speech', text: first.value };
+    containsConsentOverlap(first.value.text, memoryTexts);
+  const diagnosisWord = findDiagnosisWord(first.value.text);
+  if (!consentHit && !diagnosisWord) return { kind: 'speech', text: first.value.text, qids: first.value.qids };
 
-  const rewritten = await attemptText(
+  const rewritten = await attemptResponse(
     llm,
     { system, user: `${user}\n\n${rewriteInstruction(consentHit, diagnosisWord)}` },
     2,
@@ -259,14 +354,15 @@ async function composeLine(
   if (rewritten.ok) {
     const stillQuoting =
       context.witness.consentLevel === 'synthesis_only' &&
-      containsConsentOverlap(rewritten.value, context.memory);
-    const stillDiagnosing = findDiagnosisWord(rewritten.value);
-    if (!stillQuoting && !stillDiagnosing) return { kind: 'speech', text: rewritten.value };
+      containsConsentOverlap(rewritten.value.text, memoryTexts);
+    const stillDiagnosing = findDiagnosisWord(rewritten.value.text);
+    if (!stillQuoting && !stillDiagnosing) return { kind: 'speech', text: rewritten.value.text, qids: rewritten.value.qids };
   }
 
   return {
     kind: 'stage',
     text: consentHit ? CONSENT_FALLBACK_STAGE : DIAGNOSIS_FALLBACK_STAGE,
+    qids: [],
   };
 }
 
@@ -282,7 +378,9 @@ const clampTurns = (value: number | undefined): number =>
 
 interface UtteranceDraft {
   witness: Witness;
-  memory: string[];
+  memory: MemoryEntry[];
+  /** Testimonies for this witness (for tier classification). */
+  witnessTestimonies: WitnessTestimony[];
 }
 
 /**
@@ -303,12 +401,14 @@ async function runSchedule(
   cap: number,
   turns: number,
   stageLine: () => string,
+  displayLabels: Map<string, string>,
 ): Promise<RoomUtterance[]> {
   const utterances: RoomUtterance[] = [];
 
   for (let turn = 0; turn < turns && utterances.length < cap; turn += 1) {
     for (const draft of drafts) {
       if (utterances.length >= cap) break;
+      const displayLabel = displayLabels.get(draft.witness.id) ?? draft.witness.relation;
       const context: PersonaContext = {
         witness: draft.witness,
         subjectName,
@@ -319,22 +419,41 @@ async function runSchedule(
         // No frontText => no invented opinion. Only a stage direction.
         utterances.push({
           witnessId: draft.witness.id,
-          displayLabel: draft.witness.relation,
+          displayLabel,
           text: stageLine(),
           kind: 'stage',
           at: now(),
+          tier: 'extrapolate',
+          anchors: [],
         });
         continue;
       }
 
       const line = await composeLine(llm, context, mode, topicSeed, utterances);
       if (!line) continue; // unparseable twice: skip this turn
+
+      // Build anchors from model-cited qids
+      const citedAnchors: UtteranceAnchor[] = line.qids.flatMap((qid) =>
+        draft.witnessTestimonies.map((t) => ({ testimonyId: t.testimonyId, qid })),
+      );
+
+      const { tier, anchors } = classifyUtterance({
+        text: line.text,
+        kind: line.kind,
+        witnessId: draft.witness.id,
+        consentLevel: draft.witness.consentLevel,
+        citedAnchors,
+        testimonies: draft.witnessTestimonies,
+      });
+
       utterances.push({
         witnessId: draft.witness.id,
-        displayLabel: draft.witness.relation,
+        displayLabel,
         text: line.text,
         kind: line.kind,
         at: now(),
+        tier,
+        anchors,
       });
     }
   }
@@ -379,14 +498,27 @@ export async function runBehindRoom(
   const testimonies = store.listBySubject(subjectId);
   const drafts = store
     .listWitnessesBySubject(subjectId)
-    .map((witness) => ({
-      witness,
-      memory: testimonies
-        .filter((testimony) => testimony.witnessId === witness.id)
-        .flatMap((testimony) => testimony.answers.map((answer) => answer.behindText))
-        .filter((text) => text.length > 0),
-    }))
+    .map((witness) => {
+      const witTestimonies = testimonies.filter((t) => t.witnessId === witness.id);
+      return {
+        witness,
+        memory: witTestimonies
+          .flatMap((testimony) =>
+            testimony.answers
+              .filter((answer) => answer.behindText.length > 0)
+              .map((answer) => ({ qid: answer.qid, text: answer.behindText })),
+          ),
+        witnessTestimonies: witTestimonies.map((t) => ({
+          testimonyId: t.id,
+          witnessId: t.witnessId,
+          answers: t.answers,
+        })),
+      };
+    })
     .filter((draft) => draft.memory.length > 0);
+
+  const witnesses = store.listWitnessesBySubject(subjectId);
+  const displayLabels = buildDisplayLabels(witnesses);
 
   let stageCursor = 0;
   const utterances = await runSchedule(
@@ -403,6 +535,7 @@ export async function runBehindRoom(
       stageCursor += 1;
       return line;
     },
+    displayLabels,
   );
 
   const room: Room = {
@@ -448,15 +581,25 @@ export async function openDoor(
 
   const subjectName = store.getSubject(room.subjectId)?.displayName ?? 'TA';
   const testimonies = store.listBySubject(room.subjectId);
-  const drafts = store.listWitnessesBySubject(room.subjectId).map((witness) => ({
-    witness,
-    memory: testimonies
-      .filter((testimony) => testimony.witnessId === witness.id)
-      .flatMap((testimony) =>
-        testimony.answers.map((answer) => answer.frontText ?? ''),
-      )
-      .filter((text) => text.length > 0),
-  }));
+  const witnesses = store.listWitnessesBySubject(room.subjectId);
+  const displayLabels = buildDisplayLabels(witnesses);
+  const drafts = witnesses.map((witness) => {
+    const witTestimonies = testimonies.filter((t) => t.witnessId === witness.id);
+    return {
+      witness,
+      memory: witTestimonies
+        .flatMap((testimony) =>
+          testimony.answers
+            .filter((answer) => (answer.frontText ?? '').length > 0)
+            .map((answer) => ({ qid: answer.qid, text: answer.frontText as string })),
+        ),
+      witnessTestimonies: witTestimonies.map((t) => ({
+        testimonyId: t.id,
+        witnessId: t.witnessId,
+        answers: t.answers,
+      })),
+    };
+  });
 
   let stageCursor = 0;
   const frontTranscript = await runSchedule(
@@ -473,6 +616,7 @@ export async function openDoor(
       stageCursor += 1;
       return line;
     },
+    displayLabels,
   );
 
   return store.updateRoomFront(roomId, frontTranscript);

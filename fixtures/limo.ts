@@ -10,9 +10,12 @@ import type {
   RoomUtterance,
   Subject,
   Testimony,
+  UtteranceAnchor,
+  UtteranceTier,
   Witness,
 } from '@openmimic/shared';
 import type { Store } from '@openmimic/kernel';
+import { classifyUtterance, type WitnessTestimony } from '@openmimic/engine-room';
 
 /**
  * The demo persona: 林默, 28, just quit a stable job without a next one.
@@ -1011,6 +1014,8 @@ interface DemoUtterance {
   displayLabel: string;
   text: string;
   kind: 'speech' | 'stage';
+  /** Model-cited qids for this line (used for tier classification). */
+  qids?: string[];
 }
 
 const BEHIND_LINES: readonly DemoUtterance[] = [
@@ -1019,54 +1024,63 @@ const BEHIND_LINES: readonly DemoUtterance[] = [
     displayLabel: '前下属',
     kind: 'speech',
     text: '前两天新人培训,我发现大家还在用默哥当年那套文档模板,没人改得动。',
+    qids: ['q1'],
   },
   {
     witnessId: 'w-faxiao',
     displayLabel: '发小',
     kind: 'speech',
     text: '他最近联系少了。上周约饭,推了,说在忙。',
+    qids: ['q1'],
   },
   {
     witnessId: 'w-netizen',
     displayLabel: '网友',
     kind: 'speech',
     text: '忙倒未必。他游戏在线时长上来了,以前只有周末上线,这两周天天在。',
+    qids: ['q1'],
   },
   {
     witnessId: 'w-ex',
     displayLabel: '前任',
     kind: 'speech',
     text: '他是不是又开始跑步了,朋友圈那个步数,一天一万多。',
+    qids: ['q1'],
   },
   {
     witnessId: 'w-subordinate',
     displayLabel: '前下属',
     kind: 'speech',
     text: '有可能,他说过想把作息倒回来。在职那会儿天天两点睡。',
+    qids: ['q1'],
   },
   {
     witnessId: 'w-mother',
     displayLabel: '母亲',
     kind: 'speech',
     text: '他在家吃饭倒是比以前多了,我做什么都吃完。就是话少。',
+    qids: ['q1'],
   },
   {
     witnessId: 'w-faxiao',
     displayLabel: '发小',
     kind: 'speech',
     text: '话少正常,他从小这样,心里有事就安静。',
+    qids: ['q4'],
   },
   {
     witnessId: 'w-boss',
     displayLabel: '前上司',
     kind: 'speech',
     text: '我上周把他推给一个朋友的公司,他说先不看机会,想歇一段。挺好,会歇是本事。',
+    qids: ['q1'],
   },
   {
     witnessId: 'w-netizen',
     displayLabel: '网友',
     kind: 'speech',
     text: '他网上吐槽工作其实挺多的,估计现实里一句没说过。',
+    qids: ['q1'],
   },
   {
     witnessId: 'w-ex',
@@ -1100,6 +1114,7 @@ const FRONT_LINES: readonly DemoUtterance[] = [
     displayLabel: '前下属',
     kind: 'speech',
     text: '默哥,你那套模板我们还在用,新人都得先学那个。',
+    qids: ['q1'],
   },
   {
     witnessId: 'w-mother',
@@ -1112,6 +1127,7 @@ const FRONT_LINES: readonly DemoUtterance[] = [
     displayLabel: '前上司',
     kind: 'speech',
     text: '歇够了跟我说一声,那边机会一直有。',
+    qids: ['q7'],
   },
   {
     witnessId: 'w-ex',
@@ -1151,14 +1167,55 @@ const FRONT_LINES: readonly DemoUtterance[] = [
   },
 ];
 
-const toUtterances = (lines: readonly DemoUtterance[]): RoomUtterance[] =>
-  lines.map((line, index) => ({
-    witnessId: line.witnessId,
-    displayLabel: line.displayLabel,
-    text: line.text,
-    kind: line.kind,
-    at: roomAt(index * 15),
-  }));
+/**
+ * Build the witness testimonies lookup for tier classification.
+ * Uses the static demo data.
+ */
+function buildDemoWitnessTestimonies(): Map<string, WitnessTestimony[]> {
+  const map = new Map<string, WitnessTestimony[]>();
+  for (const w of DEMO_WITNESSES) {
+    const testimonyId = `t-${w.id.replace(/^w-/, '')}`;
+    const wt: WitnessTestimony = {
+      testimonyId,
+      witnessId: w.id,
+      answers: w.answers.map((a) => ({
+        qid: a.qid,
+        behindText: a.behindText,
+        ...(a.frontText !== undefined ? { frontText: a.frontText } : {}),
+      })),
+    };
+    map.set(w.id, [wt]);
+  }
+  return map;
+}
+
+const toUtterances = (lines: readonly DemoUtterance[]): RoomUtterance[] => {
+  const wtMap = buildDemoWitnessTestimonies();
+  return lines.map((line, index) => {
+    const testimonies = wtMap.get(line.witnessId) ?? [];
+    // Build cited anchors from qids
+    const citedAnchors: UtteranceAnchor[] = (line.qids ?? []).flatMap((qid) =>
+      testimonies.map((t) => ({ testimonyId: t.testimonyId, qid })),
+    );
+    const { tier, anchors } = classifyUtterance({
+      text: line.text,
+      kind: line.kind,
+      witnessId: line.witnessId,
+      consentLevel: DEMO_CONSENT_LEVEL,
+      citedAnchors,
+      testimonies,
+    });
+    return {
+      witnessId: line.witnessId,
+      displayLabel: line.displayLabel,
+      text: line.text,
+      kind: line.kind,
+      at: roomAt(index * 15),
+      tier,
+      anchors,
+    };
+  });
+};
 
 /* ------------------------------------------------------------------ */
 /* Assembled demo entities                                             */
