@@ -1,4 +1,5 @@
-import type { Testimony } from '@openmimic/shared';
+import type { Claim, Testimony } from '@openmimic/shared';
+import { cosine, type EmbeddingClient } from '@openmimic/kernel';
 
 /** A candidate claim under examination. */
 export interface CandidateClaim {
@@ -6,6 +7,12 @@ export interface CandidateClaim {
   text: string;
   witnessId: string;
   evidenceTestimonyIds: string[];
+}
+
+/** A pair of claims from different witnesses that may be related. */
+export interface ClaimPair {
+  claimA: Claim;
+  claimB: Claim;
 }
 
 /** A piece of material from another witness that appears to contradict a claim. */
@@ -27,6 +34,14 @@ export interface ConflictFinder {
     claim: CandidateClaim,
     testimonies: readonly Testimony[],
   ): ConflictMaterial[];
+}
+
+/**
+ * Finds pairs of claims from different witnesses that are semantically
+ * related and should undergo relation judgment.
+ */
+export interface ClaimPairFinder {
+  findPairs(claims: readonly Claim[]): Promise<ClaimPair[]>;
 }
 
 const CJK_CHARACTER = /[\u3400-\u9fff]/;
@@ -109,5 +124,71 @@ export class KeywordConflictFinder implements ConflictFinder {
       });
     }
     return conflicts;
+  }
+}
+
+/**
+ * Embedding-based claim pair finder: uses cosine similarity between
+ * claim text embeddings to find related claims from different witnesses.
+ */
+export class EmbeddingClaimPairFinder implements ClaimPairFinder {
+  constructor(
+    private readonly embedding: EmbeddingClient,
+    private readonly threshold: number = 0.55,
+  ) {}
+
+  async findPairs(claims: readonly Claim[]): Promise<ClaimPair[]> {
+    if (claims.length < 2) return [];
+    const texts = claims.map((c) => c.text);
+    const vectors = await this.embedding.embed(texts);
+    const pairs: ClaimPair[] = [];
+
+    for (let i = 0; i < claims.length; i++) {
+      for (let j = i + 1; j < claims.length; j++) {
+        const a = claims[i]!;
+        const b = claims[j]!;
+        // Only pair claims from different witnesses
+        if (a.witnessIds?.[0] === b.witnessIds?.[0] && a.witnessIds?.[0] !== undefined) continue;
+        // Use evidence to infer witness origin for claims without witnessIds
+        const evidenceOverlap = a.evidence.some((e) => b.evidence.includes(e));
+        if (evidenceOverlap) continue;
+
+        const sim = cosine(vectors[i]!, vectors[j]!);
+        if (sim >= this.threshold) {
+          pairs.push({ claimA: a, claimB: b });
+        }
+      }
+    }
+    return pairs;
+  }
+}
+
+/**
+ * Keyword-based claim pair finder: fallback when no embedding is available.
+ * Pairs claims from different witnesses that share keyword overlap.
+ */
+export class KeywordClaimPairFinder implements ClaimPairFinder {
+  constructor(private readonly minimumOverlap: number = 2) {}
+
+  async findPairs(claims: readonly Claim[]): Promise<ClaimPair[]> {
+    if (claims.length < 2) return [];
+    const pairs: ClaimPair[] = [];
+    const tokenSets = claims.map((c) => tokenize(c.text));
+
+    for (let i = 0; i < claims.length; i++) {
+      for (let j = i + 1; j < claims.length; j++) {
+        const a = claims[i]!;
+        const b = claims[j]!;
+        if (a.witnessIds?.[0] === b.witnessIds?.[0] && a.witnessIds?.[0] !== undefined) continue;
+        const evidenceOverlap = a.evidence.some((e) => b.evidence.includes(e));
+        if (evidenceOverlap) continue;
+
+        const shared = [...tokenSets[i]!].filter((t) => tokenSets[j]!.has(t));
+        if (shared.length >= this.minimumOverlap) {
+          pairs.push({ claimA: a, claimB: b });
+        }
+      }
+    }
+    return pairs;
   }
 }

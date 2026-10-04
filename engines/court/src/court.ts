@@ -1,32 +1,73 @@
 import { randomUUID } from 'node:crypto';
 import { z } from 'zod';
 import {
-  CONVICTION_DECAY_PER_CHALLENGE,
-  CONVICTION_QUALIFY,
-  CONVICTION_SURVIVE,
   CONVICTION_UNCHALLENGED_CAP,
   type Claim,
   type ClaimStatus,
   type CourtEvent,
   type CourtReport,
   type CourtSession,
+  type Divergence,
+  type Episode,
   type Testimony,
   type Witness,
 } from '@openmimic/shared';
-import type { Store } from '@openmimic/kernel';
-import { KeywordConflictFinder, type ConflictFinder, type ConflictMaterial } from './conflict';
+import type { EmbeddingClient, Store } from '@openmimic/kernel';
+import {
+  EmbeddingClaimPairFinder,
+  KeywordClaimPairFinder,
+  KeywordConflictFinder,
+  type ClaimPairFinder,
+  type ConflictFinder,
+} from './conflict';
 import type { LLMClient, LLMCompletionRequest } from './llm';
 
 /* ------------------------------------------------------------------ */
 /* LLM response contracts                                              */
 /* ------------------------------------------------------------------ */
 
+const CandidateEpisodeSchema = z.object({
+  qid: z.string().min(1),
+  text: z.string().min(1),
+  situation: z.string().optional(),
+  audience: z.string().optional(),
+  timeHint: z.string().optional(),
+});
+
 const CandidateClaimSchema = z.object({
   text: z.string().min(1),
+  kind: z.enum(['fact', 'observation', 'pattern']).optional(),
+  domain: z.enum(['observable', 'internal', 'evaluative']).optional(),
+  context: z
+    .object({
+      audience: z.string().optional(),
+      situation: z.string().optional(),
+      period: z.string().optional(),
+    })
+    .optional(),
   evidenceTestimonyIds: z.array(z.string()).default([]),
+  episodeTexts: z.array(z.string()).optional(),
 });
-const CandidateListSchema = z.array(CandidateClaimSchema);
 
+const FilingResponseSchema = z.object({
+  episodes: z.array(CandidateEpisodeSchema).default([]),
+  claims: z.array(CandidateClaimSchema).default([]),
+});
+
+const RelationSchema = z.object({
+  relation: z.enum(['agreement', 'perspective_difference', 'factual_conflict', 'unrelated']),
+  topic: z.string().optional(),
+  reason: z.string().optional(),
+});
+export type CourtRelation = z.infer<typeof RelationSchema>;
+
+const ConfrontationVerdictSchema = z.object({
+  verdict: z.enum(['qualified', 'unresolved']),
+  qualifier: z.string().optional(),
+  reason: z.string().optional(),
+});
+
+// Legacy export for tests that still reference it
 const VerdictSchema = z.object({
   verdict: z.enum(['survive', 'qualify', 'reject']),
   qualifier: z.string().min(1).optional(),
@@ -38,24 +79,37 @@ export type CourtVerdict = z.infer<typeof VerdictSchema>;
 /* Prompts                                                             */
 /* ------------------------------------------------------------------ */
 
-const FILING_SYSTEM = [
-  '你是人格法庭的立案书记员。输入是几位证人关于同一个人的证言。',
-  '你的任务:把证言中的可对质论断抽成候选论断。',
-  '只输出 JSON 数组,不要输出任何解释或 markdown 代码块。',
-  '数组元素形如 {"text":"论断原文","evidenceTestimonyIds":["证言id"]}。',
-  '每个论断必须至少引用一条证言 id,且只能引用输入中出现的 id。',
-  '如果这段话里没有可对质的论断,输出 []。',
+const FILING_SYSTEM_V2 = [
+  '你是人格法庭的立案书记员。输入是一位证人关于同一个人的证言。',
+  '你的任务:',
+  '1. 从证言中摘录具体事例(episodes):逐字复制原文中描述具体事件/经历的片段。',
+  '2. 把证言中的可对质论断抽成候选论断(claims),写成带情境的观察,不写孤立形容词。',
+  '   kind=fact 只用于可核对的事件。',
+  '只输出 JSON 对象,不要输出任何解释或 markdown 代码块。',
+  '形如 {"episodes":[{"qid":"问题id","text":"逐字摘录","situation":"场合","audience":"对谁","timeHint":"时间提示"}],',
+  '"claims":[{"text":"论断","kind":"pattern","domain":"observable","context":{"audience":"对谁","situation":"场合","period":"时期"},',
+  '"evidenceTestimonyIds":["证言id"],"episodeTexts":["事例原文"]}]}',
+  '每个论断必须至少引用一条证言 id。episode.text 必须是证言原文的逐字子串。',
 ].join('\n');
 
-const CHALLENGE_SYSTEM = [
-  '你是人格法庭的质询智能体,专攻证言之间的矛盾。',
-  '输入是一条候选论断,以及其他证人证言中与之冲突的原文材料。',
-  '请裁定这条论断在质询后应当:',
-  '- survive:冲突不成立,论断原样存活;',
-  '- qualify:论断只在限定条件下成立,给出 qualifier;',
-  '- reject:断定与证据矛盾,论断不成立。',
-  '只输出 JSON 对象,不要输出任何解释或 markdown 代码块,形如:',
-  '{"verdict":"survive"|"qualify"|"reject","qualifier":"限定条件(可选)","reason":"裁定理由"}',
+const RELATION_SYSTEM = [
+  '你是人格法庭的关系判定智能体。',
+  '输入是两条来自不同证人的候选论断。',
+  '请判定它们的关系:',
+  '- agreement:两人说的本质相同,可合并;',
+  '- perspective_difference:两人从不同角度看同一个人,都对,不需要裁决;',
+  '- factual_conflict:对同一件事实(发生没发生、怎么发生的)的矛盾;',
+  '- unrelated:无关。',
+  '只输出 JSON 对象:{"relation":"...","topic":"...","reason":"..."}',
+].join('\n');
+
+const CONFRONTATION_SYSTEM = [
+  '你是人格法庭的对质智能体。',
+  '两条论断存在事实性冲突。你不替任何一方判定事实真假。',
+  '请给出:',
+  '- qualified:两条可以各加一个限定语共存;',
+  '- unresolved:无法调和,两条都标记为 contested。',
+  '只输出 JSON 对象:{"verdict":"qualified"|"unresolved","qualifier":"限定语","reason":"理由"}',
 ].join('\n');
 
 /* ------------------------------------------------------------------ */
@@ -68,11 +122,6 @@ function toError(caught: unknown): Error {
   return caught instanceof Error ? caught : new Error(String(caught));
 }
 
-/**
- * Ask the LLM and parse its reply, retrying on any failure (network error or
- * unparseable JSON). Returns a result object so the caller can decide what a
- * failure means — the pipeline never fabricates content on a failed call.
- */
 async function attemptJson<T>(
   llm: LLMClient,
   request: LLMCompletionRequest,
@@ -133,16 +182,81 @@ export function extractJson(text: string): unknown {
 const clamp01 = (value: number): number => Math.min(1, Math.max(0, value));
 const round2 = (value: number): number => Math.round(value * 100) / 100;
 
-/**
- * Each cross-examination round survived beyond the first shaves a little
- * conviction. W1 runs a single round per claim, so the decay is dormant here
- * and becomes active once W2 allows re-challenging.
- */
-function applyChallengeDecay(base: number, survivedRounds: number): number {
-  return base - CONVICTION_DECAY_PER_CHALLENGE * Math.max(0, survivedRounds - 1);
+/* ------------------------------------------------------------------ */
+/* computeConviction — pure function, per §2.3.4                       */
+/* ------------------------------------------------------------------ */
+
+export interface ConvictionInput {
+  /** Number of independent witness ids backing this claim. */
+  witnessCount: number;
+  /** Whether the claim has any supporting episode. */
+  hasEpisode: boolean;
+  /** Whether all supporting episodes are elicited (from followup questions). */
+  allEpisodesElicited: boolean;
+  /** Whether the claim was ever paired with another claim. */
+  wasPaired: boolean;
+  /** Whether the claim has status 'contested'. */
+  isContested: boolean;
 }
 
-/** Render one witness's testimonies for the filing prompt. */
+/**
+ * Compute conviction score for a claim based on evidence quality.
+ *
+ * Pure function: no side effects, no store access. Designed for unit testing.
+ */
+export function computeConviction(input: ConvictionInput): number {
+  if (input.isContested) return 0;
+
+  // Base 0.5; +0.12 per additional independent witness, cap 0.9
+  let score = 0.5 + Math.max(0, input.witnessCount - 1) * 0.12;
+  score = Math.min(score, 0.9);
+
+  // No episode support: cap at 0.55
+  if (!input.hasEpisode) {
+    score = Math.min(score, 0.55);
+  }
+
+  // All episodes elicited: multiply by 0.85
+  if (input.hasEpisode && input.allEpisodesElicited) {
+    score *= 0.85;
+  }
+
+  // Never paired: cap at CONVICTION_UNCHALLENGED_CAP
+  if (!input.wasPaired) {
+    score = Math.min(score, CONVICTION_UNCHALLENGED_CAP);
+  }
+
+  return round2(clamp01(score));
+}
+
+/* ------------------------------------------------------------------ */
+/* No-LLM degradation: sentence splitting for episodes                 */
+/* ------------------------------------------------------------------ */
+
+const TIME_WORDS = /那次|有一回|去年|上个月|那天|前年|那会儿|那阵子|有次|上周|上一次|last|once|ago/;
+
+/** Degrade: split by sentence and pick those that look like episodes. */
+function degradeToEpisodes(
+  text: string,
+  qid: string,
+): Array<{ qid: string; text: string }> {
+  const sentences = text.split(/[。！？!?\n]+/).map((s) => s.trim()).filter((s) => s.length > 0);
+  const episodes: Array<{ qid: string; text: string }> = [];
+  for (const sentence of sentences) {
+    const hasNumber = /\d/.test(sentence);
+    const hasQuote = /["""''「」]/.test(sentence);
+    const hasTimeWord = TIME_WORDS.test(sentence);
+    if (hasNumber || hasQuote || hasTimeWord) {
+      episodes.push({ qid, text: sentence });
+    }
+  }
+  return episodes;
+}
+
+/* ------------------------------------------------------------------ */
+/* Filing prompt                                                       */
+/* ------------------------------------------------------------------ */
+
 function buildFilingUser(witness: Witness, testimonies: readonly Testimony[]): string {
   const lines: string[] = [
     `证人 id: ${witness.id}`,
@@ -154,37 +268,46 @@ function buildFilingUser(witness: Witness, testimonies: readonly Testimony[]): s
     lines.push(`- 证言 id: ${testimony.id}`);
     testimony.answers.forEach((answer, index) => {
       lines.push(`  [${index + 1}] (qid=${answer.qid}) ${answer.behindText}`);
+      if (answer.followupText) {
+        lines.push(`  [${index + 1}-追问] (qid=${answer.qid}) ${answer.followupText}`);
+      }
     });
     if (testimony.freeText) lines.push(`  自由陈述: ${testimony.freeText}`);
   }
   return lines.join('\n');
 }
 
-function buildChallengeUser(
-  claimText: string,
-  conflicts: readonly ConflictMaterial[],
-): string {
-  const lines: string[] = [`候选论断: ${claimText}`, '冲突材料:'];
-  for (const conflict of conflicts) {
-    lines.push(
-      `- 证人 ${conflict.witnessId}(证言 ${conflict.testimonyId},共同关键词: ${conflict.matchedKeywords.join(', ')}): ${conflict.snippet}`,
-    );
-  }
-  return lines.join('\n');
+function buildRelationUser(claimA: Claim, claimB: Claim): string {
+  return [
+    `论断A (证人 ${claimA.witnessIds?.[0] ?? '?'}): ${claimA.text}`,
+    `论断B (证人 ${claimB.witnessIds?.[0] ?? '?'}): ${claimB.text}`,
+  ].join('\n');
+}
+
+function buildConfrontationUser(claimA: Claim, claimB: Claim): string {
+  return [
+    `论断A (证人 ${claimA.witnessIds?.[0] ?? '?'}): ${claimA.text}`,
+    `论断B (证人 ${claimB.witnessIds?.[0] ?? '?'}): ${claimB.text}`,
+    '请判定这两条事实性冲突的结果。',
+  ].join('\n');
 }
 
 /* ------------------------------------------------------------------ */
-/* Pipeline                                                            */
+/* Pipeline v2                                                         */
 /* ------------------------------------------------------------------ */
 
 export interface RunCourtOptions {
   /** Defaults to {@link KeywordConflictFinder} (W1 placeholder). */
   conflictFinder?: ConflictFinder;
+  /** Claim pair finder for relation judgment. */
+  pairFinder?: ClaimPairFinder;
+  /** Embedding client for pair finding. */
+  embedding?: EmbeddingClient;
   /** Id factory, injectable for deterministic tests. */
   newId?: () => string;
   /** Clock, injectable for deterministic tests. */
   now?: () => string;
-  /** Filing attempts per witness before skipping them (default 2 = initial + 1 retry). */
+  /** Filing attempts per witness before skipping them (default 2). */
   filingAttempts?: number;
 }
 
@@ -193,18 +316,22 @@ interface InternalCandidate {
   text: string;
   witnessId: string;
   evidenceTestimonyIds: string[];
+  kind?: 'fact' | 'observation' | 'pattern';
+  domain?: 'observable' | 'internal' | 'evaluative';
+  context?: { audience?: string; situation?: string; period?: string };
+  episodeTexts?: string[];
 }
 
 /**
- * Run the W1 adversarial pipeline for one witness:
+ * Run the v2 adversarial pipeline for one subject:
  *
  * 1. **Filing** — each witness's testimony is handed to the LLM, which
- *    proposes candidate claims anchored to testimony ids.
- * 2. **Cross-examination** — each candidate is matched against *other*
- *    witnesses' testimony; a conflict triggers one LLM judgment.
- * 3. **Adjudication** — verdicts become claims (with qualifiers and a
- *    conviction score), the transcript is recorded, a report is produced and
- *    `court.finished` is emitted.
+ *    extracts episodes (verbatim excerpts) and proposes claims with context.
+ * 2. **Pairing** — claims from different witnesses are compared (by embedding
+ *    cosine or keyword overlap) to find potentially related pairs.
+ * 3. **Relation judgment** — each pair gets an LLM judgment: agreement,
+ *    perspective_difference, factual_conflict, or unrelated.
+ * 4. **Conviction** — `computeConviction` calculates scores based on evidence.
  */
 export async function runCourt(
   subjectId: string,
@@ -212,7 +339,6 @@ export async function runCourt(
   llm: LLMClient,
   options: RunCourtOptions = {},
 ): Promise<CourtSession> {
-  const conflictFinder = options.conflictFinder ?? new KeywordConflictFinder();
   const newId = options.newId ?? (() => randomUUID());
   const now = options.now ?? (() => new Date().toISOString());
 
@@ -220,7 +346,6 @@ export async function runCourt(
   const startedAt = now();
   const transcript: CourtEvent[] = [];
 
-  // Persist the session up-front so the transcript is durable from the start.
   store.putCourtSession({
     id: sessionId,
     subjectId,
@@ -230,9 +355,12 @@ export async function runCourt(
 
   const witnesses = store.listWitnessesBySubject(subjectId);
   const allTestimonies = store.listBySubject(subjectId);
+  const pairedClaimIds = new Set<string>();
 
-  /* ---------------------------- 1. Filing --------------------------- */
+  /* ----------------------------- 1. Filing ----------------------------- */
   const candidates: InternalCandidate[] = [];
+  const filedEpisodes: Episode[] = [];
+
   for (const witness of witnesses) {
     const testimonies = allTestimonies.filter((t) => t.witnessId === witness.id);
     if (testimonies.length === 0) continue;
@@ -240,31 +368,121 @@ export async function runCourt(
 
     const filing = await attemptJson(
       llm,
-      { system: FILING_SYSTEM, user: buildFilingUser(witness, testimonies) },
-      (text) => CandidateListSchema.parse(extractJson(text)),
+      { system: FILING_SYSTEM_V2, user: buildFilingUser(witness, testimonies) },
+      (text) => FilingResponseSchema.parse(extractJson(text)),
       options.filingAttempts ?? 2,
     );
 
     if (!filing.ok) {
+      // Degradation: sentence-split for episodes, no claims
       transcript.push({
         type: 'claim_proposed',
         witnessId: witness.id,
-        text: `立案失败,该证人(关系:${witness.relation})的证言本轮不产生论断:${filing.error.message}`,
+        text: `立案失败,降级为句切分:${filing.error.message}`,
         at: now(),
       });
+
+      for (const testimony of testimonies) {
+        for (const answer of testimony.answers) {
+          const degraded = degradeToEpisodes(answer.behindText, answer.qid);
+          for (const ep of degraded) {
+            // Validate as verbatim substring
+            if (answer.behindText.includes(ep.text)) {
+              const episodeId = newId();
+              try {
+                const episode = store.putEpisode({
+                  id: episodeId,
+                  subjectId,
+                  witnessId: witness.id,
+                  testimonyId: testimony.id,
+                  qid: ep.qid,
+                  text: ep.text,
+                  elicited: false,
+                });
+                filedEpisodes.push(episode);
+              } catch {
+                // Skip invalid episodes silently
+              }
+            }
+          }
+        }
+      }
       continue;
     }
 
-    for (const proposed of filing.value) {
+    // Process episodes
+    for (const ep of filing.value.episodes) {
+      // Find which testimony/answer this episode belongs to
+      let anchored = false;
+      for (const testimony of testimonies) {
+        const answer = testimony.answers.find((a) => a.qid === ep.qid);
+        if (!answer) continue;
+
+        // Check behindText first, then followupText
+        let elicited = false;
+        if (answer.behindText.includes(ep.text)) {
+          elicited = false;
+        } else if (answer.followupText && answer.followupText.includes(ep.text)) {
+          elicited = true;
+        } else {
+          transcript.push({
+            type: 'claim_proposed',
+            witnessId: witness.id,
+            text: `事例逐字校验失败,丢弃: "${ep.text.slice(0, 40)}…"`,
+            at: now(),
+          });
+          continue;
+        }
+
+        const episodeId = newId();
+        try {
+          const episode = store.putEpisode({
+            id: episodeId,
+            subjectId,
+            witnessId: witness.id,
+            testimonyId: testimony.id,
+            qid: ep.qid,
+            text: ep.text,
+            elicited,
+            situation: ep.situation,
+            audience: ep.audience,
+            timeHint: ep.timeHint,
+          });
+          filedEpisodes.push(episode);
+          anchored = true;
+        } catch {
+          transcript.push({
+            type: 'claim_proposed',
+            witnessId: witness.id,
+            text: `事例入库失败,丢弃: "${ep.text.slice(0, 40)}…"`,
+            at: now(),
+          });
+        }
+        break;
+      }
+      if (!anchored) {
+        transcript.push({
+          type: 'claim_proposed',
+          witnessId: witness.id,
+          text: `事例未找到对应证言,丢弃: qid=${ep.qid}`,
+          at: now(),
+        });
+      }
+    }
+
+    // Process claims
+    for (const proposed of filing.value.claims) {
       const cited = proposed.evidenceTestimonyIds.filter((id) => ownTestimonyIds.includes(id));
-      // A claim extracted from this witness may only cite this witness's words.
-      // Fall back to all of their testimony if the model cited nothing usable.
       const evidence = cited.length > 0 ? cited : ownTestimonyIds;
       const candidate: InternalCandidate = {
         id: newId(),
         text: proposed.text,
         witnessId: witness.id,
         evidenceTestimonyIds: evidence,
+        kind: proposed.kind,
+        domain: proposed.domain,
+        context: proposed.context,
+        episodeTexts: proposed.episodeTexts,
       };
       candidates.push(candidate);
       transcript.push({
@@ -277,130 +495,259 @@ export async function runCourt(
     }
   }
 
-  /* ----------------------- 2. Cross-examination --------------------- */
-  const verdicts = new Map<string, CourtVerdict>();
-  const challenged = new Set<string>();
-
+  /* ---- Persist initial claims so pairing can read them ---------------- */
+  const persistedClaims: Claim[] = [];
   for (const candidate of candidates) {
-    const conflicts = conflictFinder.findConflicts(candidate, allTestimonies);
-    if (conflicts.length === 0) {
-      verdicts.set(candidate.id, { verdict: 'survive', reason: 'no conflicting material found' });
-      transcript.push({
-        type: 'defense',
-        claimId: candidate.id,
-        witnessId: candidate.witnessId,
-        text: '未找到冲突材料,论断未经对质直接存活(置信上限 0.6)',
-        at: now(),
-      });
-      continue;
-    }
-
-    challenged.add(candidate.id);
-    const conflictingWitnesses = [...new Set(conflicts.map((c) => c.witnessId))];
-    const keywords = [...new Set(conflicts.flatMap((c) => c.matchedKeywords))].sort();
-    transcript.push({
-      type: 'challenge',
-      claimId: candidate.id,
-      witnessId: conflictingWitnesses[0],
-      text: `质询来自证人 ${conflictingWitnesses.join(', ')},冲突关键词: ${keywords.join(', ')}`,
-      at: now(),
-    });
-
-    const judgment = await attemptJson(
-      llm,
-      {
-        system: CHALLENGE_SYSTEM,
-        user: buildChallengeUser(candidate.text, conflicts),
-      },
-      (text) => VerdictSchema.parse(extractJson(text)),
-      1,
+    // Find matching episode ids
+    const myEpisodes = filedEpisodes.filter(
+      (ep) => ep.witnessId === candidate.witnessId,
     );
-
-    if (!judgment.ok) {
-      verdicts.set(candidate.id, {
-        verdict: 'reject',
-        reason: `质询判定失败,按未通过处理:${judgment.error.message}`,
-      });
-      continue;
-    }
-
-    verdicts.set(candidate.id, judgment.value);
-    transcript.push({
-      type: 'defense',
-      claimId: candidate.id,
-      witnessId: candidate.witnessId,
-      text: judgment.value.reason ?? `裁定:${judgment.value.verdict}`,
-      at: now(),
-    });
-  }
-
-  /* ------------------------- 3. Adjudication ------------------------ */
-  const claims: Claim[] = [];
-
-  for (const candidate of candidates) {
-    const verdict = verdicts.get(candidate.id) ?? { verdict: 'reject' as const };
-    const wasChallenged = challenged.has(candidate.id);
-
-    let status: ClaimStatus;
-    let conviction: number;
-    let qualifiers: string[] | undefined;
-
-    if (verdict.verdict === 'survive') {
-      status = 'surviving';
-      conviction = wasChallenged
-        ? applyChallengeDecay(CONVICTION_SURVIVE, 1)
-        : CONVICTION_UNCHALLENGED_CAP;
-    } else if (verdict.verdict === 'qualify') {
-      status = 'surviving';
-      conviction = applyChallengeDecay(CONVICTION_QUALIFY, 1);
-      qualifiers = [verdict.qualifier ?? '经质询后仅在限定条件下成立'];
-    } else {
-      status = 'retired';
-      conviction = 0;
-    }
+    const episodeIds = myEpisodes.map((ep) => ep.id);
 
     const claim: Claim = {
       id: candidate.id,
       subjectId,
       text: candidate.text,
-      conviction: round2(clamp01(conviction)),
+      conviction: 0, // placeholder, will be computed after pairing
       evidence: candidate.evidenceTestimonyIds,
-      ...(qualifiers ? { qualifiers } : {}),
-      status,
+      status: 'surviving',
       courtSessionId: sessionId,
+      kind: candidate.kind ?? 'pattern',
+      domain: candidate.domain,
+      context: candidate.context,
+      witnessIds: [candidate.witnessId],
+      episodeIds: episodeIds.length > 0 ? episodeIds : undefined,
     };
     store.putClaim(claim);
-    claims.push(claim);
+    persistedClaims.push(claim);
+  }
+
+  /* ---------------------- 2. Pairing ----------------------------------- */
+  const pairFinder: ClaimPairFinder =
+    options.pairFinder ??
+    (options.embedding
+      ? new EmbeddingClaimPairFinder(options.embedding)
+      : new KeywordClaimPairFinder());
+
+  const pairs = await pairFinder.findPairs(persistedClaims);
+
+  /* ---------------------- 3. Relation judgment ------------------------- */
+  const divergences: Divergence[] = [];
+
+  for (const pair of pairs) {
+    pairedClaimIds.add(pair.claimA.id);
+    pairedClaimIds.add(pair.claimB.id);
+
+    const judgment = await attemptJson(
+      llm,
+      {
+        system: RELATION_SYSTEM,
+        user: buildRelationUser(pair.claimA, pair.claimB),
+      },
+      (text) => RelationSchema.parse(extractJson(text)),
+      1,
+    );
+
+    if (!judgment.ok) {
+      transcript.push({
+        type: 'challenge',
+        claimId: pair.claimA.id,
+        text: `关系判定失败: ${judgment.error.message}`,
+        at: now(),
+      });
+      continue;
+    }
+
+    const relation = judgment.value;
+
+    if (relation.relation === 'agreement') {
+      // Merge: keep claimA, add claimB's evidence and witnessIds
+      const merged = store.getClaim(pair.claimA.id);
+      if (merged) {
+        const bClaim = store.getClaim(pair.claimB.id);
+        const mergedEvidence = [...new Set([...merged.evidence, ...(bClaim?.evidence ?? [])])];
+        const mergedWitnessIds = [...new Set([...(merged.witnessIds ?? []), ...(bClaim?.witnessIds ?? [])])];
+        const mergedEpisodeIds = [...new Set([...(merged.episodeIds ?? []), ...(bClaim?.episodeIds ?? [])])];
+        store.putClaim({
+          ...merged,
+          evidence: mergedEvidence,
+          witnessIds: mergedWitnessIds,
+          episodeIds: mergedEpisodeIds.length > 0 ? mergedEpisodeIds : undefined,
+        });
+        // Retire the merged claim
+        store.putClaim({ ...pair.claimB, status: 'retired' });
+      }
+      transcript.push({
+        type: 'defense',
+        claimId: pair.claimA.id,
+        text: `agreement: 与论断 ${pair.claimB.id} 合并 (${relation.reason ?? ''})`,
+        at: now(),
+      });
+
+    } else if (relation.relation === 'perspective_difference') {
+      // Both kept, write divergence
+      const divId = newId();
+      const divergence: Divergence = {
+        id: divId,
+        subjectId,
+        courtSessionId: sessionId,
+        topic: relation.topic ?? pair.claimA.text.slice(0, 50),
+        type: 'perspective',
+        positions: [
+          { witnessId: pair.claimA.witnessIds?.[0] ?? '', claimId: pair.claimA.id, summary: pair.claimA.text },
+          { witnessId: pair.claimB.witnessIds?.[0] ?? '', claimId: pair.claimB.id, summary: pair.claimB.text },
+        ],
+        resolution: 'kept_both',
+      };
+      store.putDivergence(divergence);
+      divergences.push(divergence);
+
+      transcript.push({
+        type: 'challenge',
+        claimId: pair.claimA.id,
+        text: `perspective_difference: 与 ${pair.claimB.id} 视角分歧,两条都保留 (${relation.reason ?? ''})`,
+        at: now(),
+      });
+
+    } else if (relation.relation === 'factual_conflict') {
+      // Confrontation LLM call
+      const confrontation = await attemptJson(
+        llm,
+        {
+          system: CONFRONTATION_SYSTEM,
+          user: buildConfrontationUser(pair.claimA, pair.claimB),
+        },
+        (text) => ConfrontationVerdictSchema.parse(extractJson(text)),
+        1,
+      );
+
+      if (!confrontation.ok || confrontation.value.verdict === 'unresolved') {
+        // Both contested
+        store.putClaim({ ...pair.claimA, status: 'contested' });
+        store.putClaim({ ...pair.claimB, status: 'contested' });
+        const divId = newId();
+        const divergence: Divergence = {
+          id: divId,
+          subjectId,
+          courtSessionId: sessionId,
+          topic: relation.topic ?? pair.claimA.text.slice(0, 50),
+          type: 'factual',
+          positions: [
+            { witnessId: pair.claimA.witnessIds?.[0] ?? '', claimId: pair.claimA.id, summary: pair.claimA.text },
+            { witnessId: pair.claimB.witnessIds?.[0] ?? '', claimId: pair.claimB.id, summary: pair.claimB.text },
+          ],
+          resolution: 'unresolved',
+        };
+        store.putDivergence(divergence);
+        divergences.push(divergence);
+
+        transcript.push({
+          type: 'adjudication',
+          claimId: pair.claimA.id,
+          text: `factual_conflict unresolved: 两条 contested (${confrontation.ok ? confrontation.value.reason ?? '' : confrontation.error.message})`,
+          at: now(),
+        });
+      } else {
+        // Qualified: both get qualifier, both surviving
+        const qualifier = confrontation.value.qualifier ?? '经对质后加限定';
+        store.putClaim({
+          ...pair.claimA,
+          qualifiers: [...(pair.claimA.qualifiers ?? []), qualifier],
+        });
+        store.putClaim({
+          ...pair.claimB,
+          qualifiers: [...(pair.claimB.qualifiers ?? []), qualifier],
+        });
+        const divId = newId();
+        const divergence: Divergence = {
+          id: divId,
+          subjectId,
+          courtSessionId: sessionId,
+          topic: relation.topic ?? pair.claimA.text.slice(0, 50),
+          type: 'factual',
+          positions: [
+            { witnessId: pair.claimA.witnessIds?.[0] ?? '', claimId: pair.claimA.id, summary: pair.claimA.text },
+            { witnessId: pair.claimB.witnessIds?.[0] ?? '', claimId: pair.claimB.id, summary: pair.claimB.text },
+          ],
+          resolution: 'qualified',
+        };
+        store.putDivergence(divergence);
+        divergences.push(divergence);
+
+        transcript.push({
+          type: 'adjudication',
+          claimId: pair.claimA.id,
+          text: `factual_conflict qualified: 限定="${qualifier}" (${confrontation.value.reason ?? ''})`,
+          at: now(),
+        });
+      }
+    }
+    // unrelated: ignored
+  }
+
+  /* ---------------------- 4. Conviction -------------------------------- */
+  const allClaims = store.listClaimsBySubject(subjectId)
+    .filter((c) => c.courtSessionId === sessionId);
+  const allEpisodes = store.listEpisodesBySubject(subjectId);
+
+  for (const claim of allClaims) {
+    if (claim.status === 'retired') continue; // already merged
+
+    const claimEpisodes = allEpisodes.filter(
+      (ep) => claim.episodeIds?.includes(ep.id),
+    );
+
+    const conviction = computeConviction({
+      witnessCount: claim.witnessIds?.length ?? 1,
+      hasEpisode: claimEpisodes.length > 0,
+      allEpisodesElicited:
+        claimEpisodes.length > 0 && claimEpisodes.every((ep) => ep.elicited),
+      wasPaired: pairedClaimIds.has(claim.id),
+      isContested: claim.status === 'contested',
+    });
+
+    store.putClaim({ ...claim, conviction });
 
     transcript.push({
       type: 'adjudication',
-      claimId: candidate.id,
-      witnessId: candidate.witnessId,
-      text:
-        `裁定=${verdict.verdict} 置信=${claim.conviction.toFixed(2)}` +
-        (qualifiers ? ` 限定=${qualifiers.join(';')}` : '') +
-        (verdict.reason ? ` 理由=${verdict.reason}` : ''),
+      claimId: claim.id,
+      witnessId: claim.witnessIds?.[0],
+      text: `裁定 status=${claim.status} 置信=${conviction.toFixed(2)}` +
+        (claim.qualifiers?.length ? ` 限定=${claim.qualifiers.join(';')}` : ''),
       at: now(),
     });
   }
 
-  /* ---------------------------- Report ------------------------------ */
-  const surviving = claims.filter(
-    (claim) => claim.status === 'surviving' && (claim.qualifiers?.length ?? 0) === 0,
+  /* ----------------------------- Report -------------------------------- */
+  const finalClaims = store.listClaimsBySubject(subjectId)
+    .filter((c) => c.courtSessionId === sessionId);
+
+  const surviving = finalClaims.filter(
+    (c) => c.status === 'surviving' && (c.qualifiers?.length ?? 0) === 0,
   ).length;
-  const qualified = claims.filter(
-    (claim) => claim.status === 'surviving' && (claim.qualifiers?.length ?? 0) > 0,
+  const qualified = finalClaims.filter(
+    (c) => c.status === 'surviving' && (c.qualifiers?.length ?? 0) > 0,
   ).length;
-  const rejected = claims.filter((claim) => claim.status === 'retired').length;
-  const withEvidence = claims.filter((claim) => claim.evidence.length > 0).length;
+  const contested = finalClaims.filter((c) => c.status === 'contested').length;
+  const retired = finalClaims.filter((c) => c.status === 'retired').length;
+  const withEvidence = finalClaims.filter((c) => c.evidence.length > 0).length;
+  const claimsWithEpisode = finalClaims.filter(
+    (c) => c.episodeIds && c.episodeIds.length > 0,
+  ).length;
+  const factualConflicts = divergences.filter((d) => d.type === 'factual').length;
 
   const report: CourtReport = {
-    totalClaims: claims.length,
+    totalClaims: surviving + qualified + contested + retired,
     surviving,
     qualified,
-    rejected,
-    challengeCount: transcript.filter((event) => event.type === 'challenge').length,
-    evidenceCoverage: claims.length === 0 ? 1 : round2(withEvidence / claims.length),
+    contested,
+    retired,
+    challengeCount: transcript.filter((e) => e.type === 'challenge').length,
+    evidenceCoverage: finalClaims.length === 0 ? 1 : round2(withEvidence / finalClaims.length),
+    divergences: divergences.length,
+    factualConflicts,
+    episodeCount: filedEpisodes.length,
+    claimsWithEpisode,
   };
 
   const session: CourtSession = {
