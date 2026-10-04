@@ -57,7 +57,14 @@ describe('collection API', () => {
 
   beforeEach(async () => {
     store = new Store();
-    server = await startServer({ port: 0, store });
+    // ASR is explicitly unconfigured and static hosting is disabled, so the
+    // suite never depends on the ambient environment or a built web/dist.
+    server = await startServer({
+      port: 0,
+      store,
+      asr: { apiKey: undefined },
+      webDistDir: '',
+    });
     base = server.url;
   });
 
@@ -213,5 +220,31 @@ describe('collection API', () => {
     const error = asObject(missing.body.error);
     expect(typeof error.code).toBe('string');
     expect(typeof error.message).toBe('string');
+  });
+
+  it('guards speech: available=false and a 501 on POST /api/asr without a key', async () => {
+    const available = await api(base, 'GET', '/api/asr/available');
+    expect(available.status).toBe(200);
+    expect(available.body).toEqual({ available: false });
+
+    const transcription = await api(base, 'POST', '/api/asr', { audio: 'not-really-audio' });
+    expect(transcription.status).toBe(501);
+    expect(asObject(transcription.body.error)).toMatchObject({ code: 'asr_unavailable' });
+  });
+
+  it('reports available=true once a key is configured, without any network call', async () => {
+    const configured = await startServer({
+      port: 0,
+      store,
+      asr: { apiKey: 'test-key', model: 'whisper-1' },
+      webDistDir: '',
+    });
+    try {
+      const response = await api(configured.url, 'GET', '/api/asr/available');
+      expect(response.status).toBe(200);
+      expect(response.body).toEqual({ available: true });
+    } finally {
+      await configured.close();
+    }
   });
 });
