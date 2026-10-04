@@ -2,12 +2,21 @@ import { randomUUID } from 'node:crypto';
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http';
 import { z, ZodError } from 'zod';
 import { SubjectSchema } from '@openmimic/shared';
-import type { Store } from '@openmimic/kernel';
+import { UnknownRoomError, type Store } from '@openmimic/kernel';
+import { OpenAICompatClient } from '@openmimic/engine-court';
+import {
+  RoomRefusedError,
+  findCrisisWord,
+  openDoor,
+  runBehindRoom,
+  type LLMClient,
+} from '@openmimic/engine-room';
 import {
   InviteInvalidError,
   SubmitTestimonyInputSchema,
   createWitnessCollector,
 } from '@openmimic/engine-witness';
+import { DEMO_SUBJECT_ID, seedDemo } from '../../fixtures/limo';
 import { redactForExternal } from './external';
 import {
   HttpError,
@@ -32,6 +41,14 @@ export interface StartServerOptions {
   store: Store;
   /** Overrides for the ASR config; unset fields fall back to the environment. */
   asr?: Partial<AsrConfig>;
+  /**
+   * LLM used by the room routes. When omitted the server builds one from the
+   * environment; if that is unconfigured, non-demo rooms answer 501 while the
+   * 林默 demo keeps serving its pre-generated transcripts.
+   */
+  llm?: LLMClient;
+  /** Skip the automatic demo seed (also via `OPENMIMIC_SKIP_DEMO=1`). */
+  skipDemo?: boolean;
   /** Built SPA directory served outside `/api/*`; defaults to `web/dist`. */
   webDistDir?: string;
 }
@@ -47,6 +64,11 @@ export interface RunningServer {
 const CreateSubjectBodySchema = z.object({
   displayName: z.string().min(1),
   selfReport: z.string().min(1).optional(),
+});
+
+/** Body accepted by `POST /api/subjects/:id/rooms`; topic is optional. */
+const CreateRoomBodySchema = z.object({
+  topicSeed: z.string().min(1).optional(),
 });
 
 const errorBody = (code: string, message: string): unknown => ({ error: { code, message } });
@@ -78,7 +100,7 @@ function sendAsset(
   response.end(asset.body);
 }
 
-function buildRouter(store: Store, asr: AsrConfig): Router {
+function buildRouter(store: Store, asr: AsrConfig, llm: LLMClient | undefined): Router {
   const collector = createWitnessCollector(store);
   const router = new Router();
 
@@ -138,6 +160,73 @@ function buildRouter(store: Store, asr: AsrConfig): Router {
         witnessCount: store.listWitnessesBySubject(subjectId).length,
       },
     };
+  });
+
+  router.get('/api/subjects/:id/rooms', (context) => {
+    const subjectId = context.params.id ?? '';
+    if (!store.getSubject(subjectId)) {
+      throw new HttpError(404, 'subject_not_found', '当事人不存在');
+    }
+    return { status: 200, body: { rooms: store.listRoomsBySubject(subjectId) } };
+  });
+
+  router.post('/api/subjects/:id/rooms', async (context) => {
+    const subjectId = context.params.id ?? '';
+    if (!store.getSubject(subjectId)) {
+      throw new HttpError(404, 'subject_not_found', '当事人不存在');
+    }
+    const body = CreateRoomBodySchema.parse(context.body ?? {});
+    // A crisis topic is refused before any model call, demo data or not.
+    const crisisWord = body.topicSeed ? findCrisisWord(body.topicSeed) : undefined;
+    if (crisisWord) {
+      throw new HttpError(
+        422,
+        'room_refused',
+        `话题种子包含危机词面「${crisisWord}」,拒绝开房`,
+      );
+    }
+
+    if (llm) {
+      const room = await runBehindRoom(
+        subjectId,
+        store,
+        llm,
+        body.topicSeed !== undefined ? { topicSeed: body.topicSeed } : {},
+      );
+      return { status: 201, body: room };
+    }
+
+    // No model configured. The demo subject still works: it serves the
+    // transcripts that were generated when the demo was seeded.
+    if (subjectId === DEMO_SUBJECT_ID) {
+      const rooms = store.listRoomsBySubject(subjectId);
+      const room = rooms[rooms.length - 1];
+      if (!room) throw new HttpError(500, 'demo_missing', '演示数据未初始化');
+      return { status: 201, body: room };
+    }
+    throw new HttpError(501, 'llm_unavailable', '服务器未配置语言模型');
+  });
+
+  router.post('/api/rooms/:id/door', async (context) => {
+    const roomId = context.params.id ?? '';
+    const room = store.getRoom(roomId);
+    if (!room) throw new HttpError(404, 'room_not_found', '房间不存在');
+
+    if (llm) {
+      // openDoor is idempotent: an already-open room is returned untouched.
+      const opened = await openDoor(roomId, store, llm);
+      return { status: 200, body: opened };
+    }
+    if (room.subjectId === DEMO_SUBJECT_ID) {
+      return { status: 200, body: room };
+    }
+    throw new HttpError(501, 'llm_unavailable', '服务器未配置语言模型');
+  });
+
+  router.get('/api/rooms/:id', (context) => {
+    const room = store.getRoom(context.params.id ?? '');
+    if (!room) throw new HttpError(404, 'room_not_found', '房间不存在');
+    return { status: 200, body: room };
   });
 
   router.get('/api/asr/available', () => ({
@@ -209,12 +298,27 @@ async function handleRequest(
       sendJson(response, 400, errorBody('validation_error', describeZodError(caught)), store);
     } else if (caught instanceof InviteInvalidError) {
       sendJson(response, 410, errorBody('invite_invalid', caught.message), store);
+    } else if (caught instanceof RoomRefusedError) {
+      sendJson(response, 422, errorBody('room_refused', caught.message), store);
+    } else if (caught instanceof UnknownRoomError) {
+      sendJson(response, 404, errorBody('room_not_found', caught.message), store);
     } else if (caught instanceof HttpError) {
       sendJson(response, caught.status, errorBody(caught.code, caught.message), store);
     } else {
       sendJson(response, 500, errorBody('internal_error', '服务器内部错误'), store);
     }
   }
+}
+
+/**
+ * Build the room LLM from the environment, or `undefined` when unconfigured.
+ *
+ * Construction performs no I/O; the production client only leaves the process
+ * when a room actually asks it to complete.
+ */
+function createEnvLLM(): LLMClient | undefined {
+  const client = new OpenAICompatClient();
+  return client.configured ? client : undefined;
 }
 
 /**
@@ -225,7 +329,16 @@ async function handleRequest(
 export async function startServer(options: StartServerOptions): Promise<RunningServer> {
   const { store } = options;
   const asrConfig: AsrConfig = { ...readAsrConfig(), ...options.asr };
-  const router = buildRouter(store, asrConfig);
+  const llm = options.llm ?? createEnvLLM();
+
+  // An empty database gets the 林默 demo so a key-less install has something to
+  // show. `OPENMIMIC_SKIP_DEMO=1` (or `skipDemo`) turns it off.
+  const skipDemo = options.skipDemo ?? process.env.OPENMIMIC_SKIP_DEMO === '1';
+  if (!skipDemo && store.listSubjects().length === 0) {
+    seedDemo(store);
+  }
+
+  const router = buildRouter(store, asrConfig, llm);
   // An empty path disables static hosting (the whole API still works).
   const distDir = options.webDistDir ?? 'web/dist';
   const staticHandler = distDir === '' ? undefined : createStaticHandler(distDir);

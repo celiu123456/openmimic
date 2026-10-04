@@ -8,6 +8,8 @@
     ".": "./src/index.ts"
   },
   "dependencies": {
+    "@openmimic/engine-court": "*",
+    "@openmimic/engine-room": "*",
     "@openmimic/engine-witness": "*",
     "@openmimic/kernel": "*",
     "@openmimic/shared": "*",

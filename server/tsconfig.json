@@ -5,8 +5,11 @@
     "paths": {
       "@openmimic/shared": ["../shared/src/index.ts"],
       "@openmimic/kernel": ["../kernel/src/index.ts"],
+      "@openmimic/engine-court": ["../engines/court/src/index.ts"],
+      "@openmimic/engine-room": ["../engines/room/src/index.ts"],
       "@openmimic/engine-witness": ["../engines/witness/src/index.ts"],
-      "@openmimic/server": ["./src/index.ts"]
+      "@openmimic/server": ["./src/index.ts"],
+      "@openmimic/fixtures": ["../fixtures/limo.ts"]
     }
   },
   "include": ["src/**/*.ts", "test/**/*.ts"]
