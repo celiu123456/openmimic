@@ -1,0 +1,15 @@
+{
+  "name": "@openmimic/engine-gate",
+  "version": "0.0.1",
+  "private": true,
+  "description": "GateEngine: claim contest (veto) flow and permission wall for mental-health vocabulary.",
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "dependencies": {
+    "@openmimic/kernel": "*",
+    "@openmimic/shared": "*",
+    "@openmimic/engine-room": "*"
+  }
+}

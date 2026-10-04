@@ -19,6 +19,11 @@ export const router = createRouter({
       name: 'court-report',
       component: () => import('./views/CourtReportView.vue'),
     },
+    {
+      path: '/meta/:id',
+      name: 'meta-perception',
+      component: () => import('./views/MetaPerceptionView.vue'),
+    },
     { path: '/:pathMatch(.*)*', redirect: '/' },
   ],
   scrollBehavior: () => ({ top: 0 }),

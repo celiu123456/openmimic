@@ -17,3 +17,5 @@ plugins:
   - use: "@openmimic/mount-mcp"
   - use: "./plugins/collector-freetext"
   - use: "./plugins/scenario-review"
+  - use: "./plugins/meta-perception"
+  - use: "./engines/gate"
