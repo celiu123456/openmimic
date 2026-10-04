@@ -1,0 +1,15 @@
+{
+  "name": "@openmimic/engine-witness",
+  "version": "0.0.1",
+  "private": true,
+  "description": "OpenMimic WitnessEngine: friend questionnaire, reusable invites and testimony collection.",
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "dependencies": {
+    "@openmimic/kernel": "*",
+    "@openmimic/shared": "*",
+    "zod": "^3.25.76"
+  }
+}
