@@ -2,8 +2,16 @@ import { randomUUID } from 'node:crypto';
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http';
 import { z, ZodError } from 'zod';
 import { SubjectSchema } from '@openmimic/shared';
-import { UnknownRoomError, type Store } from '@openmimic/kernel';
-import { OpenAICompatClient } from '@openmimic/engine-court';
+import {
+  UnknownRoomError,
+  assemblePersonaContext,
+  type Store,
+} from '@openmimic/kernel';
+import {
+  OpenAICompatClient,
+  runCourt,
+  type ChatMessage,
+} from '@openmimic/engine-court';
 import {
   RoomRefusedError,
   findCrisisWord,
@@ -26,9 +34,11 @@ import { redactForExternal } from './external';
 import {
   HttpError,
   Router,
+  isStreamResult,
   readJsonBody,
   readRawBody,
   type RouteContext,
+  type RouteHandlerResult,
 } from './router';
 import {
   isAsrAvailable,
@@ -41,17 +51,40 @@ import { createStaticHandler, type StaticHandler } from './static';
 
 export const SERVER_VERSION = '0.0.1';
 
+/**
+ * The raw OpenAI-compatible upstream used by the `persona/<id>` proxy.
+ *
+ * Deliberately narrower than {@link OpenAICompatClient} so tests can inject a
+ * local fake: the server only needs to know whether the upstream is usable and
+ * how to send one verbatim `messages` array.
+ */
+export interface ChatUpstream {
+  readonly configured: boolean;
+  readonly hasApiKey: boolean;
+  chatRaw(
+    messages: readonly ChatMessage[],
+    options?: { stream?: boolean },
+  ): Promise<Response>;
+}
+
 export interface StartServerOptions {
   port: number;
   store: Store;
   /** Overrides for the ASR config; unset fields fall back to the environment. */
   asr?: Partial<AsrConfig>;
   /**
-   * LLM used by the room routes. When omitted the server builds one from the
-   * environment; if that is unconfigured, non-demo rooms answer 501 while the
-   * 林默 demo keeps serving its pre-generated transcripts.
+   * LLM used by the room, court and witness routes. When omitted the server
+   * builds one from the environment; if that is unconfigured, non-demo rooms
+   * and courts answer 501 while the 林默 demo keeps serving its pre-generated
+   * transcripts.
    */
   llm?: LLMClient;
+  /**
+   * Upstream used by `/v1/chat/completions`. When omitted the server builds one
+   * from the environment; without an API key the proxy answers 501 while
+   * `/v1/models` still lists the demo persona.
+   */
+  chat?: ChatUpstream;
   /** Skip the automatic demo seed (also via `OPENMIMIC_SKIP_DEMO=1`). */
   skipDemo?: boolean;
   /** Built SPA directory served outside `/api/*`; defaults to `web/dist`. */
@@ -76,7 +109,44 @@ const CreateRoomBodySchema = z.object({
   topicSeed: z.string().min(1).optional(),
 });
 
+/**
+ * One forwarded chat message. Loose on purpose: whatever the client sent is
+ * relayed to the upstream unchanged, including fields this layer does not know.
+ */
+const ChatMessageSchema = z
+  .object({
+    role: z.string().min(1),
+    content: z.unknown().optional(),
+  })
+  .passthrough();
+
+/** Body accepted by `POST /v1/chat/completions`. */
+const ChatCompletionBodySchema = z
+  .object({
+    model: z.string().min(1),
+    messages: z.array(ChatMessageSchema).min(1),
+    stream: z.boolean().optional(),
+  })
+  .passthrough();
+
+/** The OpenAI model-id prefix that maps to a persona. */
+const PERSONA_MODEL_PREFIX = 'persona/';
+
 const errorBody = (code: string, message: string): unknown => ({ error: { code, message } });
+
+/** An OpenAI-shaped error, used on the `/v1` surface. */
+const openAiError = (
+  code: string,
+  message: string,
+  type: 'invalid_request_error' | 'server_error' = 'invalid_request_error',
+): unknown => ({ error: { message, type, code } });
+
+/** Claims produced by one court session, oldest first. */
+function claimsForSession(store: Store, subjectId: string, sessionId: string) {
+  return store
+    .listClaimsBySubject(subjectId)
+    .filter((claim) => claim.courtSessionId === sessionId);
+}
 
 function describeZodError(error: ZodError): string {
   return error.issues
@@ -105,7 +175,12 @@ function sendAsset(
   response.end(asset.body);
 }
 
-function buildRouter(store: Store, asr: AsrConfig, llm: LLMClient | undefined): Router {
+function buildRouter(
+  store: Store,
+  asr: AsrConfig,
+  llm: LLMClient | undefined,
+  chat: ChatUpstream | undefined,
+): Router {
   const collector = createWitnessCollector(store, llm ? { llm } : {});
   const router = new Router();
 
@@ -268,6 +343,69 @@ function buildRouter(store: Store, asr: AsrConfig, llm: LLMClient | undefined): 
     return { status: 200, body: room };
   });
 
+  /* ---------------------------------------------------------------- */
+  /* Court: run a trial, read the baseline, read one session            */
+  /* ---------------------------------------------------------------- */
+
+  router.post('/api/subjects/:id/court', async (context) => {
+    const subjectId = context.params.id ?? '';
+    if (!store.getSubject(subjectId)) {
+      throw new HttpError(404, 'subject_not_found', '当事人不存在');
+    }
+
+    if (llm) {
+      const session = await runCourt(subjectId, store, llm);
+      // Re-running is a *full* retrial: every claim from an earlier session is
+      // retired so the new session is the single source of truth. Incremental
+      // re-examination (keeping untouched claims alive) is deliberately future
+      // work, not something this batch pretends to do.
+      for (const claim of store.listClaimsBySubject(subjectId)) {
+        if (claim.courtSessionId !== session.id && claim.status !== 'retired') {
+          store.putClaim({ ...claim, status: 'retired' });
+        }
+      }
+      return {
+        status: 200,
+        body: { session, claims: claimsForSession(store, subjectId, session.id) },
+      };
+    }
+
+    // No model configured. The demo subject still works: it serves the session
+    // that was generated when the demo was seeded.
+    if (subjectId === DEMO_SUBJECT_ID) {
+      const sessions = store.listCourtSessionsBySubject(subjectId);
+      const session = sessions[sessions.length - 1];
+      if (!session) throw new HttpError(500, 'demo_missing', '演示数据未初始化');
+      return {
+        status: 200,
+        body: { session, claims: claimsForSession(store, subjectId, session.id) },
+      };
+    }
+    throw new HttpError(501, 'llm_unavailable', '服务器未配置语言模型');
+  });
+
+  router.get('/api/subjects/:id/claims', (context) => {
+    const subjectId = context.params.id ?? '';
+    if (!store.getSubject(subjectId)) {
+      throw new HttpError(404, 'subject_not_found', '当事人不存在');
+    }
+    // "surviving + qualified": a qualified claim is a surviving claim carrying
+    // at least one qualifier, so both are status `surviving`. Only claim text
+    // and evidence *ids* leave this route — never the testimony originals.
+    const claims = store
+      .listClaimsBySubject(subjectId)
+      .filter((claim) => claim.status === 'surviving');
+    return { status: 200, body: { claims } };
+  });
+
+  router.get('/api/court/:sessionId', (context) => {
+    const session = store.getCourtSession(context.params.sessionId ?? '');
+    if (!session) throw new HttpError(404, 'session_not_found', '法庭会话不存在');
+    // The transcript crosses the external scope in `sendJson`: challenge lines
+    // may quote a `synthesis_only` testimony, and those runs are withheld.
+    return { status: 200, body: session };
+  });
+
   router.get('/api/asr/available', () => ({
     status: 200,
     body: { available: isAsrAvailable(asr) },
@@ -286,6 +424,135 @@ function buildRouter(store: Store, asr: AsrConfig, llm: LLMClient | undefined): 
     const input = await normalizeAudioInput(raw, context.contentType ?? '');
     const text = await transcribeAudio(input, asr);
     return { status: 200, body: { text } };
+  });
+
+  /* ---------------------------------------------------------------- */
+  /* OpenAI-compatible surface: the persona *is* the model             */
+  /* ---------------------------------------------------------------- */
+
+  router.get('/v1/models', () => {
+    // Only subjects with at least one surviving claim are servable personas;
+    // a subject with an empty baseline has nothing to be a model of.
+    const data: unknown[] = [];
+    for (const subject of store.listSubjects()) {
+      const served = store
+        .listClaimsBySubject(subject.id)
+        .some((claim) => claim.status === 'surviving');
+      if (!served) continue;
+      data.push({
+        id: `${PERSONA_MODEL_PREFIX}${subject.id}`,
+        object: 'model',
+        created: 0,
+        owned_by: 'openmimic',
+      });
+    }
+    return { status: 200, body: { object: 'list', data } };
+  });
+
+  router.post('/v1/chat/completions', async (context) => {
+    const body = ChatCompletionBodySchema.parse(context.body);
+    if (!body.model.startsWith(PERSONA_MODEL_PREFIX)) {
+      return {
+        status: 404,
+        body: openAiError('model_not_found', `未知模型:${body.model}`),
+      };
+    }
+    const subjectId = body.model.slice(PERSONA_MODEL_PREFIX.length);
+    if (subjectId === '' || !store.getSubject(subjectId)) {
+      return {
+        status: 404,
+        body: openAiError('model_not_found', `未知模型:${body.model}`),
+      };
+    }
+    // No key: say so rather than attempting a real call. `/v1/models`
+    // deliberately keeps listing the demo so a key-less install is inspectable.
+    if (!chat || !chat.configured || !chat.hasApiKey) {
+      return {
+        status: 501,
+        body: openAiError('llm_unavailable', '服务器未配置语言模型', 'server_error'),
+      };
+    }
+
+    const { systemPrompt } = assemblePersonaContext(subjectId, store);
+    // The persona prompt is prepended; a client-supplied system message is kept
+    // verbatim right after it, so the persona stays the higher authority.
+    const messages: ChatMessage[] = [
+      { role: 'system', content: systemPrompt },
+      ...body.messages,
+    ];
+    const stream = body.stream === true;
+
+    let upstream: Response;
+    try {
+      upstream = await chat.chatRaw(messages, { stream });
+    } catch {
+      // Nothing has been written yet, so a plain JSON error is safe.
+      return {
+        status: 502,
+        body: openAiError('upstream_error', '上游模型服务不可用', 'server_error'),
+      };
+    }
+    if (!upstream.ok) {
+      const detail = await upstream.text().catch(() => '');
+      return {
+        status: 502,
+        body: openAiError(
+          'upstream_error',
+          `上游模型返回 ${upstream.status}${detail ? `:${detail.slice(0, 200)}` : ''}`,
+          'server_error',
+        ),
+      };
+    }
+
+    if (!stream) {
+      // Usage and every other field pass through untouched. Conversation
+      // content is deliberately never persisted here: chat is private, and an
+      // audit switch belongs to the W5 official site, not this layer.
+      let payload: unknown;
+      try {
+        payload = await upstream.json();
+      } catch {
+        return {
+          status: 502,
+          body: openAiError('upstream_error', '上游返回了无法解析的响应', 'server_error'),
+        };
+      }
+      return { status: 200, body: payload };
+    }
+
+    // SSE: pipe the raw bytes through without parsing or reassembling them.
+    return {
+      kind: 'stream' as const,
+      run: async (response: ServerResponse) => {
+        response.writeHead(200, {
+          'content-type':
+            upstream.headers.get('content-type') ?? 'text/event-stream; charset=utf-8',
+          'cache-control': 'no-cache',
+        });
+        try {
+          const streamBody = upstream.body;
+          if (streamBody) {
+            const reader = streamBody.getReader();
+            try {
+              for (;;) {
+                const { done, value } = await reader.read();
+                if (done) break;
+                if (value) response.write(Buffer.from(value));
+              }
+            } finally {
+              reader.releaseLock();
+            }
+          }
+        } catch {
+          // Upstream broke mid-stream: close with an OpenAI error object so a
+          // streaming client still sees a structured failure.
+          response.write(
+            `data: ${JSON.stringify(openAiError('upstream_error', '上游流中断', 'server_error'))}\n\n`,
+          );
+        }
+        response.end();
+      },
+    };
   });
 
   return router;
@@ -330,7 +597,14 @@ async function handleRequest(
       ...(rawBody !== undefined ? { rawBody } : {}),
       contentType: request.headers['content-type'] ?? '',
     };
-    const result = await match.handler(context);
+    const result: RouteHandlerResult = await match.handler(context);
+    if (isStreamResult(result)) {
+      // The handler already owns the socket (SSE passthrough). It must not
+      // throw; if it did, the catch below would try to write JSON over an
+      // already-sent response.
+      await result.run(response);
+      return;
+    }
     sendJson(response, result.status, result.body, store);
   } catch (caught) {
     if (caught instanceof ZodError) {
@@ -354,12 +628,12 @@ async function handleRequest(
 }
 
 /**
- * Build the room LLM from the environment, or `undefined` when unconfigured.
+ * Build the model client from the environment, or `undefined` when unconfigured.
  *
  * Construction performs no I/O; the production client only leaves the process
- * when a room actually asks it to complete.
+ * when a route asks it to complete.
  */
-function createEnvLLM(): LLMClient | undefined {
+function createEnvLLM(): OpenAICompatClient | undefined {
   const client = new OpenAICompatClient();
   return client.configured ? client : undefined;
 }
@@ -372,7 +646,12 @@ function createEnvLLM(): LLMClient | undefined {
 export async function startServer(options: StartServerOptions): Promise<RunningServer> {
   const { store } = options;
   const asrConfig: AsrConfig = { ...readAsrConfig(), ...options.asr };
-  const llm = options.llm ?? createEnvLLM();
+  // An env client without a key is not usable: the whole project's contract is
+  // "no key => 501", never a silent key-less call to a remote endpoint.
+  const envClient = createEnvLLM();
+  const envReady = envClient && envClient.hasApiKey ? envClient : undefined;
+  const llm = options.llm ?? envReady;
+  const chat = options.chat ?? envReady;
 
   // An empty database gets the 林默 demo so a key-less install has something to
   // show. `OPENMIMIC_SKIP_DEMO=1` (or `skipDemo`) turns it off.
@@ -381,7 +660,7 @@ export async function startServer(options: StartServerOptions): Promise<RunningS
     seedDemo(store);
   }
 
-  const router = buildRouter(store, asrConfig, llm);
+  const router = buildRouter(store, asrConfig, llm, chat);
   // An empty path disables static hosting (the whole API still works).
   const distDir = options.webDistDir ?? 'web/dist';
   const staticHandler = distDir === '' ? undefined : createStaticHandler(distDir);

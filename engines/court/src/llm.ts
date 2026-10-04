@@ -6,6 +6,13 @@ export interface LLMCompletionRequest {
   user: string;
 }
 
+/** One chat message forwarded verbatim to an OpenAI-compatible upstream. */
+export interface ChatMessage {
+  role: string;
+  content?: unknown;
+  [key: string]: unknown;
+}
+
 /** Anything the court can drive. Injected so the pipeline stays testable. */
 export interface LLMClient {
   complete(request: LLMCompletionRequest): Promise<string>;
@@ -59,6 +66,42 @@ export class OpenAICompatClient implements LLMClient {
   /** Whether both a base URL and a model name are configured. */
   get configured(): boolean {
     return this.baseUrl.length > 0 && this.model.length > 0;
+  }
+
+  /** Whether an API key is present. The persona proxy refuses to run without one. */
+  get hasApiKey(): boolean {
+    return this.apiKey.length > 0;
+  }
+
+  /**
+   * Forward a full `messages` array to the upstream `/chat/completions` and
+   * return the raw {@link Response}.
+   *
+   * Unlike {@link complete}, this does not build a system/user pair, does not
+   * parse the body and does not impose a request timeout — the caller streams
+   * the response body and owns its lifetime. The configured model replaces
+   * whatever the client asked for, because `persona/<id>` is not a model the
+   * upstream would recognise.
+   */
+  async chatRaw(
+    messages: readonly ChatMessage[],
+    options: { stream?: boolean } = {},
+  ): Promise<Response> {
+    if (!this.baseUrl) throw new Error('LLM_BASE_URL is not configured');
+    if (!this.model) throw new Error('LLM_MODEL is not configured');
+
+    return this.fetchImpl(`${this.baseUrl}/chat/completions`, {
+      method: 'POST',
+      headers: {
+        'content-type': 'application/json',
+        ...(this.apiKey ? { authorization: `Bearer ${this.apiKey}` } : {}),
+      },
+      body: JSON.stringify({
+        model: this.model,
+        messages,
+        stream: options.stream === true,
+      }),
+    });
   }
 
   async complete({ system, user }: LLMCompletionRequest): Promise<string> {

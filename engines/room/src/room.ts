@@ -1,6 +1,12 @@
 import { randomUUID } from 'node:crypto';
 import { z } from 'zod';
-import type { Room, RoomUtterance, Witness } from '@openmimic/shared';
+import {
+  CONSENT_OVERLAP_LENGTH,
+  containsConsentOverlap,
+  type Room,
+  type RoomUtterance,
+  type Witness,
+} from '@openmimic/shared';
 import { UnknownRoomError, type Store } from '@openmimic/kernel';
 import { RoomRefusedError } from './errors';
 import type { LLMClient, LLMCompletionRequest } from './llm';
@@ -19,8 +25,12 @@ export const DEFAULT_MAX_UTTERANCES = 12;
 /** Each witness speaks at most twice; `opts` may only lower it. */
 export const DEFAULT_MAX_TURNS_PER_WITNESS = 2;
 
-/** A verbatim overlap of this many characters counts as quoting. */
-export const CONSENT_OVERLAP_LENGTH = 8;
+/**
+ * The overlap guard now lives in `@openmimic/shared` so the HTTP layer can
+ * reuse the exact same definition when it masks a court transcript. It is
+ * re-exported here to keep the room engine's public surface unchanged.
+ */
+export { CONSENT_OVERLAP_LENGTH, containsConsentOverlap };
 
 /** Replacement line when a `synthesis_only` witness keeps quoting. */
 export const CONSENT_FALLBACK_STAGE = '他含糊地带过了这个话题';
@@ -69,34 +79,6 @@ export interface OpenDoorOptions {
   maxUtterances?: number;
   /** Upper bound on turns per witness; values above 2 are clamped down. */
   maxTurnsPerWitness?: number;
-}
-
-/* ------------------------------------------------------------------ */
-/* Consent guard                                                       */
-/* ------------------------------------------------------------------ */
-
-/**
- * True when `text` contains a contiguous run of at least
- * {@link CONSENT_OVERLAP_LENGTH} characters copied from any `source`.
- *
- * This is how a `synthesis_only` witness is allowed to *participate* in a room
- * while their raw words stay unquoted: paraphrases pass, verbatim strings do
- * not. Sources shorter than the window can never match, which is correct — a
- * five-character answer has no eight-character quote inside it.
- */
-export function containsConsentOverlap(
-  text: string,
-  sources: readonly string[],
-  length: number = CONSENT_OVERLAP_LENGTH,
-): boolean {
-  if (text.length < length) return false;
-  for (const source of sources) {
-    if (source.length < length) continue;
-    for (let start = 0; start + length <= source.length; start += 1) {
-      if (text.includes(source.slice(start, start + length))) return true;
-    }
-  }
-  return false;
 }
 
 /* ------------------------------------------------------------------ */

@@ -1,4 +1,4 @@
-import type { IncomingMessage } from 'node:http';
+import type { IncomingMessage, ServerResponse } from 'node:http';
 
 /** Everything a route handler receives for one request. */
 export interface RouteContext {
@@ -16,7 +16,27 @@ export interface RouteResult {
   body: unknown;
 }
 
-export type RouteHandler = (context: RouteContext) => RouteResult | Promise<RouteResult>;
+/**
+ * A handler that writes the response itself instead of returning JSON.
+ *
+ * Used by the OpenAI-compatible proxy: an SSE upstream is piped through byte
+ * for byte, so the bytes must never pass through `JSON.stringify`. The runner
+ * may not throw — headers are already on the wire — so it owns its own error
+ * handling.
+ */
+export interface RouteStreamResult {
+  kind: 'stream';
+  run(response: ServerResponse): Promise<void>;
+}
+
+export type RouteHandlerResult = RouteResult | RouteStreamResult;
+
+export type RouteHandler = (context: RouteContext) => RouteHandlerResult | Promise<RouteHandlerResult>;
+
+/** Narrow a handler result to the streaming variant. */
+export function isStreamResult(result: RouteHandlerResult): result is RouteStreamResult {
+  return (result as RouteStreamResult).kind === 'stream';
+}
 
 /** Thrown by a route to choose the HTTP status its failure maps to. */
 export class HttpError extends Error {
