@@ -139,9 +139,13 @@ describe('SHA freeze', () => {
 /* ------------------------------------------------------------------ */
 
 describe('Calibration', () => {
-  it('loads at least 24 calibration pairs', () => {
+  it('loads at least 48 calibration pairs (24 easy + 24 hard)', () => {
     const pairs = loadCalibrationPairs();
-    expect(pairs.length).toBeGreaterThanOrEqual(24);
+    expect(pairs.length).toBeGreaterThanOrEqual(48);
+    const easy = pairs.filter((p) => p.difficulty === 'easy');
+    const hard = pairs.filter((p) => p.difficulty === 'hard');
+    expect(easy.length).toBeGreaterThanOrEqual(24);
+    expect(hard.length).toBeGreaterThanOrEqual(24);
   });
 
   it('all pairs have required fields', () => {
@@ -152,6 +156,7 @@ describe('Calibration', () => {
       expect(pair.close).toBeTruthy();
       expect(pair.far).toBeTruthy();
       expect(pair.expectedWinner).toBe('close');
+      expect(['easy', 'hard']).toContain(pair.difficulty);
     }
   });
 

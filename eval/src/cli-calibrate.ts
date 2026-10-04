@@ -30,7 +30,24 @@ async function main(): Promise<void> {
   console.log(`Correct:        ${result.correctPairs}`);
   console.log(`Accuracy:       ${(result.accuracy * 100).toFixed(1)}%`);
   console.log(`Position bias:  ${(result.positionBias * 100).toFixed(1)}%`);
-  console.log(`Passed:         ${result.passed ? 'YES' : 'NO'}`);
+
+  if (result.easy.totalPairs > 0) {
+    console.log(`\n--- Easy subset (${result.easy.totalPairs} pairs) ---`);
+    console.log(`  Valid:     ${result.easy.validPairs}`);
+    console.log(`  Correct:   ${result.easy.correctPairs}`);
+    console.log(`  Accuracy:  ${(result.easy.accuracy * 100).toFixed(1)}%`);
+    console.log(`  Bias:      ${(result.easy.positionBias * 100).toFixed(1)}%`);
+  }
+
+  if (result.hard.totalPairs > 0) {
+    console.log(`\n--- Hard subset (${result.hard.totalPairs} pairs) ---`);
+    console.log(`  Valid:     ${result.hard.validPairs}`);
+    console.log(`  Correct:   ${result.hard.correctPairs}`);
+    console.log(`  Accuracy:  ${(result.hard.accuracy * 100).toFixed(1)}%`);
+    console.log(`  Bias:      ${(result.hard.positionBias * 100).toFixed(1)}%`);
+  }
+
+  console.log(`\nPassed:         ${result.passed ? 'YES' : 'NO'}`);
 
   if (!result.passed) {
     console.log('\nFail reasons:');

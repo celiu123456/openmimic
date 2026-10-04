@@ -1,10 +1,15 @@
 /**
  * Judge calibration gate.
  *
- * Runs the judge against a set of known-answer pairs. Three thresholds:
+ * Runs the judge against a set of known-answer pairs. Three thresholds
+ * apply to the overall set AND to the hard subset independently:
  *   - Accuracy > 80%
  *   - Valid pairs >= 20
  *   - Position bias (discard rate) <= 30%
+ *
+ * Hard-subset thresholds are identical except min valid >= 20 applies
+ * to the hard pairs alone. If the hard subset has fewer than 20 valid
+ * pairs the hard gate fails.
  *
  * Calibration result is written to eval/runs/ and subsequent evaluations
  * verify that the model name + prompt SHA match.
@@ -28,6 +33,7 @@ const CalibrationPairSchema = z.object({
   close: z.string(),
   far: z.string(),
   expectedWinner: z.enum(['close', 'far']),
+  difficulty: z.enum(['easy', 'hard']).optional().default('easy'),
 });
 
 export type CalibrationPair = z.infer<typeof CalibrationPairSchema>;
@@ -54,8 +60,18 @@ export const CALIBRATION_MAX_BIAS = 0.3;
 
 export interface CalibrationDetail {
   pairId: string;
+  difficulty: 'easy' | 'hard';
   status: 'correct' | 'incorrect' | 'discarded';
   reason?: string;
+}
+
+export interface SubsetStats {
+  totalPairs: number;
+  validPairs: number;
+  discardedPairs: number;
+  correctPairs: number;
+  accuracy: number;
+  positionBias: number;
 }
 
 export interface CalibrationResult {
@@ -70,6 +86,28 @@ export interface CalibrationResult {
   passed: boolean;
   details: CalibrationDetail[];
   failReasons: string[];
+  /** Per-difficulty subset breakdown */
+  easy: SubsetStats;
+  hard: SubsetStats;
+}
+
+/* ------------------------------------------------------------------ */
+/* Helper: compute stats for a subset of details                       */
+/* ------------------------------------------------------------------ */
+
+function computeSubsetStats(details: CalibrationDetail[]): SubsetStats {
+  const total = details.length;
+  const valid = details.filter((d) => d.status !== 'discarded').length;
+  const discarded = details.filter((d) => d.status === 'discarded').length;
+  const correct = details.filter((d) => d.status === 'correct').length;
+  return {
+    totalPairs: total,
+    validPairs: valid,
+    discardedPairs: discarded,
+    correctPairs: correct,
+    accuracy: valid > 0 ? correct / valid : 0,
+    positionBias: total > 0 ? discarded / total : 0,
+  };
 }
 
 /* ------------------------------------------------------------------ */
@@ -85,37 +123,61 @@ export async function runCalibration(
   const details: CalibrationDetail[] = [];
 
   for (const pair of pairs) {
+    const difficulty = pair.difficulty ?? 'easy';
     // close is candidate 1, far is candidate 2
     const result = await judgePair(llm, pair.real, pair.close, pair.far);
 
     if (result.status === 'discarded') {
-      details.push({ pairId: pair.id, status: 'discarded', reason: result.reason });
+      details.push({ pairId: pair.id, difficulty, status: 'discarded', reason: result.reason });
     } else {
       // result.winner is 'first' or 'second'; first = close, second = far
       const judgedWinner = result.winner === 'first' ? 'close' : 'far';
       if (judgedWinner === pair.expectedWinner) {
-        details.push({ pairId: pair.id, status: 'correct' });
+        details.push({ pairId: pair.id, difficulty, status: 'correct' });
       } else {
-        details.push({ pairId: pair.id, status: 'incorrect', reason: `expected ${pair.expectedWinner}, got ${judgedWinner}` });
+        details.push({ pairId: pair.id, difficulty, status: 'incorrect', reason: `expected ${pair.expectedWinner}, got ${judgedWinner}` });
       }
     }
   }
 
+  // Overall stats
   const validPairs = details.filter((d) => d.status !== 'discarded').length;
   const discardedPairs = details.filter((d) => d.status === 'discarded').length;
   const correctPairs = details.filter((d) => d.status === 'correct').length;
   const accuracy = validPairs > 0 ? correctPairs / validPairs : 0;
   const positionBias = pairs.length > 0 ? discardedPairs / pairs.length : 0;
 
+  // Per-difficulty stats
+  const easyDetails = details.filter((d) => d.difficulty === 'easy');
+  const hardDetails = details.filter((d) => d.difficulty === 'hard');
+  const easy = computeSubsetStats(easyDetails);
+  const hard = computeSubsetStats(hardDetails);
+
+  // Gate checks: overall AND hard subset must each pass
   const failReasons: string[] = [];
+
+  // Overall gates
   if (accuracy <= CALIBRATION_ACCURACY_THRESHOLD) {
-    failReasons.push(`accuracy ${(accuracy * 100).toFixed(1)}% <= ${CALIBRATION_ACCURACY_THRESHOLD * 100}% threshold`);
+    failReasons.push(`overall accuracy ${(accuracy * 100).toFixed(1)}% <= ${CALIBRATION_ACCURACY_THRESHOLD * 100}% threshold`);
   }
   if (validPairs < CALIBRATION_MIN_VALID_PAIRS) {
-    failReasons.push(`valid pairs ${validPairs} < ${CALIBRATION_MIN_VALID_PAIRS} minimum`);
+    failReasons.push(`overall valid pairs ${validPairs} < ${CALIBRATION_MIN_VALID_PAIRS} minimum`);
   }
   if (positionBias > CALIBRATION_MAX_BIAS) {
-    failReasons.push(`position bias ${(positionBias * 100).toFixed(1)}% > ${CALIBRATION_MAX_BIAS * 100}% maximum`);
+    failReasons.push(`overall position bias ${(positionBias * 100).toFixed(1)}% > ${CALIBRATION_MAX_BIAS * 100}% maximum`);
+  }
+
+  // Hard-subset gates (only if hard pairs exist)
+  if (hard.totalPairs > 0) {
+    if (hard.accuracy <= CALIBRATION_ACCURACY_THRESHOLD) {
+      failReasons.push(`hard accuracy ${(hard.accuracy * 100).toFixed(1)}% <= ${CALIBRATION_ACCURACY_THRESHOLD * 100}% threshold`);
+    }
+    if (hard.validPairs < CALIBRATION_MIN_VALID_PAIRS) {
+      failReasons.push(`hard valid pairs ${hard.validPairs} < ${CALIBRATION_MIN_VALID_PAIRS} minimum`);
+    }
+    if (hard.positionBias > CALIBRATION_MAX_BIAS) {
+      failReasons.push(`hard position bias ${(hard.positionBias * 100).toFixed(1)}% > ${CALIBRATION_MAX_BIAS * 100}% maximum`);
+    }
   }
 
   const passed = failReasons.length === 0;
@@ -132,6 +194,8 @@ export async function runCalibration(
     passed,
     details,
     failReasons,
+    easy,
+    hard,
   };
 
   // Write run log
@@ -142,6 +206,8 @@ export async function runCalibration(
     commitSha: 'unknown', // filled by CLI
     params: {
       totalPairs: pairs.length,
+      easyPairs: easy.totalPairs,
+      hardPairs: hard.totalPairs,
       accuracyThreshold: CALIBRATION_ACCURACY_THRESHOLD,
       minValidPairs: CALIBRATION_MIN_VALID_PAIRS,
       maxBias: CALIBRATION_MAX_BIAS,
@@ -154,6 +220,8 @@ export async function runCalibration(
       correctPairs,
       positionBias,
       failReasons,
+      easy,
+      hard,
     },
     details,
   };
