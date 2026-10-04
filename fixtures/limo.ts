@@ -59,7 +59,7 @@ export const DEMO_WITNESSES: readonly DemoWitness[] = [
       {
         qid: 'q1',
         behindText:
-          '他花钱这事特别分裂。跟我吃饭从来没让我买过单,有一回我抢着付,他脸都拉下来了,说"你少来这套"。但我跟你讲,上个月他半夜给我打电话,借了两万,说手头周转一下,还嘱咐我千万别跟他妈提。他平时那副"我不缺钱"的样子,现在想想全是撑的。',
+          '他花钱这事特别分裂。跟我吃饭从来没让我买过单,有一回我抢着付,他脸都拉下来了,说"你少来这套"。但我跟你讲,上个月他半夜给我打电话,借了两万,说手头周转一下,还嘱咐我千万别跟他妈提。他平时那副"我不缺钱"的样子,现在想想全是撑的。上周我约他吃饭,又推了,说在忙。他最近联系确实少了。',
         frontText:
           '他啊,抠是对自己抠,手机屏碎了两年不换,请客的时候眼睛都不眨。我跟他说省着点,他说钱花在人身上才叫钱。',
       },
@@ -131,7 +131,7 @@ export const DEMO_WITNESSES: readonly DemoWitness[] = [
       {
         qid: 'q1',
         behindText:
-          '林默对钱不敏感,但这不代表他大方。他给团队买下午茶、给实习生报销打车费,从来不卡。可他自己的报销单一分钱都算得清清楚楚,该他的绝不少报。他是那种规则之内我全力对你、规则之外别麻烦我的人。',
+          '林默对钱不敏感,但这不代表他大方。他给团队买下午茶、给实习生报销打车费,从来不卡。可他自己的报销单一分钱都算得清清楚楚,该他的绝不少报。他是那种规则之内我全力对你、规则之外别麻烦我的人。上周我把他推荐给朋友的公司,他谢了我,说先不看机会,想歇一段。',
         frontText: '他对团队挺舍得的,自己反倒抠。我说你该花就花,他说没那个必要。',
       },
       {
@@ -194,7 +194,7 @@ export const DEMO_WITNESSES: readonly DemoWitness[] = [
       {
         qid: 'q1',
         behindText:
-          '我们在一起三年,账是 AA 的,精确到小数点。看电影他买票,我买爆米花,他会记下来,下次让我买票。我说你能不能别这样,他说这样清楚。但他给外人花钱特别爽快,他发小借钱他眼都不眨。我后来懂了,他不是抠,他是怕跟我算不清——他打算的就是会走。',
+          '我们在一起三年,账是 AA 的,精确到小数点。看电影他买票,我买爆米花,他会记下来,下次让我买票。我说你能不能别这样,他说这样清楚。但他给外人花钱特别爽快,他发小借钱他眼都不眨。我后来懂了,他不是抠,他是怕跟我算不清——他打算的就是会走。最近看他朋友圈步数,一天一万多,应该是又开始跑步了。',
       },
       {
         qid: 'q2',
@@ -255,7 +255,7 @@ export const DEMO_WITNESSES: readonly DemoWitness[] = [
       {
         qid: 'q1',
         behindText:
-          '小默从小就懂事,不乱花钱。上大学那会儿一个月一千五,他还能省下两百给我买东西。工作以后更不用我操心,他说妈你别管钱的事。他上个月还给我转了五千,说让我买个按摩椅,我说你留着,他说他有。',
+          '小默从小就懂事,不乱花钱。上大学那会儿一个月一千五,他还能省下两百给我买东西。工作以后更不用我操心,他说妈你别管钱的事。他上个月还给我转了五千,说让我买个按摩椅,我说你留着,他说他有。他这阵子在家吃饭比以前多了,我做什么都吃完,就是话少。',
         frontText: '我儿子不铺张,从小就是。给他爸买烟都挑打折的,对自己抠。',
       },
       {
@@ -322,7 +322,7 @@ export const DEMO_WITNESSES: readonly DemoWitness[] = [
       {
         qid: 'q1',
         behindText:
-          '默哥对钱没概念。团建他老是偷偷买单,有次我去结账发现他已经付了,我说哥这不行,他说"你一个应届生跟我抢什么"。但他自己中午就吃便利店八块钱的饭团。我看不下去,给他带过两次饭,他说"别惯着我"。',
+          '默哥对钱没概念。团建他老是偷偷买单,有次我去结账发现他已经付了,我说哥这不行,他说"你一个应届生跟我抢什么"。但他自己中午就吃便利店八块钱的饭团。我看不下去,给他带过两次饭,他说"别惯着我"。对了,他当年定的那套文档模板我们到现在还在用,新人培训都拿它当教材。他在职那阵子作息是真差,天天两点睡。',
         frontText: '默哥对我们是真大方,自己倒挺省的。我抢单抢不过他。',
       },
       {
@@ -388,7 +388,7 @@ export const DEMO_WITNESSES: readonly DemoWitness[] = [
       {
         qid: 'q1',
         behindText:
-          '我们没见过几次面,但他在网上话特别多。他给我寄过东西,我生日他点了个外卖蛋糕过来,人不到。我给他转过一次钱,他退回来了,说"你留着买皮肤"。他嘴上说不在乎钱,但有一回他跟我借过五百块,说过两天还,三天后就还了,还多给了二十。我觉得他其实很怕欠人。他朋友圈倒是从来都热闹,前几天还在大理,谁看得出来缺钱。',
+          '我们没见过几次面,但他在网上话特别多。他给我寄过东西,我生日他点了个外卖蛋糕过来,人不到。我给他转过一次钱,他退回来了,说"你留着买皮肤"。他嘴上说不在乎钱,但有一回他跟我借过五百块,说过两天还,三天后就还了,还多给了二十。我觉得他其实很怕欠人。他朋友圈倒是从来都热闹,前几天还在大理,谁看得出来缺钱。还有个细节,他游戏在线时长最近上来了,以前只有周末上线,这两周天天在。他网上吐槽工作挺多的,我估计现实里一句没说过。',
       },
       {
         qid: 'q2',
@@ -693,76 +693,76 @@ interface DemoUtterance {
 
 const BEHIND_LINES: readonly DemoUtterance[] = [
   {
+    witnessId: 'w-subordinate',
+    displayLabel: '前下属',
+    kind: 'speech',
+    text: '前两天新人培训,我发现大家还在用默哥当年那套文档模板,没人改得动。',
+  },
+  {
     witnessId: 'w-faxiao',
     displayLabel: '发小',
     kind: 'speech',
-    text: '说个事,你们别外传。上个月他半夜一点多给我打电话,借两万。我问干嘛用,他就说周转。还特意交代,别让阿姨知道。',
+    text: '他最近联系少了。上周约饭,推了,说在忙。',
   },
   {
     witnessId: 'w-netizen',
     displayLabel: '网友',
     kind: 'speech',
-    text: '?他不是前几天刚发朋友圈,说在大理',
-  },
-  {
-    witnessId: 'w-faxiao',
-    displayLabel: '发小',
-    kind: 'speech',
-    text: '就是借完钱发的',
-  },
-  {
-    witnessId: 'w-boss',
-    displayLabel: '前上司',
-    kind: 'speech',
-    text: '我说一个我知道的。他提离职前两三周吧,有次我下楼,撞见他在消防通道打电话,声音压得很低。当时没多想。',
+    text: '忙倒未必。他游戏在线时长上来了,以前只有周末上线,这两周天天在。',
   },
   {
     witnessId: 'w-ex',
     displayLabel: '前任',
     kind: 'speech',
-    text: '正常。他有事就是人间消失。我们那会儿最长一次,十九天没说一句话。十九天。',
-  },
-  {
-    witnessId: 'w-mother',
-    displayLabel: '母亲',
-    kind: 'speech',
-    text: '你们说的这些我怎么都不知道啊。小默上个月还跟我说,公司器重他,要升职',
-  },
-  {
-    witnessId: 'w-mother',
-    displayLabel: '母亲',
-    kind: 'speech',
-    text: '借钱是怎么回事?谁跟我说说',
+    text: '他是不是又开始跑步了,朋友圈那个步数,一天一万多。',
   },
   {
     witnessId: 'w-subordinate',
     displayLabel: '前下属',
     kind: 'speech',
-    text: '阿姨您别急,默哥对我们是真的好。他走那天还拉着我说,别学他。就是他自己的事,从来一个字不提。',
+    text: '有可能,他说过想把作息倒回来。在职那会儿天天两点睡。',
+  },
+  {
+    witnessId: 'w-mother',
+    displayLabel: '母亲',
+    kind: 'speech',
+    text: '他在家吃饭倒是比以前多了,我做什么都吃完。就是话少。',
   },
   {
     witnessId: 'w-faxiao',
     displayLabel: '发小',
     kind: 'speech',
-    text: '他一直这样。吃饭我抢个单他都能跟我翻脸。只能他帮别人,反过来不行。',
-  },
-  {
-    witnessId: 'w-ex',
-    displayLabel: '前任',
-    kind: 'speech',
-    text: '你问他怎么了,永远就仨字,没事,还行。跟墙聊天都比跟他聊有来有回。',
-  },
-  {
-    witnessId: 'w-netizen',
-    displayLabel: '网友',
-    kind: 'speech',
-    text: '我俩网上聊了四年,见面就一次。网上他话特别多,什么都聊。见面那天基本全程我在说。我一度以为网上网下是两个人。',
+    text: '话少正常,他从小这样,心里有事就安静。',
   },
   {
     witnessId: 'w-boss',
     displayLabel: '前上司',
     kind: 'speech',
-    text: '想起来一件事。有次评审我把他方案毙了,散会他追到我办公室,一条一条跟我掰。后来我才听说,他那天晚上在楼下坐到十二点。方案他能争成这样,自己的事一句没有。挺怪的。',
+    text: '我上周把他推给一个朋友的公司,他说先不看机会,想歇一段。挺好,会歇是本事。',
+  },
+  {
+    witnessId: 'w-netizen',
+    displayLabel: '网友',
+    kind: 'speech',
+    text: '他网上吐槽工作其实挺多的,估计现实里一句没说过。',
+  },
+  {
+    witnessId: 'w-ex',
+    displayLabel: '前任',
+    kind: 'speech',
+    text: '嗯,他的事,你们从他嘴里是听不到的。',
+  },
+  {
+    witnessId: 'w-faxiao',
+    displayLabel: '发小',
+    kind: 'speech',
+    text: '……行吧。反正他要真缺什么,会开口的。应该会吧。',
+  },
+  {
+    witnessId: 'w-mother',
+    displayLabel: '母亲',
+    kind: 'speech',
+    text: '你们平时多约他出去走走,他听你们的。',
   },
 ];
 
@@ -771,25 +771,25 @@ const FRONT_LINES: readonly DemoUtterance[] = [
     witnessId: 'w-faxiao',
     displayLabel: '发小',
     kind: 'speech',
-    text: '哟,正主来了。刚还说你呢,说你最近挺潇洒',
-  },
-  {
-    witnessId: 'w-boss',
-    displayLabel: '前上司',
-    kind: 'speech',
-    text: '出来了也好。休息一段,想清楚再动,你的能力不愁下家。',
-  },
-  {
-    witnessId: 'w-mother',
-    displayLabel: '母亲',
-    kind: 'speech',
-    text: '小默你坐。妈就想问问,你最近吃饭规律吗',
+    text: '哟,来了。刚说你呢,约都约不动,架子大了啊。',
   },
   {
     witnessId: 'w-subordinate',
     displayLabel: '前下属',
     kind: 'speech',
-    text: '默哥,哪天出来撸串,兄弟们都念叨你',
+    text: '默哥,你那套模板我们还在用,新人都得先学那个。',
+  },
+  {
+    witnessId: 'w-mother',
+    displayLabel: '母亲',
+    kind: 'speech',
+    text: '快坐。刚还说到你吃饭的事。',
+  },
+  {
+    witnessId: 'w-boss',
+    displayLabel: '前上司',
+    kind: 'speech',
+    text: '歇够了跟我说一声,那边机会一直有。',
   },
   {
     witnessId: 'w-ex',
@@ -807,19 +807,19 @@ const FRONT_LINES: readonly DemoUtterance[] = [
     witnessId: 'w-faxiao',
     displayLabel: '发小',
     kind: 'speech',
-    text: '就一句啊,有事别一个人憋着。行了说完了,喝酒。',
+    text: '下周约饭,别再推了啊。就这一句。',
   },
   {
     witnessId: 'w-mother',
     displayLabel: '母亲',
     kind: 'speech',
-    text: '工作的事妈不懂,你自己拿主意。家里饭一直有你的。',
+    text: '周末回来,妈给你炖汤。',
   },
   {
-    witnessId: 'w-boss',
-    displayLabel: '前上司',
+    witnessId: 'w-subordinate',
+    displayLabel: '前下属',
     kind: 'speech',
-    text: '门一直开着,想回来,打个电话就行。',
+    text: '兄弟们都等你撸串呢。',
   },
   {
     witnessId: 'w-ex',
