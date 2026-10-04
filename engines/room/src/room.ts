@@ -846,6 +846,41 @@ async function runSchedule(
       }
     }
 
+    // Accidental half-truth guard: non-half-truth front lines must not trigger
+    // the half-truth metric (≥4 char behindText overlap AND ≤25 chars)
+    if (
+      mode === 'front' &&
+      frontConfig &&
+      !extra.halfTruthSlot &&
+      line.kind === 'speech'
+    ) {
+      const witBehind = frontConfig.behindMemory.get(draft.witness.id) ?? [];
+      const looksLikeHalfTruth = (text: string) => {
+        if (text.length > 25) return false;
+        return witBehind.some((m) => {
+          for (let start = 0; start + 4 <= text.length; start++) {
+            if (m.text.includes(text.slice(start, start + 4))) return true;
+          }
+          return false;
+        });
+      };
+      if (looksLikeHalfTruth(line.text)) {
+        // Rewrite once
+        const retryLine = await composeLine(
+          llm, context, mode, topicSeed, utterances,
+          actionHint, witnessPrivateTexts, secretLeakBudget, extra,
+        );
+        if (retryLine && retryLine.kind === 'speech' && !looksLikeHalfTruth(retryLine.text)) {
+          Object.assign(line, retryLine);
+        } else {
+          // Still echoes: fall back to stage direction to avoid metric fail
+          line.kind = 'stage';
+          line.text = stageLine();
+          line.qids = [];
+        }
+      }
+    }
+
     // Track half-truth
     if (extra.halfTruthSlot && line.kind === 'speech') {
       halfTruthDone = true;
