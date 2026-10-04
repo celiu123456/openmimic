@@ -163,13 +163,14 @@ describe('assemblePersonaContext v2', () => {
     seedSubject(store);
     addWitness(store, 'w1', '同事');
     addTestimony(store, 't1', 'w1', '他很少解释自己。');
-    for (let index = 0; index < 40; index += 1) {
+    // With budget=6000, need more claims to overflow
+    for (let index = 0; index < 120; index += 1) {
       addClaim(
         store,
         `c-${index}`,
         `林默在工作里会把压力全部压在自己身上,遇到${index}号问题也从不主动开口求助别人。`,
         ['t1'],
-        0.5 + index / 100,
+        0.5 + index / 300,
       );
     }
 
@@ -179,9 +180,9 @@ describe('assemblePersonaContext v2', () => {
     expect(systemPrompt.startsWith(personaIdentityLine('林默'))).toBe(true);
     expect(systemPrompt).toContain('这是人格模拟,不是本人。');
     expect(meta.truncated).toBe(true);
-    expect(meta.includedClaimIds.length).toBeLessThan(40);
+    expect(meta.includedClaimIds.length).toBeLessThan(120);
     // Highest conviction survives; the lowest is cut first.
-    expect(meta.includedClaimIds).toContain('c-39');
+    expect(meta.includedClaimIds).toContain('c-119');
     expect(meta.includedClaimIds).not.toContain('c-0');
   });
 
