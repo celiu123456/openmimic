@@ -99,25 +99,27 @@ function buildFilingSystem(displayName: string): string {
   ].join('\n');
 }
 
-const RELATION_SYSTEM = [
-  '你是人格法庭的关系判定智能体。',
-  '输入是两条来自不同证人的候选论断。',
-  '请判定它们的关系:',
-  '- agreement:两位证人**各自独立观察到同一种行为模式**,方向一致,可合并。★仅仅话题相近不算;一方只是转述另一方在场的同一件事也不算;只有双方各自有独立的观察才算 agreement。判为 agreement 时,你必须写一句 mergedText:用一句话概括两位证人共同观察到的行为模式,不带任何一方的专属细节(不提具体人名/事件/数字);',
-  '- perspective_difference:两人谈的是**同一行为维度**,但观察方向不同(例如同一个人的花钱态度,A说大方B说抠;同一个人的脾气,A说温和B说冷暴力)。★维度必须是一个具体行为(如"花钱""表达情绪""守约""对人态度"),不能是笼统概念;',
-  '- factual_conflict:对同一件事实(发生没发生、怎么发生的)的矛盾;',
-  '- unrelated:两条论断谈的是**不同的行为维度**,即使它们都在描述同一个人。例如"消防楼梯打电话"和"对外人话多"谈的是不同维度,判 unrelated。',
-  '',
-  '★判断标准:先确认两条论断是否聚焦同一个具体行为维度。如果不是同一维度,直接判 unrelated。',
-  '',
-  '正例(perspective_difference): "对朋友花钱大方" vs "对女朋友精确AA" → 同一维度(花钱态度),方向不同 → perspective_difference, topic="消费态度"',
-  '反例(unrelated): "在消防楼梯独自打电话" vs "对外人话很多" → 不同维度(压力行为 vs 社交沟通) → unrelated',
-  '反例(unrelated): "帮人兜底从不谈条件" vs "冷战十九天" → 不同维度(助人行为 vs 冲突处理) → unrelated',
-  '',
-  'topic 必须是一个具体维度,如"花钱""表达情绪""接受帮助""守约"等。不要写笼统的描述。',
-  '只输出 JSON 对象:{"relation":"...","topic":"...","reason":"...","mergedText":"..."}',
-  'mergedText 仅在 agreement 时必须填写。',
-].join('\n');
+function buildRelationSystem(displayName: string): string {
+  return [
+    '你是人格法庭的关系判定智能体。',
+    '输入是两条来自不同证人的候选论断。',
+    '请判定它们的关系:',
+    `- agreement:两位证人**各自独立观察到同一种行为模式**,方向一致,可合并。★仅仅话题相近不算;一方只是转述另一方在场的同一件事也不算;只有双方各自有独立的观察才算 agreement。判为 agreement 时,你必须写一句 mergedText:用一句话概括两位证人共同观察到的行为模式,不带任何一方的专属细节(不提具体人名/事件/数字);mergedText 的主语必须用"${displayName}",不要用"他""她""该人""当事人"等代词;`,
+    '- perspective_difference:两人谈的是**同一行为维度**,但观察方向不同(例如同一个人的花钱态度,A说大方B说抠;同一个人的脾气,A说温和B说冷暴力)。★维度必须是一个具体行为(如"花钱""表达情绪""守约""对人态度"),不能是笼统概念;',
+    '- factual_conflict:对同一件事实(发生没发生、怎么发生的)的矛盾;',
+    '- unrelated:两条论断谈的是**不同的行为维度**,即使它们都在描述同一个人。例如"消防楼梯打电话"和"对外人话多"谈的是不同维度,判 unrelated。',
+    '',
+    '★判断标准:先确认两条论断是否聚焦同一个具体行为维度。如果不是同一维度,直接判 unrelated。',
+    '',
+    '正例(perspective_difference): "对朋友花钱大方" vs "对女朋友精确AA" → 同一维度(花钱态度),方向不同 → perspective_difference, topic="消费态度"',
+    '反例(unrelated): "在消防楼梯独自打电话" vs "对外人话很多" → 不同维度(压力行为 vs 社交沟通) → unrelated',
+    '反例(unrelated): "帮人兜底从不谈条件" vs "冷战十九天" → 不同维度(助人行为 vs 冲突处理) → unrelated',
+    '',
+    'topic 必须是一个具体维度,如"花钱""表达情绪""接受帮助""守约"等。不要写笼统的描述。',
+    '只输出 JSON 对象:{"relation":"...","topic":"...","reason":"...","mergedText":"..."}',
+    'mergedText 仅在 agreement 时必须填写。',
+  ].join('\n');
+}
 
 const CONFRONTATION_SYSTEM = [
   '你是人格法庭的对质智能体。',
@@ -626,7 +628,7 @@ export async function runCourt(
     const judgment = await attemptJson(
       llm,
       {
-        system: RELATION_SYSTEM,
+        system: buildRelationSystem(displayName),
         user: buildRelationUser(pair.claimA, pair.claimB, witnessRelationMap),
         maxTokens: 1024,
       },
