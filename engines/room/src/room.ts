@@ -234,26 +234,62 @@ interface PersonaContext {
   memory: MemoryEntry[];
 }
 
-function buildSystem(context: PersonaContext, mode: RoomMode, topicSeed: string): string {
+/**
+ * Action hint for a turn: whether the model should contribute testimony info
+ * or just react casually (agree, short filler, change topic).
+ */
+export type ActionHint = 'contribute' | 'react';
+
+function buildSystem(
+  context: PersonaContext,
+  mode: RoomMode,
+  topicSeed: string,
+  actionHint: ActionHint = 'contribute',
+): string {
   const { witness, subjectName } = context;
-  const lines = [
-    `你是${subjectName}的${witness.relation}。现在一屋子认识TA的人聊起了「${topicSeed}」。`,
-    '你只说你自己亲眼见过、亲耳听过的事,不要编造。',
-    '一次只说一两句,用口语,像饭桌上随口聊天。',
-    '不要提"证言""问卷""数据""分析"这类词。',
-    // 内容分布按真实日常八卦校准(Robbins & Karan 2019, EAR 自然采样:
-    // 74.3% 中性 / 15.1% 负面 / 9.4% 正面):绝大多数时候只是交换平淡的
-    // 观察,附和别人时带上一条你自己看到的小事;偶尔轻微吐槽,很少夸。
-    '大多数时候说点平常的观察就好;别人说到点子上就附和一句,顺带补一个你自己见过的小细节。',
-    '不要上来就说重磅的事。你私下知道的秘密或难堪事,在这种场合不说出口;实在被聊到边上,至多含糊带过或岔开话题。',
-    '在场的还有TA的其他熟人(可能包括家人),说话留分寸。',
-  ];
-  if (witness.stance) lines.push(`你自报的立场是:${witness.stance}。`);
-  lines.push(
-    mode === 'behind'
-      ? `${subjectName}不在场,你可以说得直接一点。`
-      : `${subjectName}此刻就坐在旁边,你看得见TA的表情。`,
-  );
+  const lines: string[] = [];
+
+  if (mode === 'behind') {
+    lines.push(
+      `你是${subjectName}的${witness.relation}。现在一屋子认识TA的人闲聊,话题是「${topicSeed}」。`,
+      '你只说你自己亲眼见过、亲耳听过的事,不要编造。',
+      '说话要像真正的饭桌上随口聊天:短句、口语、可以不完整。一次最多一两句,不要讲一整段。',
+      '不要提"证言""问卷""数据""分析"这类词。',
+    );
+    // Action hint determines whether this turn should add testimony content
+    if (actionHint === 'react') {
+      lines.push(
+        '这轮你只需要简单回应一下:接一句别人的话、附和一声、换个话题、或者说句无关的闲话。',
+        '不要讲任何你记忆里的实质内容,qids给空数组。',
+        '例如:"嗯,是这样。""哈,他就那样。""对了最近天气不错。""行吧。"',
+      );
+    } else {
+      lines.push(
+        '接上面的话往下聊。别人刚说了什么,你可以接着说、补充、或者换个角度讲同一件事。不要突然跳到完全无关的话题。',
+        '大多数时候只是平淡的观察、近况更新;别人说到一个点,你可以附和然后顺带补一个自己见过的小细节。',
+        '不要上来就说重磅的事。你的记忆里有些秘密或难堪事——那是私下跟你说的,在这种群里绝对不能说出口。实在被聊到边上,至多含糊带过或岔开话题。',
+        '在场的还有TA的其他熟人(可能包括家人),说话留分寸。不要把所有记忆一口气倒出来。',
+      );
+    }
+  } else {
+    // Front mode: much more constrained
+    lines.push(
+      `你是${subjectName}的${witness.relation}。${subjectName}刚走进来,一屋子人都在。`,
+      '你只说你自己亲眼见过、亲耳听过的事,不要编造。',
+      '当面说话要客气、自然。说话像真正碰面打招呼:短句、口语。一次最多一句。',
+      '不要提"证言""问卷""数据""分析"这类词。',
+      `${subjectName}就坐在面前,你不会当面评价TA、不会翻旧账、不会说重话。`,
+      '你说的话只能是:打招呼、嘘寒问暖、关心近况、聊无关紧要的小事、转移话题。',
+      '就算你心里有看法,现在也不说,最多客气一句带过。',
+    );
+    if (actionHint === 'react') {
+      lines.push(
+        '这轮你只需要简单接一句,不要说实质内容。qids给空数组。',
+      );
+    }
+  }
+
+  if (witness.stance) lines.push(`你的态度:${witness.stance}。`);
   if (witness.consentLevel === 'synthesis_only') {
     lines.push('你之前的话只授权用于合成转述,你只能用自己的话重讲,绝不能复述原话。');
   }
@@ -266,6 +302,7 @@ function buildUser(
   mode: RoomMode,
   topicSeed: string,
   transcript: readonly RoomUtterance[],
+  actionHint: ActionHint = 'contribute',
 ): string {
   const said =
     transcript.length === 0
@@ -283,7 +320,7 @@ function buildUser(
       ? '(你没有什么可讲的)'
       : context.memory.map((entry) => `- [${entry.qid}] ${entry.text}`).join('\n');
 
-  return [
+  const parts = [
     `话题:${topicSeed}`,
     '房间里已经说过的话:',
     said,
@@ -291,10 +328,31 @@ function buildUser(
     '只有你自己知道的记忆(别人看不到这些):',
     memory,
     '',
-    mode === 'behind'
-      ? '现在轮到你,背着TA说一句。'
-      : `${context.subjectName}就在旁边,现在轮到你,当着TA的面说一句。`,
-  ].join('\n');
+  ];
+
+  // Highlight the last thing that was said so the model can respond to it
+  if (transcript.length > 0) {
+    const last = transcript[transcript.length - 1]!;
+    if (last.kind === 'speech') {
+      parts.push(`刚刚${last.displayLabel}说了:「${last.text}」`);
+    }
+  }
+
+  if (mode === 'behind') {
+    if (actionHint === 'react') {
+      parts.push('现在轮到你,随便接一句就行,不用说你记忆里的事。简短点。');
+    } else {
+      parts.push('现在轮到你,接着聊,背着TA说一句。简短自然,像聊天不像念稿。');
+    }
+  } else {
+    if (actionHint === 'react') {
+      parts.push(`${context.subjectName}就在旁边,简单接一句。`);
+    } else {
+      parts.push(`${context.subjectName}就在旁边,当面客气地说一句。别评价TA,只说关心或闲聊的话。`);
+    }
+  }
+
+  return parts.join('\n');
 }
 
 function rewriteInstruction(consentHit: boolean, diagnosisWord: string | undefined): string {
@@ -314,15 +372,73 @@ interface ComposedLine {
   qids: string[];
 }
 
+/** Stage direction used when a secret leak is caught and cannot be rewritten. */
+export const SECRET_LEAK_FALLBACK_STAGE = '欲言又止,没说下去';
+
 /**
- * Generate one line for one persona, enforcing the two guards.
+ * Phrases that mark content as private/confidential in testimony.
+ * Used for the secret leak guard.
+ */
+const PRIVATE_MARKERS = [
+  '别告诉',
+  '别跟',
+  '千万别',
+  '别外传',
+  '只跟你说',
+  '你可别',
+  '你别跟',
+  '谁都没说',
+  '别人不知道',
+  '没跟',
+  '嘱咐我',
+];
+
+/**
+ * Extract private sentence ranges from a testimony text.
+ * Returns the private sentences (sentence containing a marker + the preceding one).
+ */
+function extractPrivateSentences(text: string): string[] {
+  const sentences = text.split(/(?<=[。！？；\n])/).map((s) => s.trim()).filter(Boolean);
+  const result: string[] = [];
+  for (let i = 0; i < sentences.length; i++) {
+    const sentence = sentences[i]!;
+    if (PRIVATE_MARKERS.some((m) => sentence.includes(m))) {
+      if (i > 0) result.push(sentences[i - 1]!);
+      result.push(sentence);
+    }
+  }
+  return result;
+}
+
+/**
+ * Check if a generated line leaks private content from testimony.
+ * Returns true if there is a >= 8 character substring overlap with private content.
+ */
+function hasPrivateLeak(
+  text: string,
+  privateTexts: readonly string[],
+): boolean {
+  const MIN_OVERLAP = 8;
+  if (text.length < MIN_OVERLAP) return false;
+  for (const priv of privateTexts) {
+    if (priv.length < MIN_OVERLAP) continue;
+    for (let start = 0; start + MIN_OVERLAP <= priv.length; start++) {
+      if (text.includes(priv.slice(start, start + MIN_OVERLAP))) return true;
+    }
+  }
+  return false;
+}
+
+/**
+ * Generate one line for one persona, enforcing the three guards.
  *
- * Order of operations matches the task contract exactly:
+ * Order of operations:
  * 1. one LLM call (retried once on unparseable output, then the turn is
  *    skipped entirely);
  * 2. if the line quotes a `synthesis_only` memory or uses a diagnostic label,
  *    one rewrite call;
- * 3. if the rewrite is also unusable, a fixed stage direction replaces it.
+ * 3. if the line leaks private content, one rewrite call;
+ * 4. if the rewrite is also unusable, a fixed stage direction replaces it.
  */
 async function composeLine(
   llm: LLMClient,
@@ -330,9 +446,12 @@ async function composeLine(
   mode: RoomMode,
   topicSeed: string,
   transcript: readonly RoomUtterance[],
+  actionHint: ActionHint = 'contribute',
+  privateTexts: readonly string[] = [],
+  secretLeakBudget?: { remaining: number },
 ): Promise<ComposedLine | undefined> {
-  const system = buildSystem(context, mode, topicSeed);
-  const user = buildUser(context, mode, topicSeed, transcript);
+  const system = buildSystem(context, mode, topicSeed, actionHint);
+  const user = buildUser(context, mode, topicSeed, transcript, actionHint);
 
   const first = await attemptResponse(llm, { system, user }, 2);
   if (!first.ok) return undefined;
@@ -344,7 +463,37 @@ async function composeLine(
     context.witness.consentLevel === 'synthesis_only' &&
     containsConsentOverlap(first.value.text, memoryTexts);
   const diagnosisWord = findDiagnosisWord(first.value.text);
-  if (!consentHit && !diagnosisWord) return { kind: 'speech', text: first.value.text, qids: first.value.qids };
+
+  // Check for private content leak
+  const leaksSecret =
+    privateTexts.length > 0 && hasPrivateLeak(first.value.text, privateTexts);
+
+  if (!consentHit && !diagnosisWord && !leaksSecret) {
+    return { kind: 'speech', text: first.value.text, qids: first.value.qids };
+  }
+
+  // Secret leak: try rewrite, then fall back to hesitation stage direction
+  if (leaksSecret && !consentHit && !diagnosisWord) {
+    // If we still have budget for a "hesitation" mention, use it
+    if (secretLeakBudget && secretLeakBudget.remaining > 0) {
+      secretLeakBudget.remaining -= 1;
+      return { kind: 'stage', text: SECRET_LEAK_FALLBACK_STAGE, qids: [] };
+    }
+    // No budget: just skip the private content and try a plain rewrite
+    const rewritten = await attemptResponse(
+      llm,
+      {
+        system,
+        user: `${user}\n\n刚才那句涉及私事,换一句说。说点别的,不要说任何秘密或私下的事。`,
+      },
+      2,
+    );
+    if (rewritten.ok && !hasPrivateLeak(rewritten.value.text, privateTexts)) {
+      return { kind: 'speech', text: rewritten.value.text, qids: rewritten.value.qids };
+    }
+    // Skip the turn entirely rather than leak
+    return undefined;
+  }
 
   const rewritten = await attemptResponse(
     llm,
@@ -356,7 +505,11 @@ async function composeLine(
       context.witness.consentLevel === 'synthesis_only' &&
       containsConsentOverlap(rewritten.value.text, memoryTexts);
     const stillDiagnosing = findDiagnosisWord(rewritten.value.text);
-    if (!stillQuoting && !stillDiagnosing) return { kind: 'speech', text: rewritten.value.text, qids: rewritten.value.qids };
+    const stillLeaking =
+      privateTexts.length > 0 && hasPrivateLeak(rewritten.value.text, privateTexts);
+    if (!stillQuoting && !stillDiagnosing && !stillLeaking) {
+      return { kind: 'speech', text: rewritten.value.text, qids: rewritten.value.qids };
+    }
   }
 
   return {
@@ -384,12 +537,83 @@ interface UtteranceDraft {
 }
 
 /**
- * Round-robin schedule over a set of personas.
+ * Decide the action hint for a given turn position.
  *
- * Simple by design: one turn per persona per round, at most
- * {@link DEFAULT_MAX_TURNS_PER_WITNESS} rounds, and a hard total ceiling of
- * {@link DEFAULT_MAX_UTTERANCES}. A skipped turn (unparseable LLM output) costs
- * that persona their slot in the round but does not shorten anyone else's.
+ * The pattern ensures ~40-60% of turns are "react" (casual filler) and the
+ * rest are "contribute" (can draw on testimony). Early turns lean contribute
+ * to establish the conversation; later turns sprinkle in more filler.
+ *
+ * For front mode, react ratio is even higher (most turns should be small talk).
+ */
+function decideActionHint(
+  turnIndex: number,
+  totalPlanned: number,
+  mode: RoomMode,
+): ActionHint {
+  if (mode === 'front') {
+    // Front: ~70% react, only every 3rd or 4th turn contributes
+    return turnIndex % 3 === 0 ? 'contribute' : 'react';
+  }
+  // Behind: first 2 turns contribute (establish topic), then alternate
+  if (turnIndex < 2) return 'contribute';
+  // Odd positions react, even contribute (roughly 50/50)
+  return turnIndex % 2 === 1 ? 'react' : 'contribute';
+}
+
+/**
+ * Pick the next speaker. Instead of strict round-robin, we allow the previous
+ * speaker's "responder" to go next sometimes, creating more natural back-and-forth.
+ *
+ * Rules:
+ * - No one speaks twice in a row.
+ * - Each witness gets at most `maxTurnsPerWitness` total turns.
+ * - A witness who just spoke cannot be the immediate next speaker.
+ * - Occasionally (every 3rd pick), let someone who hasn't spoken recently go
+ *   to prevent monopoly.
+ */
+function pickNextSpeaker(
+  drafts: readonly UtteranceDraft[],
+  utterances: readonly RoomUtterance[],
+  turnCounts: Map<string, number>,
+  maxPerWitness: number,
+  turnIndex: number,
+): UtteranceDraft | undefined {
+  const eligible = drafts.filter(
+    (d) => (turnCounts.get(d.witness.id) ?? 0) < maxPerWitness,
+  );
+  if (eligible.length === 0) return undefined;
+
+  const lastSpeaker = utterances.length > 0
+    ? utterances[utterances.length - 1]!.witnessId
+    : undefined;
+
+  // Filter out the last speaker (no consecutive turns)
+  const nonRepeat = eligible.filter((d) => d.witness.id !== lastSpeaker);
+  const pool = nonRepeat.length > 0 ? nonRepeat : eligible;
+
+  if (pool.length === 0) return undefined;
+
+  // Every 3rd turn, prefer the least-spoken witness for variety
+  if (turnIndex % 3 === 2) {
+    const minTurns = Math.min(...pool.map((d) => turnCounts.get(d.witness.id) ?? 0));
+    const leastSpoken = pool.filter(
+      (d) => (turnCounts.get(d.witness.id) ?? 0) === minTurns,
+    );
+    if (leastSpoken.length > 0) {
+      return leastSpoken[turnIndex % leastSpoken.length];
+    }
+  }
+
+  // Default: round-robin through eligible pool
+  return pool[turnIndex % pool.length];
+}
+
+/**
+ * Schedule and generate room utterances.
+ *
+ * Uses a conversation-aware speaker selection instead of strict round-robin,
+ * and assigns action hints to create a mix of testimony-anchored content and
+ * casual filler.
  */
 async function runSchedule(
   drafts: readonly UtteranceDraft[],
@@ -402,60 +626,87 @@ async function runSchedule(
   turns: number,
   stageLine: () => string,
   displayLabels: Map<string, string>,
+  privateTexts: readonly string[] = [],
 ): Promise<RoomUtterance[]> {
   const utterances: RoomUtterance[] = [];
+  const turnCounts = new Map<string, number>();
+  const maxPerWitness = turns;
+  // At most 1 "hesitation" stage direction for secret leaks per room
+  const secretLeakBudget = { remaining: mode === 'behind' ? 1 : 0 };
 
-  for (let turn = 0; turn < turns && utterances.length < cap; turn += 1) {
-    for (const draft of drafts) {
-      if (utterances.length >= cap) break;
-      const displayLabel = displayLabels.get(draft.witness.id) ?? draft.witness.relation;
-      const context: PersonaContext = {
-        witness: draft.witness,
-        subjectName,
-        memory: draft.memory,
-      };
+  for (let turnIndex = 0; utterances.length < cap; turnIndex += 1) {
+    const draft = pickNextSpeaker(drafts, utterances, turnCounts, maxPerWitness, turnIndex);
+    if (!draft) break; // all witnesses exhausted
 
-      if (mode === 'front' && draft.memory.length === 0) {
-        // No frontText => no invented opinion. Only a stage direction.
-        utterances.push({
-          witnessId: draft.witness.id,
-          displayLabel,
-          text: stageLine(),
-          kind: 'stage',
-          at: now(),
-          tier: 'extrapolate',
-          anchors: [],
-        });
-        continue;
-      }
+    const displayLabel = displayLabels.get(draft.witness.id) ?? draft.witness.relation;
+    const context: PersonaContext = {
+      witness: draft.witness,
+      subjectName,
+      memory: draft.memory,
+    };
 
-      const line = await composeLine(llm, context, mode, topicSeed, utterances);
-      if (!line) continue; // unparseable twice: skip this turn
-
-      // Build anchors from model-cited qids
-      const citedAnchors: UtteranceAnchor[] = line.qids.flatMap((qid) =>
-        draft.witnessTestimonies.map((t) => ({ testimonyId: t.testimonyId, qid })),
-      );
-
-      const { tier, anchors } = classifyUtterance({
-        text: line.text,
-        kind: line.kind,
-        witnessId: draft.witness.id,
-        consentLevel: draft.witness.consentLevel,
-        citedAnchors,
-        testimonies: draft.witnessTestimonies,
-      });
-
+    if (mode === 'front' && draft.memory.length === 0) {
+      // No frontText => no invented opinion. Only a stage direction.
       utterances.push({
         witnessId: draft.witness.id,
         displayLabel,
-        text: line.text,
-        kind: line.kind,
+        text: stageLine(),
+        kind: 'stage',
         at: now(),
-        tier,
-        anchors,
+        tier: 'extrapolate',
+        anchors: [],
       });
+      turnCounts.set(draft.witness.id, (turnCounts.get(draft.witness.id) ?? 0) + 1);
+      continue;
     }
+
+    const actionHint = decideActionHint(turnIndex, cap, mode);
+
+    // Get private texts for this specific witness's testimony
+    const witnessPrivateTexts = mode === 'behind'
+      ? privateTexts
+      : []; // front mode: no private content to guard (frontText is already filtered)
+
+    const line = await composeLine(
+      llm,
+      context,
+      mode,
+      topicSeed,
+      utterances,
+      actionHint,
+      witnessPrivateTexts,
+      secretLeakBudget,
+    );
+    if (!line) {
+      // unparseable twice: skip this turn but still count
+      turnCounts.set(draft.witness.id, (turnCounts.get(draft.witness.id) ?? 0) + 1);
+      continue;
+    }
+
+    // Build anchors from model-cited qids
+    const citedAnchors: UtteranceAnchor[] = line.qids.flatMap((qid) =>
+      draft.witnessTestimonies.map((t) => ({ testimonyId: t.testimonyId, qid })),
+    );
+
+    const { tier, anchors } = classifyUtterance({
+      text: line.text,
+      kind: line.kind,
+      witnessId: draft.witness.id,
+      consentLevel: draft.witness.consentLevel,
+      citedAnchors,
+      testimonies: draft.witnessTestimonies,
+    });
+
+    utterances.push({
+      witnessId: draft.witness.id,
+      displayLabel,
+      text: line.text,
+      kind: line.kind,
+      at: now(),
+      tier,
+      anchors,
+    });
+    turnCounts.set(draft.witness.id, (turnCounts.get(draft.witness.id) ?? 0) + 1);
   }
 
   return utterances;
@@ -520,6 +771,15 @@ export async function runBehindRoom(
   const witnesses = store.listWitnessesBySubject(subjectId);
   const displayLabels = buildDisplayLabels(witnesses);
 
+  // Extract private content from all testimony for the secret leak guard
+  const privateTexts: string[] = [];
+  for (const draft of drafts) {
+    for (const mem of draft.memory) {
+      const sentences = extractPrivateSentences(mem.text);
+      privateTexts.push(...sentences);
+    }
+  }
+
   let stageCursor = 0;
   const utterances = await runSchedule(
     drafts,
@@ -536,6 +796,7 @@ export async function runBehindRoom(
       return line;
     },
     displayLabels,
+    privateTexts,
   );
 
   const room: Room = {
