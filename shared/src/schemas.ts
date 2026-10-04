@@ -60,6 +60,10 @@ export const WitnessSchema = z.object({
   relation: z.string().min(1),
   stance: z.string().optional(),
   consentLevel: ConsentLevelSchema,
+  /** Year the witness first knew the subject (optional). */
+  knownFromYear: z.number().int().optional(),
+  /** Year the acquaintance ended; null means still ongoing. */
+  knownToYear: z.number().int().nullable().optional(),
 });
 export type Witness = z.infer<typeof WitnessSchema>;
 
@@ -126,6 +130,22 @@ export type Testimony = z.infer<typeof TestimonySchema>;
 export const ClaimStatusSchema = z.enum(['surviving', 'contested', 'retired']);
 export type ClaimStatus = z.infer<typeof ClaimStatusSchema>;
 
+/** Kind of a claim: fact (verifiable event), observation (what someone saw), pattern (behavioural tendency). */
+export const ClaimKindSchema = z.enum(['fact', 'observation', 'pattern']);
+export type ClaimKind = z.infer<typeof ClaimKindSchema>;
+
+/** Domain of a claim. */
+export const ClaimDomainSchema = z.enum(['observable', 'internal', 'evaluative']);
+export type ClaimDomain = z.infer<typeof ClaimDomainSchema>;
+
+/** Situational context attached to a claim. */
+export const ClaimContextSchema = z.object({
+  audience: z.string().optional(),
+  situation: z.string().optional(),
+  period: z.string().optional(),
+});
+export type ClaimContext = z.infer<typeof ClaimContextSchema>;
+
 /** A candidate personality claim backed by at least one testimony. */
 export const ClaimSchema = z.object({
   id: z.string().min(1),
@@ -137,8 +157,79 @@ export const ClaimSchema = z.object({
   qualifiers: z.array(z.string()).optional(),
   status: ClaimStatusSchema,
   courtSessionId: z.string().min(1),
+  /** Claim classification; defaults to 'pattern' for old data. */
+  kind: ClaimKindSchema.default('pattern'),
+  /** Observable / internal / evaluative domain. */
+  domain: ClaimDomainSchema.optional(),
+  /** Situational context (audience, situation, period). */
+  context: ClaimContextSchema.optional(),
+  /** Witness ids this claim reflects the perspective of. */
+  witnessIds: z.array(z.string().min(1)).optional(),
+  /** Episode ids that support this claim. */
+  episodeIds: z.array(z.string().min(1)).optional(),
 });
 export type Claim = z.infer<typeof ClaimSchema>;
+
+/**
+ * An episode: a verbatim excerpt from a testimony answer that describes
+ * a concrete experience or event.
+ *
+ * The `text` field must be an exact substring of the corresponding
+ * testimony answer (behindText or followupText). This invariant is
+ * enforced by `Store.putEpisode`.
+ */
+export const EpisodeSchema = z.object({
+  id: z.string().min(1),
+  subjectId: z.string().min(1),
+  witnessId: z.string().min(1),
+  testimonyId: z.string().min(1),
+  qid: z.string().min(1),
+  /** Verbatim substring of the source answer text. */
+  text: z.string().min(1),
+  /** True when the text comes from a followupText (elicited by interviewer). */
+  elicited: z.boolean(),
+  /** Situational context, e.g. "评审会", "借钱". */
+  situation: z.string().optional(),
+  /** Audience, e.g. "对上司", "对母亲". */
+  audience: z.string().optional(),
+  /** Time hint, e.g. "上个月", "离职前两三周". */
+  timeHint: z.string().optional(),
+});
+export type Episode = z.infer<typeof EpisodeSchema>;
+
+/** A divergence between witnesses on a topic. */
+export const DivergencePositionSchema = z.object({
+  witnessId: z.string().min(1),
+  claimId: z.string().min(1),
+  summary: z.string().min(1),
+});
+
+export const DivergenceSchema = z.object({
+  id: z.string().min(1),
+  subjectId: z.string().min(1),
+  courtSessionId: z.string().min(1),
+  topic: z.string().min(1),
+  type: z.enum(['perspective', 'factual']),
+  /** At least 2 positions from different witnesses. */
+  positions: z.array(DivergencePositionSchema).min(2),
+  resolution: z.enum(['kept_both', 'qualified', 'unresolved']).optional(),
+});
+export type Divergence = z.infer<typeof DivergenceSchema>;
+
+/**
+ * A corpus item: the subject's own words (not testimony).
+ *
+ * Physically separate from testimony; corpus text must never be written
+ * into a testimony or episode.
+ */
+export const CorpusItemSchema = z.object({
+  id: z.string().min(1),
+  subjectId: z.string().min(1),
+  text: z.string().min(1),
+  source: z.enum(['pasted', 'imported']),
+  createdAt: z.string().min(1),
+});
+export type CorpusItem = z.infer<typeof CorpusItemSchema>;
 
 /** Event kinds recorded on a court transcript. */
 export const CourtEventTypeSchema = z.enum([
@@ -164,10 +255,23 @@ export const CourtReportSchema = z.object({
   totalClaims: z.number().int().nonnegative(),
   surviving: z.number().int().nonnegative(),
   qualified: z.number().int().nonnegative(),
-  rejected: z.number().int().nonnegative(),
+  /** @deprecated Use `retired` instead; kept for backward compatibility. */
+  rejected: z.number().int().nonnegative().optional(),
+  /** Claims with status='retired'. */
+  retired: z.number().int().nonnegative().optional(),
+  /** Claims with status='contested'. */
+  contested: z.number().int().nonnegative().optional(),
   challengeCount: z.number().int().nonnegative(),
   /** Share of adjudicated claims that carry evidence (must always be 1). */
   evidenceCoverage: z.number().min(0).max(1),
+  /** Total number of divergences recorded. */
+  divergences: z.number().int().nonnegative().optional(),
+  /** Number of factual conflicts. */
+  factualConflicts: z.number().int().nonnegative().optional(),
+  /** Total number of episodes extracted. */
+  episodeCount: z.number().int().nonnegative().optional(),
+  /** Number of claims with at least one supporting episode. */
+  claimsWithEpisode: z.number().int().nonnegative().optional(),
 });
 export type CourtReport = z.infer<typeof CourtReportSchema>;
 
@@ -236,17 +340,8 @@ export type Room = z.infer<typeof RoomSchema>;
 /** Placeholder substituted for raw witness words that may not be shown. */
 export const WITHHELD_PLACEHOLDER = '[withheld]' as const;
 
-/** Conviction for a claim that survived cross-examination. */
-export const CONVICTION_SURVIVE = 0.8;
-
-/** Conviction for a claim that survived only with qualifiers. */
-export const CONVICTION_QUALIFY = 0.65;
-
 /** Conviction ceiling for a claim that was never cross-examined. */
 export const CONVICTION_UNCHALLENGED_CAP = 0.6;
-
-/** Small conviction decay applied per *additional* survived challenge round. */
-export const CONVICTION_DECAY_PER_CHALLENGE = 0.02;
 
 /** Scopes a testimony can be viewed through. */
 export const VIEWER_SCOPES = ['court', 'external'] as const;
