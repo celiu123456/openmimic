@@ -1,0 +1,13 @@
+{
+  "name": "@openmimic/scenario-review",
+  "version": "0.0.1",
+  "private": true,
+  "description": "Review meeting scenario: witnesses discuss the subject in a review context.",
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "dependencies": {
+    "@openmimic/kernel": "*"
+  }
+}

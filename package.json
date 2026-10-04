@@ -4,13 +4,16 @@
   "version": "0.0.2",
   "description": "A general-purpose persona engine. Rebuild anyone. Rehearse anything.",
   "license": "Apache-2.0",
-  "engines": { "node": ">=22" },
+  "engines": {
+    "node": ">=22"
+  },
   "workspaces": [
     "kernel",
     "engines/*",
     "server",
     "web",
     "plugins/*",
+    "packages/*",
     "shared"
   ],
   "scripts": {
@@ -19,12 +22,16 @@
     "dev:server": "tsx server/src/main.ts",
     "dev:web": "npm run dev -w @openmimic/web",
     "dev": "npm run dev:server & npm run dev:web",
-    "build:web": "npm run build -w @openmimic/web"
+    "build:web": "npm run build -w @openmimic/web",
+    "config:dump": "tsx scripts/config-dump.ts"
   },
   "devDependencies": {
     "@types/node": "^24.19.1",
     "tsx": "^4.23.15",
     "typescript": "^5.9.3",
     "vitest": "^3.2.7"
+  },
+  "dependencies": {
+    "yaml": "^2.9.1"
   }
 }

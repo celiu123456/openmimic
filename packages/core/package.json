@@ -1,0 +1,17 @@
+{
+  "name": "@openmimic/core",
+  "version": "0.0.1",
+  "private": true,
+  "description": "OpenMimic embeddable core: create a persona engine without starting any server.",
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "dependencies": {
+    "@openmimic/kernel": "*",
+    "@openmimic/engine-court": "*",
+    "@openmimic/engine-room": "*",
+    "@openmimic/engine-witness": "*",
+    "@openmimic/shared": "*"
+  }
+}

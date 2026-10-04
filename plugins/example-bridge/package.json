@@ -1,0 +1,13 @@
+{
+  "name": "@openmimic/example-bridge",
+  "version": "0.0.1",
+  "private": true,
+  "description": "Minimal bridge plugin template: posts persona context to a webhook on court.finished.",
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "dependencies": {
+    "@openmimic/kernel": "*"
+  }
+}

@@ -10,6 +10,7 @@
   "dependencies": {
     "@openmimic/shared": "*",
     "better-sqlite3": "^13.0.3",
+    "yaml": "^2.7.1",
     "zod": "^3.25.76"
   }
 }

@@ -10,3 +10,4 @@ data/*.sqlite
 coverage/
 *.persona
 !fixtures/**/*.persona
+openmimic.local.yml

@@ -1,0 +1,14 @@
+{
+  "name": "@openmimic/collector-freetext",
+  "version": "0.0.1",
+  "private": true,
+  "description": "A freetext testimony collector: submit a plain text paragraph as testimony.",
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "dependencies": {
+    "@openmimic/kernel": "*",
+    "@openmimic/engine-witness": "*"
+  }
+}
