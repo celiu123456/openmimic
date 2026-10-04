@@ -1,0 +1,15 @@
+{
+  "name": "@openmimic/engine-court",
+  "version": "0.0.1",
+  "private": true,
+  "description": "OpenMimic CourtEngine: adversarial cross-examination pipeline.",
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "dependencies": {
+    "@openmimic/kernel": "*",
+    "@openmimic/shared": "*",
+    "zod": "^3.25.76"
+  }
+}

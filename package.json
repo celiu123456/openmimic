@@ -12,5 +12,15 @@
     "web",
     "plugins/*",
     "shared"
-  ]
+  ],
+  "scripts": {
+    "typecheck": "tsc -p tsconfig.json --noEmit && tsc -p shared/tsconfig.json --noEmit && tsc -p kernel/tsconfig.json --noEmit && tsc -p engines/court/tsconfig.json --noEmit",
+    "test": "vitest run"
+  },
+  "devDependencies": {
+    "@types/node": "^24.19.1",
+    "tsx": "^4.23.15",
+    "typescript": "^5.9.3",
+    "vitest": "^3.2.7"
+  }
 }

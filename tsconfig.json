@@ -1,0 +1,21 @@
+{
+  "extends": "./tsconfig.base.json",
+  "compilerOptions": {
+    "baseUrl": ".",
+    "paths": {
+      "@openmimic/shared": ["./shared/src/index.ts"],
+      "@openmimic/kernel": ["./kernel/src/index.ts"],
+      "@openmimic/engine-court": ["./engines/court/src/index.ts"]
+    }
+  },
+  "include": [
+    "shared/src/**/*.ts",
+    "kernel/src/**/*.ts",
+    "kernel/test/**/*.ts",
+    "kernel/types/**/*.d.ts",
+    "engines/court/src/**/*.ts",
+    "engines/court/test/**/*.ts",
+    "vitest.config.ts"
+  ],
+  "exclude": ["node_modules", "**/dist/**"]
+}

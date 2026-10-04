@@ -1,0 +1,15 @@
+{
+  "name": "@openmimic/kernel",
+  "version": "0.0.1",
+  "private": true,
+  "description": "OpenMimic micro-kernel: testimony ledger, claim store, event bus, authorization gate, plugin host.",
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "dependencies": {
+    "@openmimic/shared": "*",
+    "better-sqlite3": "^13.0.3",
+    "zod": "^3.25.76"
+  }
+}
