@@ -308,8 +308,9 @@ function buildSystem(
     if (extra.halfTruthSlot) {
       // This witness is chosen to let slip one short line that subtly echoes their behind-the-back talk
       lines.push(
-        '你忍不住了——用很短的一句(不超过15个字)隐约提一下你心里那个想法,但说完马上自己觉得不该说,话到嘴边就收住了。',
-        '这句话不要把背后说的事直接讲出来,只是一种隐晦的、模糊的暗示。像是"没忍住嘴"的感觉。',
+        '你忍不住了——用很短的一句(不超过15个字)说出一个你背后提过的细节片段。',
+        '要求:你记忆里有"(你背后说过:……)"的内容——从中挑一个4-6个字的短语,原封不动地放进你这句话里。',
+        '整句不超过15个字,说完就像差点说漏嘴的感觉。',
         'qids给空数组。',
       );
     } else if (extra.deflectAfterHalfTruth) {
@@ -408,7 +409,7 @@ function buildUser(
     }
   } else {
     if (extra.halfTruthSlot) {
-      parts.push(`${context.subjectName}就坐在面前。你忍不住了,用很短一句暗示一下你心里的话。`);
+      parts.push(`${context.subjectName}就坐在面前。你忍不住了,从你背后说过的话里挑一个4-6字的短语,放进一句不超过15字的话里说出来。`);
     } else if (extra.deflectAfterHalfTruth) {
       parts.push(`${context.subjectName}就坐在面前。赶紧岔开话题,说点别的。`);
     } else if (actionHint === 'react') {
