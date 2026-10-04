@@ -116,8 +116,9 @@ function renderClaimLine(claim: Claim): string {
     claim.qualifiers && claim.qualifiers.length > 0
       ? `;限定:${claim.qualifiers.join(';')}`
       : '';
+  const reraised = claim.reraised ? ';重新提出:又有人提到类似的事' : '';
   const kindTag = claim.kind && claim.kind !== 'pattern' ? `[${claim.kind}]` : '';
-  return `- ${kindTag}${claim.text}（置信 ${round2(claim.conviction).toFixed(2)}${qualifier}）`;
+  return `- ${kindTag}${claim.text}（置信 ${round2(claim.conviction).toFixed(2)}${qualifier}${reraised}）`;
 }
 
 /**

@@ -275,6 +275,43 @@ describe('canReraise', () => {
 });
 
 /* ------------------------------------------------------------------ */
+/* Tests: checkReraiseAfterCourt sets reraised field                    */
+/* ------------------------------------------------------------------ */
+
+describe('checkReraiseAfterCourt', () => {
+  let store: Store;
+
+  afterEach(() => {
+    store?.close();
+  });
+
+  it('sets reraised: true on re-raised claim instead of qualifier hack', () => {
+    store = new Store();
+    seedTestData(store);
+    const gateState = createGateState();
+
+    // Contest c1 which has evidence ['t1'] (w1)
+    contestClaim('c1', store, gateState);
+    expect(store.getClaim('c1')?.status).toBe('contested');
+
+    // Expand evidence to include w2 and w3 (>= 2 new distinct witnesses)
+    const claim = store.getClaim('c1')!;
+    store.putClaim({ ...claim, evidence: ['t1', 't2', 't3'] });
+
+    // Run re-raise check
+    const session = { id: 'cs1', subjectId: 's1', startedAt: '2026-01-01', transcript: [] } as CourtSession;
+    const reraised = checkReraiseAfterCourt(session, store, gateState);
+
+    expect(reraised).toContain('c1');
+    const updated = store.getClaim('c1')!;
+    expect(updated.status).toBe('surviving');
+    expect(updated.reraised).toBe(true);
+    // Should NOT have the old qualifier string
+    expect(updated.qualifiers ?? []).not.toContain('重新提出:又有人提到类似的事');
+  });
+});
+
+/* ------------------------------------------------------------------ */
 /* Tests: permission wall (filterSessionClaims)                        */
 /* ------------------------------------------------------------------ */
 

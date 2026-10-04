@@ -169,6 +169,8 @@ export const ClaimSchema = z.object({
   witnessIds: z.array(z.string().min(1)).optional(),
   /** Episode ids that support this claim. */
   episodeIds: z.array(z.string().min(1)).optional(),
+  /** True when this claim was re-raised after a contest, not its first time through court. */
+  reraised: z.boolean().optional(),
 });
 export type Claim = z.infer<typeof ClaimSchema>;
 

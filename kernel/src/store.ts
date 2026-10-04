@@ -84,6 +84,7 @@ interface ClaimRow {
   context: string | null;
   witness_ids: string | null;
   episode_ids: string | null;
+  reraised: number | null;
 }
 
 interface EpisodeRow {
@@ -394,6 +395,10 @@ export class Store {
     }
     if (!claimColumns.includes('episode_ids')) {
       this.db.exec('ALTER TABLE claims ADD COLUMN episode_ids TEXT');
+    }
+    // P3: reraised flag for claims that were re-raised after a contest
+    if (!claimColumns.includes('reraised')) {
+      this.db.exec('ALTER TABLE claims ADD COLUMN reraised INTEGER');
     }
     // P1a: witnesses table extensions
     const witnessColumns = this.db
@@ -763,10 +768,10 @@ export class Store {
     }
 
     this.db
-      .prepare<[string, string, string, number, string, string | null, string, string, string | null, string | null, string | null, string | null, string | null]>(
+      .prepare(
         `INSERT INTO claims
-           (id, subject_id, text, conviction, evidence, qualifiers, status, court_session_id, kind, domain, context, witness_ids, episode_ids)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+           (id, subject_id, text, conviction, evidence, qualifiers, status, court_session_id, kind, domain, context, witness_ids, episode_ids, reraised)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
          ON CONFLICT(id) DO UPDATE SET
            subject_id       = excluded.subject_id,
            text             = excluded.text,
@@ -779,7 +784,8 @@ export class Store {
            domain           = excluded.domain,
            context          = excluded.context,
            witness_ids      = excluded.witness_ids,
-           episode_ids      = excluded.episode_ids`,
+           episode_ids      = excluded.episode_ids,
+           reraised         = excluded.reraised`,
       )
       .run(
         parsed.id,
@@ -795,6 +801,7 @@ export class Store {
         parsed.context ? JSON.stringify(parsed.context) : null,
         parsed.witnessIds ? JSON.stringify(parsed.witnessIds) : null,
         parsed.episodeIds ? JSON.stringify(parsed.episodeIds) : null,
+        parsed.reraised ? 1 : null,
       );
 
     return parsed;
@@ -1172,6 +1179,7 @@ export class Store {
       context: row.context ? (JSON.parse(row.context) as unknown) : undefined,
       witnessIds: row.witness_ids ? (JSON.parse(row.witness_ids) as unknown) : undefined,
       episodeIds: row.episode_ids ? (JSON.parse(row.episode_ids) as unknown) : undefined,
+      reraised: row.reraised === 1 ? true : undefined,
     });
   }
 
