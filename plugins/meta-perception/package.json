@@ -1,0 +1,15 @@
+{
+  "name": "@openmimic/meta-perception",
+  "version": "0.0.1",
+  "private": true,
+  "description": "Meta-perception scoring: predict how each witness answered, then compare.",
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "dependencies": {
+    "@openmimic/kernel": "*",
+    "@openmimic/shared": "*",
+    "@openmimic/engine-court": "*"
+  }
+}
