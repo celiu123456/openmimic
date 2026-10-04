@@ -140,6 +140,46 @@ export const CourtSessionSchema = z.object({
 });
 export type CourtSession = z.infer<typeof CourtSessionSchema>;
 
+/** Lifecycle status of a room. */
+export const RoomStatusSchema = z.enum(['behind_only', 'door_opened']);
+export type RoomStatus = z.infer<typeof RoomStatusSchema>;
+
+/**
+ * One turn inside a room transcript.
+ *
+ * `kind: 'speech'` is something a witness persona actually said; `kind: 'stage'`
+ * is a stage direction (a silence, a deflection, a polite change of subject).
+ * Both are attribution-carrying on purpose: a stage entry still names the
+ * witness it belongs to, so "who did not say it" stays answerable.
+ */
+export const RoomUtteranceSchema = z.object({
+  witnessId: z.string().min(1),
+  displayLabel: z.string().min(1),
+  text: z.string(),
+  kind: z.enum(['speech', 'stage']),
+  at: z.string().min(1),
+});
+export type RoomUtterance = z.infer<typeof RoomUtteranceSchema>;
+
+/**
+ * A generated room: the same witnesses, first behind the subject's back and
+ * then with the door open.
+ *
+ * A room is *generated artifact*, not evidence. Unlike a testimony it is not
+ * append-only: `frontTranscript` is allowed to be written once the door opens.
+ * The raw evidence it was generated from still lives in the testimony ledger.
+ */
+export const RoomSchema = z.object({
+  id: z.string().min(1),
+  subjectId: z.string().min(1),
+  topicSeed: z.string().min(1),
+  status: RoomStatusSchema,
+  behindTranscript: z.array(RoomUtteranceSchema),
+  frontTranscript: z.array(RoomUtteranceSchema).optional(),
+  createdAt: z.string().min(1),
+});
+export type Room = z.infer<typeof RoomSchema>;
+
 /* ------------------------------------------------------------------ */
 /* Constants                                                           */
 /* ------------------------------------------------------------------ */
