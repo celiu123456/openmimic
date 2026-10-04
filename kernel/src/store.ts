@@ -79,6 +79,7 @@ interface SubjectRow {
   id: string;
   display_name: string;
   self_report: string | null;
+  style_samples: string | null;
 }
 
 interface WitnessRow {
@@ -113,6 +114,7 @@ interface RoomRow {
   behind_transcript: string;
   front_transcript: string | null;
   created_at: string;
+  imported: number | null;
 }
 
 interface InterviewSessionRow {
@@ -124,9 +126,10 @@ interface InterviewSessionRow {
 
 const SCHEMA_SQL = `
 CREATE TABLE IF NOT EXISTS subjects (
-  id           TEXT PRIMARY KEY,
-  display_name TEXT NOT NULL,
-  self_report  TEXT
+  id            TEXT PRIMARY KEY,
+  display_name  TEXT NOT NULL,
+  self_report   TEXT,
+  style_samples TEXT
 );
 
 CREATE TABLE IF NOT EXISTS witnesses (
@@ -213,7 +216,8 @@ CREATE TABLE IF NOT EXISTS rooms (
   status            TEXT NOT NULL CHECK (status IN ('behind_only', 'door_opened')),
   behind_transcript TEXT NOT NULL,
   front_transcript  TEXT,
-  created_at        TEXT NOT NULL
+  created_at        TEXT NOT NULL,
+  imported          INTEGER
 );
 
 CREATE INDEX IF NOT EXISTS idx_rooms_subject ON rooms (subject_id);
@@ -273,6 +277,22 @@ export class Store {
     if (!columns.includes('avoided_qids')) {
       this.db.exec('ALTER TABLE testimonies ADD COLUMN avoided_qids TEXT');
     }
+    // `style_samples` and `rooms.imported` arrived with the `.persona` package
+    // support; older databases need the columns added before first use.
+    const subjectColumns = this.db
+      .prepare<[], { name: string }>("SELECT name FROM pragma_table_info('subjects')")
+      .all()
+      .map((row) => row.name);
+    if (!subjectColumns.includes('style_samples')) {
+      this.db.exec('ALTER TABLE subjects ADD COLUMN style_samples TEXT');
+    }
+    const roomColumns = this.db
+      .prepare<[], { name: string }>("SELECT name FROM pragma_table_info('rooms')")
+      .all()
+      .map((row) => row.name);
+    if (!roomColumns.includes('imported')) {
+      this.db.exec('ALTER TABLE rooms ADD COLUMN imported INTEGER');
+    }
   }
 
   /* ---------------------------------------------------------------- */
@@ -282,13 +302,19 @@ export class Store {
   putSubject(subject: Subject): Subject {
     const parsed = SubjectSchema.parse(subject);
     this.db
-      .prepare<[string, string, string | null]>(
-        `INSERT INTO subjects (id, display_name, self_report) VALUES (?, ?, ?)
+      .prepare<[string, string, string | null, string | null]>(
+        `INSERT INTO subjects (id, display_name, self_report, style_samples) VALUES (?, ?, ?, ?)
          ON CONFLICT(id) DO UPDATE SET
-           display_name = excluded.display_name,
-           self_report  = excluded.self_report`,
+           display_name  = excluded.display_name,
+           self_report   = excluded.self_report,
+           style_samples = excluded.style_samples`,
       )
-      .run(parsed.id, parsed.displayName, parsed.selfReport ?? null);
+      .run(
+        parsed.id,
+        parsed.displayName,
+        parsed.selfReport ?? null,
+        parsed.styleSamples ? JSON.stringify(parsed.styleSamples) : null,
+      );
     return parsed;
   }
 
@@ -404,18 +430,19 @@ export class Store {
     const parsed = RoomSchema.parse(room);
     this.db
       .prepare<
-        [string, string, string, string, string, string | null, string]
+        [string, string, string, string, string, string | null, string, number | null]
       >(
         `INSERT INTO rooms
-           (id, subject_id, topic_seed, status, behind_transcript, front_transcript, created_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?)
+           (id, subject_id, topic_seed, status, behind_transcript, front_transcript, created_at, imported)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?)
          ON CONFLICT(id) DO UPDATE SET
            subject_id        = excluded.subject_id,
            topic_seed        = excluded.topic_seed,
            status            = excluded.status,
            behind_transcript = excluded.behind_transcript,
            front_transcript  = excluded.front_transcript,
-           created_at        = excluded.created_at`,
+           created_at        = excluded.created_at,
+           imported          = excluded.imported`,
       )
       .run(
         parsed.id,
@@ -425,6 +452,7 @@ export class Store {
         JSON.stringify(parsed.behindTranscript),
         parsed.frontTranscript ? JSON.stringify(parsed.frontTranscript) : null,
         parsed.createdAt,
+        parsed.imported ? 1 : null,
       );
     return parsed;
   }
@@ -730,6 +758,9 @@ export class Store {
       id: row.id,
       displayName: row.display_name,
       selfReport: row.self_report ?? undefined,
+      styleSamples: row.style_samples
+        ? (JSON.parse(row.style_samples) as unknown)
+        : undefined,
     };
   }
 
@@ -809,6 +840,7 @@ export class Store {
         ? (JSON.parse(row.front_transcript) as unknown)
         : undefined,
       createdAt: row.created_at,
+      imported: row.imported === 1 ? true : undefined,
     });
   }
 }

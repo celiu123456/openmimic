@@ -30,7 +30,12 @@ import {
   createWitnessCollector,
 } from '@openmimic/engine-witness';
 import { DEMO_SUBJECT_ID, seedDemo } from '../../fixtures/limo';
-import { redactForExternal } from './external';
+import { redactForExternal, withholdSynthesisOnly } from './external';
+import {
+  buildPersonaPackage,
+  importPersonaPackage,
+  personaContentDisposition,
+} from './persona-package';
 import {
   HttpError,
   Router,
@@ -154,11 +159,20 @@ function describeZodError(error: ZodError): string {
     .join('; ');
 }
 
-function sendJson(response: ServerResponse, status: number, body: unknown, store: Store): void {
+function sendJson(
+  response: ServerResponse,
+  status: number,
+  body: unknown,
+  store: Store,
+  headers: Record<string, string> = {},
+): void {
   // Every outbound payload crosses the W1 authorization gate's `external`
   // scope before serialization (see redactForExternal).
   const payload = JSON.stringify(redactForExternal(store, body));
-  response.writeHead(status, { 'content-type': 'application/json; charset=utf-8' });
+  response.writeHead(status, {
+    'content-type': 'application/json; charset=utf-8',
+    ...headers,
+  });
   response.end(payload);
 }
 
@@ -398,6 +412,34 @@ function buildRouter(
     return { status: 200, body: { claims } };
   });
 
+  /* ---------------------------------------------------------------- */
+  /* .persona packages: portable, consent-filtered persona export      */
+  /* ---------------------------------------------------------------- */
+
+  router.get('/api/subjects/:id/export', (context) => {
+    const subjectId = context.params.id ?? '';
+    const subject = store.getSubject(subjectId);
+    if (!subject) throw new HttpError(404, 'subject_not_found', '当事人不存在');
+    const pkg = buildPersonaPackage(subjectId, store);
+    if (!pkg) throw new HttpError(404, 'subject_not_found', '当事人不存在');
+    // Defense in depth: the package is built from synthesized claims and
+    // `quotable` samples only, and the general scrubber runs on top so a
+    // future field cannot leak a `synthesis_only` run.
+    const body = withholdSynthesisOnly(store, subjectId, pkg);
+    return {
+      status: 200,
+      body,
+      headers: {
+        'content-disposition': personaContentDisposition(subject.displayName, subjectId),
+      },
+    };
+  });
+
+  router.post('/api/import', (context) => {
+    const result = importPersonaPackage(store, context.body);
+    return { status: 201, body: result };
+  });
+
   router.get('/api/court/:sessionId', (context) => {
     const session = store.getCourtSession(context.params.sessionId ?? '');
     if (!session) throw new HttpError(404, 'session_not_found', '法庭会话不存在');
@@ -605,7 +647,7 @@ async function handleRequest(
       await result.run(response);
       return;
     }
-    sendJson(response, result.status, result.body, store);
+    sendJson(response, result.status, result.body, store, result.headers);
   } catch (caught) {
     if (caught instanceof ZodError) {
       sendJson(response, 400, errorBody('validation_error', describeZodError(caught)), store);

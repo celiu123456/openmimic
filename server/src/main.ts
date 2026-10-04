@@ -12,7 +12,12 @@ import { startServer } from './server';
  * faked in this layer.
  */
 const DEFAULT_PORT = 7860;
-const DATABASE_PATH = 'data/openmimic.db';
+/**
+ * Shared SQLite path. `OPENMIMIC_DB` lets the HTTP server and the MCP server
+ * (`server/src/mcp/main.ts`) point at the same file; both default to
+ * `data/openmimic.db`.
+ */
+const DATABASE_PATH = process.env.OPENMIMIC_DB ?? 'data/openmimic.db';
 
 const port = Number(process.env.PORT ?? DEFAULT_PORT);
 mkdirSync(dirname(DATABASE_PATH), { recursive: true });

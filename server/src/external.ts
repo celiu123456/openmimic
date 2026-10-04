@@ -102,3 +102,36 @@ export function redactForExternal(store: Store, value: unknown): unknown {
   }
   return projected;
 }
+
+/**
+ * Withhold `synthesis_only` runs from *any* string in a payload.
+ *
+ * {@link redactForExternal} only knows two shapes (a testimony and a court
+ * session). Tool results and `.persona` packages are plain JSON, so a raw
+ * answer copied into a free-form string would slip past it. This walk applies
+ * {@link withholdOverlaps} to every string, which is the `external` scope in
+ * its most general form: anything an outbound body says is checked against the
+ * subject's withheld sources.
+ */
+export function withholdSynthesisOnly(
+  store: Store,
+  subjectIds: string | readonly string[],
+  value: unknown,
+): unknown {
+  const ids = typeof subjectIds === 'string' ? [subjectIds] : subjectIds;
+  const sources: string[] = [];
+  for (const id of ids) sources.push(...collectSynthesisOnlySources(store, id));
+  if (sources.length === 0) return value;
+
+  const walk = (entry: unknown): unknown => {
+    if (typeof entry === 'string') return withholdOverlaps(entry, sources);
+    if (Array.isArray(entry)) return entry.map(walk);
+    if (isRecord(entry)) {
+      const projected: Record<string, unknown> = {};
+      for (const [key, nested] of Object.entries(entry)) projected[key] = walk(nested);
+      return projected;
+    }
+    return entry;
+  };
+  return walk(value);
+}

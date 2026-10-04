@@ -14,6 +14,8 @@ export interface RouteContext {
 export interface RouteResult {
   status: number;
   body: unknown;
+  /** Extra response headers, merged over the JSON defaults. */
+  headers?: Record<string, string>;
 }
 
 /**

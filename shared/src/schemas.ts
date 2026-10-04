@@ -8,6 +8,20 @@ import { z } from 'zod';
  * never drift apart.
  */
 
+/**
+ * One authorized verbatim style sample, attributed to the witness whose words
+ * they are.
+ *
+ * Native subjects derive these from `quotable` testimony on demand; an
+ * imported `.persona` package carries them explicitly, because the raw
+ * testimony they came from is deliberately not distributed.
+ */
+export const StyleSampleSchema = z.object({
+  relation: z.string().min(1),
+  text: z.string().min(1),
+});
+export type StyleSample = z.infer<typeof StyleSampleSchema>;
+
 /** A person a persona is being built for. */
 export const SubjectSchema = z.object({
   id: z.string().min(1),
@@ -21,6 +35,17 @@ export const SubjectSchema = z.object({
    * into any `Testimony` or `Claim`.
    */
   selfReport: z.string().optional(),
+  /**
+   * Authorized style samples that travelled with an imported `.persona`
+   * package.
+   *
+   * Only ever populated by `POST /api/import`: a native subject's samples are
+   * re-derived from its `quotable` testimony instead of being duplicated here.
+   * Keeping them on the record is what lets the import/export round trip
+   * reproduce the package's `styleSamples` even though the raw testimony was
+   * not distributed with it.
+   */
+  styleSamples: z.array(StyleSampleSchema).optional(),
 });
 export type Subject = z.infer<typeof SubjectSchema>;
 
@@ -194,6 +219,13 @@ export const RoomSchema = z.object({
   behindTranscript: z.array(RoomUtteranceSchema),
   frontTranscript: z.array(RoomUtteranceSchema).optional(),
   createdAt: z.string().min(1),
+  /**
+   * True when the room was driven by an imported persona's claims rather than
+   * by per-witness testimony (an imported subject has no raw answers to build
+   * personas from). Purely a provenance mark: the transcript is still a
+   * generated artifact, never evidence.
+   */
+  imported: z.boolean().optional(),
 });
 export type Room = z.infer<typeof RoomSchema>;
 

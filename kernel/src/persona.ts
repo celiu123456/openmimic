@@ -1,4 +1,4 @@
-import type { Claim } from '@openmimic/shared';
+import type { Claim, StyleSample } from '@openmimic/shared';
 import type { Store } from './store';
 
 /**
@@ -91,8 +91,8 @@ function shortSentences(text: string): string[] {
  * claims derived from them. The witness relation labels the sample so the
  * model knows whose voice it is borrowing.
  */
-function collectStyleSamples(store: Store, subjectId: string): string[] {
-  const samples: string[] = [];
+function deriveQuotableSamples(store: Store, subjectId: string): StyleSample[] {
+  const samples: StyleSample[] = [];
   for (const witness of store.listWitnessesBySubject(subjectId)) {
     if (witness.consentLevel !== 'quotable') continue;
     const sentences: string[] = [];
@@ -105,10 +105,31 @@ function collectStyleSamples(store: Store, subjectId: string): string[] {
       if (sentences.length >= PERSONA_SAMPLES_PER_WITNESS) break;
     }
     for (const sentence of sentences.slice(0, PERSONA_SAMPLES_PER_WITNESS)) {
-      samples.push(`- ${witness.relation}:「${sentence}」`);
+      samples.push({ relation: witness.relation, text: sentence });
     }
   }
   return samples;
+}
+
+/**
+ * The authorized verbatim style samples for one subject.
+ *
+ * Preference order: an imported package's stored samples first (its raw
+ * testimony was deliberately not distributed, so there is nothing to
+ * re-derive), otherwise the `quotable` testimony on record. Exported and
+ * re-imported unchanged, which is what makes the `.persona` round trip
+ * faithful.
+ */
+export function collectQuotableSamples(store: Store, subjectId: string): StyleSample[] {
+  const stored = store.getSubject(subjectId)?.styleSamples;
+  if (stored && stored.length > 0) return stored.map((sample) => ({ ...sample }));
+  return deriveQuotableSamples(store, subjectId);
+}
+
+function collectStyleSamples(store: Store, subjectId: string): string[] {
+  return collectQuotableSamples(store, subjectId).map(
+    (sample) => `- ${sample.relation}:「${sample.text}」`,
+  );
 }
 
 interface Draft {
