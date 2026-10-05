@@ -14,7 +14,7 @@ import { verifyPersonaResponse } from '@openmimic/kernel';
 function fakeLLM(responses: string[]) {
   let i = 0;
   return {
-    complete: async () => responses[i++] ?? '{"unfounded": []}',
+    complete: async () => responses[i++] ?? '{"contradicts":[],"unsupported":[],"user_premise":[]}',
   };
 }
 
@@ -154,5 +154,43 @@ describe('verifyPersonaResponse', () => {
     expect(result.verified).toBe(true);
     expect(result.passed).toBe(true);
     expect(result.verifyCallCount).toBe(1);
+  });
+
+  it('user premise in question is not treated as unfounded', async () => {
+    // User mentions "周野" and "搬过家" in the question; persona merely acknowledges.
+    // The verifier should classify these as user_premise, not unsupported.
+    const result = await verifyPersonaResponse({
+      systemPrompt: SAMPLE_SYSTEM_PROMPT,
+      userMessage: '听说你帮周野搬过家？那次怎么回事？',
+      response: '嗯,搬过。具体哪天记不太清了。',
+      llm: fakeLLM([
+        '{"contradicts":[],"unsupported":[],"user_premise":["搬过","周野"]}',
+      ]),
+      displayName: '林默',
+    });
+    expect(result.verified).toBe(true);
+    expect(result.passed).toBe(true);
+    expect(result.unfoundedFragments).toEqual([]);
+    expect(result.finalResponse).toBe('嗯,搬过。具体哪天记不太清了。');
+    expect(result.verifyCallCount).toBe(1);
+  });
+
+  it('structured format: contradicts triggers rewrite', async () => {
+    const result = await verifyPersonaResponse({
+      systemPrompt: SAMPLE_SYSTEM_PROMPT,
+      userMessage: '你帮周野搬家那次,是你一个人搬的吧？',
+      response: '不是,还有小张帮忙。',
+      llm: fakeLLM([
+        '{"contradicts":[],"unsupported":["小张帮忙"],"user_premise":["搬家"]}',
+        '不是一个人,但具体谁帮了记不太清了。',
+        '{"contradicts":[],"unsupported":[],"user_premise":[]}',
+      ]),
+      displayName: '林默',
+    });
+    expect(result.verified).toBe(true);
+    expect(result.passed).toBe(false);
+    expect(result.unfoundedFragments).toEqual(['小张帮忙']);
+    expect(result.finalResponse).toBe('不是一个人,但具体谁帮了记不太清了。');
+    expect(result.verifyCallCount).toBe(3);
   });
 });

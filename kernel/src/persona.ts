@@ -213,12 +213,17 @@ function renderWitnessGroupedClaims(
 function renderEpisodes(
   episodes: Episode[],
   witnessMap: Map<string, string>,
+  nameHintMap?: Map<string, string[]>,
 ): string {
   return episodes
     .map((ep) => {
       const relation = witnessMap.get(ep.witnessId) ?? '证人';
+      const names = nameHintMap?.get(ep.witnessId);
+      const nameTag = names && names.length > 0
+        ? `(他叫对方:${names.join('/')})`
+        : '';
       const situationTag = ep.situation ? `(${ep.situation})` : '';
-      return `- ${relation}${situationTag}:「${wrapUntrusted(`episode:${ep.id}`, ep.text)}」`;
+      return `- ${relation}${nameTag}${situationTag}:「${wrapUntrusted(`episode:${ep.id}`, ep.text)}」`;
     })
     .join('\n');
 }
@@ -473,6 +478,86 @@ function assembleSections(
 }
 
 /* ------------------------------------------------------------------ */
+/* Name-hint extraction from quoted speech                             */
+/* ------------------------------------------------------------------ */
+
+/**
+ * Pattern: 他(optional verb/adverb)说"NAME,..."
+ * Captures the name/address term at the start of the subject's quoted speech.
+ * Examples: 他说"周野,我不是..." → 周野 ; 他喝了点酒,说"妈,..." → 妈
+ *
+ * Only quoted speech where the SUBJECT is the speaker ("他说") qualifies;
+ * witness's own speech ("我说") is ignored.
+ */
+const SUBJECT_QUOTE_RE = /他[^"“]*?说\s*["“]([^,，。！？"”]{1,4})[,，]/g;
+
+/**
+ * Reject strings that are clearly not names/address terms.
+ * Names are: proper names (周野/许岚/李想), kinship (妈/哥/姐),
+ * title+surname (苏总). Common sentence-starting phrases are not.
+ */
+/**
+ * Multi-char strings starting with these common verbs / adverbs / function
+ * words are almost never address terms. Single-char kinship (妈/哥/姐) or
+ * titles (总) pass because the single-char pronoun filter handles those.
+ */
+const NAME_REJECT_RE =
+  /^(你|我|他|她|它|这|那|嗯|哎|哈|喂|不|没|别|好|对|是|再|都|很|挺|就|还|有|等|算|行|走|来|去|看|说|做|吃|睡|买|想|得|能|要|会|可|让|把|被|给|到|在|往|才|只|也|又|而|但|且|真|怎|谁|什|哪|太|多|少|该|干|为|怕|知|听|谢|快|慢|早|晚|先|后|上|下)./;
+
+/**
+ * Scan all testimonies for a witness and extract how the subject
+ * addresses that witness in quoted speech. Returns a deduplicated
+ * array of name strings (e.g. ["周野"]).
+ *
+ * No hardcoded names — purely regex-driven from testimony text.
+ */
+export function extractNameHints(
+  store: Store,
+  subjectId: string,
+  witnessId: string,
+): string[] {
+  const testimonies = store.listBySubject(subjectId);
+  const nameSet = new Set<string>();
+  for (const t of testimonies) {
+    if (t.witnessId !== witnessId) continue;
+    for (const a of t.answers) {
+      for (const text of [a.behindText, a.frontText]) {
+        if (!text) continue;
+        for (const match of text.matchAll(SUBJECT_QUOTE_RE)) {
+          const name = match[1]!.trim();
+          if (name.length === 0) continue;
+          // Skip single-char generic pronouns and common sentence starters
+          if (/^[你我他她它这那嗯哎哈喂]$/.test(name)) continue;
+          // Skip multi-char common phrases (not names)
+          if (NAME_REJECT_RE.test(name)) continue;
+          nameSet.add(name);
+        }
+      }
+    }
+  }
+  return [...nameSet];
+}
+
+/**
+ * Build a map from witnessId → name hints for all witnesses in a subject.
+ * Used to enrich episode labels: "发小(他叫对方:周野)"
+ */
+function buildNameHintMap(
+  store: Store,
+  subjectId: string,
+  witnessIds: string[],
+): Map<string, string[]> {
+  const map = new Map<string, string[]>();
+  for (const wid of witnessIds) {
+    const hints = extractNameHints(store, subjectId, wid);
+    if (hints.length > 0) {
+      map.set(wid, hints);
+    }
+  }
+  return map;
+}
+
+/* ------------------------------------------------------------------ */
 /* Private content filtering                                           */
 /* ------------------------------------------------------------------ */
 
@@ -519,38 +604,52 @@ function extractPrivateSentences(text: string): string[] {
 /**
  * Build a privacy filter from all testimonies for a subject.
  * Returns a predicate that returns true if a text contains private content.
+ *
+ * Strategy: extract only **specific fact elements** (amounts, marker phrases)
+ * from private sentences — never do substring containment, which over-matches
+ * when an unrelated episode happens to be a substring of a captured sentence.
  */
 function buildPrivacyFilter(store: Store, subjectId: string): (text: string) => boolean {
   const testimonies = store.listBySubject(subjectId);
-  const privateSentences: string[] = [];
+  const markerSentences: string[] = [];  // only the sentence that contains the marker
   for (const t of testimonies) {
     for (const a of t.answers) {
-      privateSentences.push(...extractPrivateSentences(a.behindText));
+      const sentences = splitSentences(a.behindText);
+      for (const s of sentences) {
+        if (PRIVATE_MARKERS.some((m) => s.includes(m))) {
+          markerSentences.push(s);
+        }
+      }
     }
   }
 
-  if (privateSentences.length === 0) {
+  if (markerSentences.length === 0) {
     return () => false;
   }
 
-  // Extract key phrases that must not leak: amounts and marker phrases
+  // Extract key phrases that must not leak:
+  // 1. Amounts from marker sentences AND their preceding sentences
+  //    (the preceding sentence typically states the hidden fact: "借了两万")
+  // 2. The marker phrases themselves
   const privateKeyPhrases = new Set<string>();
-  for (const ps of privateSentences) {
-    const amounts = [...ps.matchAll(CN_AMOUNT_RE)].map((m) => m[0]);
-    for (const a of amounts) privateKeyPhrases.add(a);
+  for (const t of testimonies) {
+    for (const a of t.answers) {
+      const pss = extractPrivateSentences(a.behindText);
+      for (const ps of pss) {
+        const amounts = [...ps.matchAll(CN_AMOUNT_RE)].map((m) => m[0]);
+        for (const amt of amounts) privateKeyPhrases.add(amt);
+      }
+    }
+  }
+  for (const ms of markerSentences) {
     for (const m of PRIVATE_MARKERS) {
-      if (ps.includes(m)) privateKeyPhrases.add(m);
+      if (ms.includes(m)) privateKeyPhrases.add(m);
     }
   }
 
   return (text: string): boolean => {
-    // Check for key phrases (amounts, markers)
     for (const kp of privateKeyPhrases) {
       if (text.includes(kp)) return true;
-    }
-    // Check bidirectional containment with private sentences
-    for (const ps of privateSentences) {
-      if (ps.includes(text) || text.includes(ps)) return true;
     }
     return false;
   };
@@ -633,6 +732,9 @@ export async function assemblePersonaContext(
     witnessMap.set(witness.id, witness.relation);
   }
 
+  // Name hints: extract how the subject addresses each witness from quoted speech
+  const nameHintMap = buildNameHintMap(store, subjectId, [...quotableWitnessIds]);
+
   // Divergences: factual and unresolved only for the prompt
   const allDivergences = store.listDivergencesBySubject(subjectId);
   const rawPromptDivergences = allDivergences.filter(
@@ -711,14 +813,14 @@ export async function assemblePersonaContext(
   let keptEpisodes = rankedEpisodes;
   const episodeHeader = '## 别人讲过的事（证人视角,不是他本人的口吻）\n';
   if (rankedEpisodes.length > 0) {
-    let rendered = renderEpisodes(keptEpisodes, witnessMap);
+    let rendered = renderEpisodes(keptEpisodes, witnessMap, nameHintMap);
     while ((episodeHeader + rendered).length > budgets.episodes && keptEpisodes.length > SECTION_MINIMUMS.episodes) {
       keptEpisodes = keptEpisodes.slice(0, keptEpisodes.length - 1);
-      rendered = renderEpisodes(keptEpisodes, witnessMap);
+      rendered = renderEpisodes(keptEpisodes, witnessMap, nameHintMap);
     }
     // If even minimum doesn't fit, keep as many as fit
     if ((episodeHeader + rendered).length > budgets.episodes && keptEpisodes.length > 0) {
-      while ((episodeHeader + renderEpisodes(keptEpisodes, witnessMap)).length > budgets.episodes && keptEpisodes.length > 1) {
+      while ((episodeHeader + renderEpisodes(keptEpisodes, witnessMap, nameHintMap)).length > budgets.episodes && keptEpisodes.length > 1) {
         keptEpisodes = keptEpisodes.slice(0, keptEpisodes.length - 1);
       }
     }
@@ -773,7 +875,7 @@ export async function assemblePersonaContext(
   const sections: SectionContent = {
     identity,
     claims: renderWitnessGroupedClaims(keptClaims, witnessMap, opts.interlocutor, disclosureMap, holdUntilRaisedIds),
-    episodes: renderEpisodes(keptEpisodes, witnessMap),
+    episodes: renderEpisodes(keptEpisodes, witnessMap, nameHintMap),
     divergences: divergencesText,
     corpus: renderCorpus(keptCorpus),
     selfReport: keptSelfReport,
@@ -797,7 +899,7 @@ export async function assemblePersonaContext(
   if (prompt.length > PERSONA_PROMPT_BUDGET && keptEpisodes.length > 1) {
     while (prompt.length > PERSONA_PROMPT_BUDGET && keptEpisodes.length > 1) {
       keptEpisodes = keptEpisodes.slice(0, keptEpisodes.length - 1);
-      sections.episodes = renderEpisodes(keptEpisodes, witnessMap);
+      sections.episodes = renderEpisodes(keptEpisodes, witnessMap, nameHintMap);
       prompt = assembleSections(sections, keptEpisodes.length > 0, includeClaims, includeCorpus, includeSelfReport, includeStyle);
     }
   }

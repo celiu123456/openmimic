@@ -12,6 +12,7 @@ import {
   PERSONA_PROMPT_BUDGET,
   Store,
   assemblePersonaContext,
+  extractNameHints,
   personaIdentityLine,
 } from '@openmimic/kernel';
 
@@ -842,5 +843,65 @@ describe('assemblePersonaContext v2', () => {
     expect(topicMatches.length).toBe(1);
     // Merged divergence should show all three witnesses
     expect(meta.divergenceCount).toBe(1);
+  });
+
+  it('extracts name hints from quoted speech and adds them to episode labels', async () => {
+    seedSubject(store);
+    const wId = 'w-name';
+    addWitness(store, wId, '发小');
+    addTestimony(store, 't-name', wId,
+      '他说"周野,我不是不想干",然后就走了。');
+    store.putEpisode({
+      id: 'ep-name-1',
+      subjectId: SUBJECT,
+      witnessId: wId,
+      testimonyId: 't-name',
+      qid: 'q1',
+      text: '然后就走了',
+      situation: '辞职',
+      elicited: false,
+    });
+
+    const hints = extractNameHints(store, SUBJECT, wId);
+    expect(hints).toEqual(['周野']);
+
+    const { systemPrompt } = await assemblePersonaContext(SUBJECT, store);
+    expect(systemPrompt).toContain('他叫对方:周野');
+    expect(systemPrompt).toContain('发小(他叫对方:周野)');
+  });
+
+  it('privacy filter does not remove episodes that merely precede a private marker sentence', async () => {
+    seedSubject(store);
+    const wId = 'w-priv';
+    addWitness(store, wId, '朋友');
+    addTestimony(store, 't-priv', wId,
+      '他请了三天假在医院陪我。这事我谁都没说过。');
+    store.putEpisode({
+      id: 'ep-priv-1',
+      subjectId: SUBJECT,
+      witnessId: wId,
+      testimonyId: 't-priv',
+      qid: 'q1',
+      text: '他请了三天假在医院陪我',
+      situation: '住院',
+      elicited: false,
+    });
+    // A second episode with actual private keyword should be filtered
+    store.putEpisode({
+      id: 'ep-priv-2',
+      subjectId: SUBJECT,
+      witnessId: wId,
+      testimonyId: 't-priv',
+      qid: 'q1',
+      text: '这事我谁都没说过',
+      situation: '秘密',
+      elicited: false,
+    });
+
+    const { systemPrompt } = await assemblePersonaContext(SUBJECT, store);
+    // ep-priv-1 should be included (no private markers in its text)
+    expect(systemPrompt).toContain('ep-priv-1');
+    // ep-priv-2 contains "谁都没说" and should be filtered out
+    expect(systemPrompt).not.toContain('ep-priv-2');
   });
 });
