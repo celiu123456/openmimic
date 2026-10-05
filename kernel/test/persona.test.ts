@@ -445,4 +445,166 @@ describe('assemblePersonaContext v2', () => {
     const ep1Third = systemPrompt.indexOf('他还借了我两万');
     expect(ep3Pos).toBeLessThan(ep1Third);
   });
+
+  it('episodes enter the prompt and episodeCount matches actual count', async () => {
+    seedSubject(store);
+    addWitness(store, 'w1', '发小');
+    addWitness(store, 'w2', '前上司');
+    addTestimony(store, 't1', 'w1', '有一次他加班到凌晨三点,一个人走回家。');
+    addTestimony(store, 't2', 'w2', '他在会上很安静,从头到尾没说话。');
+    addClaim(store, 'c1', '林默工作拼。', ['t1'], 0.8, {
+      witnessIds: ['w1'],
+      episodeIds: ['ep1'],
+    });
+    addClaim(store, 'c2', '林默不说话。', ['t2'], 0.7, {
+      witnessIds: ['w2'],
+      episodeIds: ['ep2'],
+    });
+    store.putEpisode({
+      id: 'ep1', subjectId: SUBJECT, witnessId: 'w1', testimonyId: 't1',
+      qid: 'q1', text: '有一次他加班到凌晨三点', elicited: false,
+    });
+    store.putEpisode({
+      id: 'ep2', subjectId: SUBJECT, witnessId: 'w2', testimonyId: 't2',
+      qid: 'q1', text: '他在会上很安静', elicited: false,
+    });
+
+    const { systemPrompt, meta } = await assemblePersonaContext(SUBJECT, store);
+
+    // Episodes section should be present
+    expect(systemPrompt).toContain('别人讲过的事');
+    expect(systemPrompt).toContain('有一次他加班到凌晨三点');
+    expect(systemPrompt).toContain('他在会上很安静');
+    // episodeCount must match the number of episodes actually in the prompt
+    expect(meta.episodeCount).toBe(2);
+    // Verify the prompt actually contains both episode texts
+    const epSectionStart = systemPrompt.indexOf('别人讲过的事');
+    expect(epSectionStart).toBeGreaterThan(-1);
+  });
+
+  it('truncation order: low-conviction claims first, then corpus, then self-report, episodes last', async () => {
+    // Create a scenario that overflows the budget with many long claims,
+    // so that truncation must occur and we can verify episodes survive.
+    const longSelfReport = '我今年二十八岁,刚辞职,什么也不想做。'.repeat(20);
+    seedSubject(store, longSelfReport);
+    addWitness(store, 'w1', '发小');
+    // Testimony must contain all episode texts as substrings
+    const testimonyText = '事例A他做了一件动容的事。事例B他又做了一件动容的事。事例C他再次做了一件动容的事。另外他还有很多往事值得讲述,一辈子都说不完的那种。';
+    addTestimony(store, 't1', 'w1', testimonyText);
+
+    // Add 120 long claims to ensure budget overflow (each ~30 chars)
+    for (let i = 0; i < 120; i++) {
+      addClaim(
+        store,
+        `c-${i}`,
+        `林默在第${String(i).padStart(3, '0')}号情境下有非常独特的表现方式,每一次都令周围的人印象极为深刻。`,
+        ['t1'],
+        0.5 + i / 300,
+        {
+          witnessIds: ['w1'],
+          episodeIds: i < 3 ? [`ep-${i}`] : undefined,
+        },
+      );
+    }
+
+    // Add 3 episodes (each text is a substring of testimonyText)
+    const epTexts = [
+      '事例A他做了一件动容的事',
+      '事例B他又做了一件动容的事',
+      '事例C他再次做了一件动容的事',
+    ];
+    for (let i = 0; i < 3; i++) {
+      store.putEpisode({
+        id: `ep-${i}`, subjectId: SUBJECT, witnessId: 'w1', testimonyId: 't1',
+        qid: 'q1', text: epTexts[i], elicited: false,
+      });
+    }
+
+    // Add corpus
+    store.putCorpusItem({
+      id: 'corpus-1', subjectId: SUBJECT, text: '太累了,什么也不想做了。', source: 'pasted',
+      createdAt: new Date().toISOString(),
+    });
+
+    const { systemPrompt, meta } = await assemblePersonaContext(SUBJECT, store);
+
+    expect(systemPrompt.length).toBeLessThanOrEqual(PERSONA_PROMPT_BUDGET);
+    expect(meta.truncated).toBe(true);
+
+    // Key assertion: claims are trimmed first (from bottom = low conviction)
+    expect(meta.includedClaimIds.length).toBeLessThan(120);
+
+    // Episodes should survive because they are cut last
+    expect(meta.episodeCount).toBeGreaterThan(0);
+    expect(systemPrompt).toContain('别人讲过的事');
+  });
+
+  it('synthesis_only episode verbatim text never appears in prompt', async () => {
+    const secretEpisode = '她半夜偷偷去了医院做了一个小手术';
+    seedSubject(store);
+    addWitness(store, 'w-s', '同事', 'synthesis_only');
+    addWitness(store, 'w-q', '发小', 'quotable');
+    // Testimony must contain the episode text as a substring
+    addTestimony(store, 't-s', 'w-s', '她半夜偷偷去了医院做了一个小手术,谁都没有告诉。');
+    addTestimony(store, 't-q', 'w-q', '她最近话少了,跟以前不太一样。');
+    addClaim(store, 'c-s', '林默最近身体不太好。', ['t-s'], 0.8, {
+      witnessIds: ['w-s'],
+      episodeIds: ['ep-s'],
+    });
+    addClaim(store, 'c-q', '林默最近话少。', ['t-q'], 0.7, {
+      witnessIds: ['w-q'],
+      episodeIds: ['ep-q'],
+    });
+
+    // synthesis_only witness's episode
+    store.putEpisode({
+      id: 'ep-s', subjectId: SUBJECT, witnessId: 'w-s', testimonyId: 't-s',
+      qid: 'q1', text: secretEpisode, elicited: false,
+    });
+    // quotable witness's episode
+    store.putEpisode({
+      id: 'ep-q', subjectId: SUBJECT, witnessId: 'w-q', testimonyId: 't-q',
+      qid: 'q1', text: '她最近话少了', elicited: false,
+    });
+
+    const { systemPrompt } = await assemblePersonaContext(SUBJECT, store);
+
+    // synthesis_only episode's verbatim text must NOT appear
+    expect(systemPrompt).not.toContain(secretEpisode);
+    expect(systemPrompt).not.toContain('她半夜偷偷去了医院');
+    // quotable episode CAN appear
+    expect(systemPrompt).toContain('她最近话少了');
+    // The derived claim (which is a synthesis) IS allowed
+    expect(systemPrompt).toContain('林默最近身体不太好。');
+  });
+
+  it('meta.episodeCount matches the number of episodes actually in the prompt text', async () => {
+    seedSubject(store);
+    addWitness(store, 'w1', '发小');
+    // Testimony must contain both episode texts as substrings
+    addTestimony(store, 't1', 'w1', '他开会从头到尾没说一句话,他在食堂也是一个人坐着不聊天。');
+    addClaim(store, 'c1', '林默不爱说话。', ['t1'], 0.8, {
+      witnessIds: ['w1'],
+      episodeIds: ['ep1', 'ep2'],
+    });
+    store.putEpisode({
+      id: 'ep1', subjectId: SUBJECT, witnessId: 'w1', testimonyId: 't1',
+      qid: 'q1', text: '他开会从头到尾没说一句话', elicited: false,
+    });
+    store.putEpisode({
+      id: 'ep2', subjectId: SUBJECT, witnessId: 'w1', testimonyId: 't1',
+      qid: 'q1', text: '他在食堂也是一个人坐着不聊天', elicited: false,
+    });
+
+    const { systemPrompt, meta } = await assemblePersonaContext(SUBJECT, store);
+
+    // Count how many episode texts actually appear in the prompt
+    const ep1InPrompt = systemPrompt.includes('他开会从头到尾没说一句话');
+    const ep2InPrompt = systemPrompt.includes('他在食堂也是一个人坐着不聊天');
+    const actualCount = (ep1InPrompt ? 1 : 0) + (ep2InPrompt ? 1 : 0);
+
+    expect(meta.episodeCount).toBe(actualCount);
+    // Both should be present since budget is sufficient
+    expect(meta.episodeCount).toBe(2);
+  });
 });

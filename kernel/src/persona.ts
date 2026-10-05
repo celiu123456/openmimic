@@ -344,8 +344,9 @@ function assembleSections(
  * ranked by query relevance or conviction) → divergences → corpus → self-report
  * → discipline.
  *
- * Budget default 6000 chars (env PERSONA_PROMPT_BUDGET). Truncation order:
- * episodes → low-conviction claims → corpus → self-report.
+ * Budget default 6000 chars (env PERSONA_PROMPT_BUDGET). Truncation order
+ * (episodes are the most valuable — they are cut last):
+ * low-conviction claims → corpus → self-report → episodes.
  */
 export async function assemblePersonaContext(
   subjectId: string,
@@ -412,7 +413,8 @@ export async function assemblePersonaContext(
     selfReport,
   };
 
-  // Truncation loop
+  // Truncation loop — episodes are the most valuable content and are cut last.
+  // Order: low-conviction claims → corpus → self-report → episodes.
   let includeEpisodes = true;
   let includeClaims = true;
   let includeCorpus = true;
@@ -421,14 +423,7 @@ export async function assemblePersonaContext(
 
   let prompt = assembleSections(sections, includeEpisodes, includeClaims, includeCorpus, includeSelfReport);
 
-  // Phase 1: drop episodes
-  if (prompt.length > PERSONA_PROMPT_BUDGET && includeEpisodes) {
-    includeEpisodes = false;
-    truncated = true;
-    prompt = assembleSections(sections, includeEpisodes, includeClaims, includeCorpus, includeSelfReport);
-  }
-
-  // Phase 2: drop low-conviction claims (from bottom)
+  // Phase 1: drop low-conviction claims (from bottom)
   if (prompt.length > PERSONA_PROMPT_BUDGET && eligible.length > 0) {
     let claimCount = eligible.length;
     while (prompt.length > PERSONA_PROMPT_BUDGET && claimCount > 0) {
@@ -444,14 +439,14 @@ export async function assemblePersonaContext(
     }
   }
 
-  // Phase 3: drop corpus
+  // Phase 2: drop corpus
   if (prompt.length > PERSONA_PROMPT_BUDGET && includeCorpus) {
     includeCorpus = false;
     truncated = true;
     prompt = assembleSections(sections, includeEpisodes, includeClaims, includeCorpus, includeSelfReport);
   }
 
-  // Phase 4: clip self-report
+  // Phase 3: clip self-report
   if (prompt.length > PERSONA_PROMPT_BUDGET && includeSelfReport) {
     const marker = '…';
     let low = 0;
@@ -472,6 +467,13 @@ export async function assemblePersonaContext(
     } else {
       sections.selfReport = selfReport.slice(0, low) + marker;
     }
+    truncated = true;
+    prompt = assembleSections(sections, includeEpisodes, includeClaims, includeCorpus, includeSelfReport);
+  }
+
+  // Phase 4: drop episodes (last resort — episodes are the most valuable)
+  if (prompt.length > PERSONA_PROMPT_BUDGET && includeEpisodes) {
+    includeEpisodes = false;
     truncated = true;
     prompt = assembleSections(sections, includeEpisodes, includeClaims, includeCorpus, includeSelfReport);
   }

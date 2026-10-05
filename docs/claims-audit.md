@@ -146,6 +146,51 @@
 
 ---
 
+## BUG: 人格装配 episodeCount 恒为 0
+
+> 发现:2026-10-05 · 修复:同日
+
+### 现象
+
+`assemblePersonaContext` 的 `meta.episodeCount` 在真实场景下恒为 0,即使法庭
+提取了 91/65 条事例(见 `docs/p1a-real-run-2.md` 和 `docs/p1a-real-run-3.md`)。
+人格 prompt 中没有"别人讲过的事"段落,角色失去所有第一手叙事材料。
+
+### 根因
+
+`kernel/src/persona.ts` 的裁剪循环 Phase 顺序为:
+
+1. Phase 1: drop episodes (先砍事例)
+2. Phase 2: drop low-conviction claims
+3. Phase 3: drop corpus
+4. Phase 4: clip self-report
+
+当法庭产出的论断数量较多(林默有 69 条 surviving claims),claims + identity +
+divergences 段落已占满 6000 字符预算,episodes 是第一个被砍的段落,因此在所有
+有意义的真实场景中 `includeEpisodes` 都被设为 false,导致 `episodeCount: 0`。
+
+这是单纯的 Phase 排列错误——事例应当是最后被砍的内容(它们是最有价值的第一手
+叙事材料),而低置信论断、语料样本、自述应先被裁剪。
+
+### 修复
+
+将裁剪顺序改为:
+
+1. Phase 1: drop low-conviction claims (从最低置信开始)
+2. Phase 2: drop corpus
+3. Phase 3: clip self-report
+4. Phase 4: drop episodes (最后手段)
+
+身份声明行(identity)始终保留,不参与裁剪(原有不变量,已有测试保护)。
+
+新增 4 条测试:
+- episodes 正常进入 prompt 且 episodeCount 计数准确
+- 裁剪顺序验证:预算不足时 claims 先被裁、episodes 存活
+- synthesis_only 证人的事例原文不进入 prompt
+- meta.episodeCount 与 prompt 中实际出现的事例数一致
+
+---
+
 ## 汇总
 
 | 状态 | 条数 |
