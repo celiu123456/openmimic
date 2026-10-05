@@ -41,10 +41,13 @@ describe('generateNoTalkList', () => {
         blindWitnessId: 'w-father',
         blindClaim: '升职了,挺好的',
         sourceFragment: '查出来一个东西,让我别告诉爸',
+        severity: 'high',
+        reason: '明确嘱托保密且推翻父亲对女儿健康的认知',
       },
     ]);
 
-    const llm = new FakeLLM([llmResponse]);
+    // Double-generate: two identical calls
+    const llm = new FakeLLM([llmResponse, llmResponse]);
     const items = await generateNoTalkList(llm, '苏芷', drafts);
 
     expect(items).toHaveLength(1);
@@ -52,6 +55,7 @@ describe('generateNoTalkList', () => {
     expect(items[0]!.keywords).toContain('手术');
     expect(items[0]!.blindWitnessId).toBe('w-father');
     expect(items[0]!.knowingWitnessIds).toEqual(['w-sister']);
+    expect(items[0]!.severity).toBe('high');
   });
 
   it('returns empty array on malformed LLM response', async () => {
@@ -66,7 +70,7 @@ describe('generateNoTalkList', () => {
       },
     ];
 
-    const llm = new FakeLLM(['this is not json']);
+    const llm = new FakeLLM(['this is not json', 'also not json']);
     const items = await generateNoTalkList(llm, '某人', drafts);
     expect(items).toEqual([]);
   });
@@ -317,10 +321,13 @@ describe('behind room with LLM no-talk list', () => {
       blindWitnessId: 'w-father',
       blindClaim: '升职了',
       sourceFragment: '体检查出来东西了',
+      severity: 'high',
+      reason: '明确嘱托保密',
     }]);
 
     const llm = new FakeLLM([
-      noTalkResponse,                       // no-talk list generation
+      noTalkResponse,                       // no-talk list generation (call 1)
+      noTalkResponse,                       // no-talk list generation (call 2, double-generate)
       line('她体检查出来问题了'),            // sister's line (hits keyword)
       '是',                                 // verify: yes, this leaks
       line('她体检有点问题'),                // rewrite attempt 1 (still has '体检')
@@ -359,15 +366,18 @@ describe('behind room with LLM no-talk list', () => {
 
     const noTalkResponse = JSON.stringify([{
       topic: '查出病情',
-      keywords: ['体检', '查出'],
+      keywords: ['体检', '查出', '手术'],
       knowingWitnessIds: ['w-sister'],
       blindWitnessId: 'w-father',
       blindClaim: '升职了',
       sourceFragment: '体检查出来东西了',
+      severity: 'high',
+      reason: '明确嘱托保密',
     }]);
 
     const llm = new FakeLLM([
-      noTalkResponse,
+      noTalkResponse,                       // no-talk list generation (call 1)
+      noTalkResponse,                       // no-talk list generation (call 2)
       line('她去做了体检而已'),  // hits "体检" keyword
       '否',                      // verify: no, mentioning "体检" alone doesn't reveal illness
       line('她最近忙'),
@@ -406,12 +416,12 @@ describe('behind room with LLM no-talk list', () => {
       answers: [{ qid: 'q1', behindText: '她升职了。' }],
     });
 
-    // First call: generateNoTalkList throws (simulating no API key).
+    // Both double-generate calls throw (simulating no API key).
     // Subsequent calls are for composeLine (regular line generation).
+    const throwFn = ((_req: { system: string; user: string }) => { throw new Error('No API key configured'); }) as (req: { system: string; user: string }) => string;
     const llm = new FakeLLM([
-      // No-talk list LLM call will throw — FakeLLM throws when script
-      // provides a function that throws.
-      ((_req) => { throw new Error('No API key configured'); }) as (req: { system: string; user: string }) => string,
+      throwFn,   // no-talk list call 1 throws
+      throwFn,   // no-talk list call 2 throws
       // composeLine calls for the behind room (safe lines)
       line('她最近挺好的'),   // sister
       line('是挺好的'),       // mother
@@ -475,6 +485,8 @@ describe('regression: no-talk leak scenarios', () => {
       blindWitnessId: 'w-mother',
       blindClaim: '公司器重他,要升职了',
       sourceFragment: '他裸辞前三周',
+      severity: 'high',
+      reason: '推翻母亲对儿子工作现状的认知',
     }]);
 
     // Flow for boss's euphemism "走得让我到现在都别扭":
@@ -490,7 +502,8 @@ describe('regression: no-talk leak scenarios', () => {
     //   - rewrites also contain keywords -> stage direction
 
     const llm = new FakeLLM([
-      noTalkResponse,                                   // no-talk list generation
+      noTalkResponse,                                   // no-talk list generation (call 1)
+      noTalkResponse,                                   // no-talk list generation (call 2)
       line('走得让我到现在都别扭'),                     // boss original (euphemism, no keyword)
       '是',                                             // verify: yes, leaks resignation
       line('他辞了以后我一直在想'),                     // rewrite 1: keyword '辞了'
@@ -553,13 +566,16 @@ describe('regression: no-talk leak scenarios', () => {
       blindWitnessId: 'w-mother',
       blindClaim: '他还给我转了五千',
       sourceFragment: '借了两万,千万别跟他妈提',
+      severity: 'high',
+      reason: '明确嘱托保密且推翻母亲对儿子财务状况的认知',
     }]);
 
     // Use function-based responses for composeLine calls to always return
     // safe content. The private-leak guard in composeLine catches leak
     // attempts and rewrites/stages internally, consuming extra responses.
     const llm = new FakeLLM([
-      noTalkResponse,                                   // no-talk list
+      noTalkResponse,                                   // no-talk list (call 1)
+      noTalkResponse,                                   // no-talk list (call 2)
       // composeLine calls are dynamic: depending on private-leak detection,
       // it may consume 1-3 responses per line. Use functions for robustness.
       (req) => req.user.includes('发小') ? line('他半夜给我借了两万') : line('他还给我转了五千'),
@@ -611,10 +627,13 @@ describe('regression: no-talk leak scenarios', () => {
       blindWitnessId: 'w-father',
       blindClaim: '升职了',
       sourceFragment: '她想离开北京',
+      severity: 'high',
+      reason: '推翻父亲对女儿工作现状的认知',
     }]);
 
     const llm = new FakeLLM([
-      noTalkResponse,                                   // no-talk list
+      noTalkResponse,                                   // no-talk list (call 1)
+      noTalkResponse,                                   // no-talk list (call 2)
       line('她最近老念叨想换个节奏'),                   // bestie (innocuous, no keyword)
       '否',                                             // verify: no, "换个节奏" doesn't reveal departure
       line('嗯她确实争气'),                             // father
@@ -631,5 +650,63 @@ describe('regression: no-talk leak scenarios', () => {
       .filter((u) => u.kind === 'speech')
       .map((u) => u.text);
     expect(speechTexts).toContain('她最近老念叨想换个节奏');
+  });
+
+  it('Run 20 partial leak: "换个城市" blocked because it reveals departure intent', async () => {
+    // 闺蜜 says "说想换个城市生活" in front of 父亲 (who believes 升职了).
+    // "换个城市" is a partial leak — it reveals residence change / departure
+    // intent even without saying "辞职" or "离开北京" explicitly.
+    // The updated verification prompt must catch this.
+    const topic = '离开北京/离职';
+    const blindRelation = '父亲';
+    const blindClaim = '升职了';
+
+    // Use a FakeLLM that captures the prompt for assertion
+    let capturedPrompt = '';
+    const llm = new FakeLLM([
+      (req: { system: string; user: string }) => {
+        capturedPrompt = req.user;
+        return '是';  // This IS a leak — partial reveal of departure intent
+      },
+    ]);
+
+    const result = await llmVerifyLeak(
+      llm,
+      '她说想换个城市生活',
+      topic,
+      blindRelation,
+      blindClaim,
+    );
+
+    // Must be blocked
+    expect(result).toBe(true);
+
+    // Prompt must contain the new partial-leak language
+    expect(capturedPrompt).toContain('起疑或推断出');
+    expect(capturedPrompt).toContain('纯情绪/状态的含糊表达');
+  });
+
+  it('Run 21 safe: "换个节奏" passes because it is a vague emotional expression', async () => {
+    // 闺蜜 says "想换个节奏生活" — this is a vague emotional/lifestyle
+    // expression that does NOT reveal any concrete fact (departure, resignation).
+    // The verification prompt explicitly excludes "纯情绪/状态含糊表达".
+    const topic = '离开北京/离职';
+    const blindRelation = '父亲';
+    const blindClaim = '升职了';
+
+    const llm = new FakeLLM([
+      '否',  // NOT a leak — "换个节奏" is vague emotional expression
+    ]);
+
+    const result = await llmVerifyLeak(
+      llm,
+      '她最近老念叨想换个节奏生活',
+      topic,
+      blindRelation,
+      blindClaim,
+    );
+
+    // Must pass through
+    expect(result).toBe(false);
   });
 });

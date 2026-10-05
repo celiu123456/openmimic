@@ -749,6 +749,10 @@ export interface NoTalkItem {
   knowingWitnessIds: string[];
   /** Source text fragment that justifies this entry. */
   sourceFragment: string;
+  /** Severity: 'high' or 'medium'. Items from rule-based fallback default to 'high'. */
+  severity?: 'high' | 'medium';
+  /** One-sentence justification for why this item is high-cost. */
+  reason?: string;
 }
 
 /* ------------------------------------------------------------------ */
@@ -762,20 +766,29 @@ const NO_TALK_LIST_SCHEMA = z.array(z.object({
   blindWitnessId: z.string(),
   blindClaim: z.string(),
   sourceFragment: z.string(),
+  severity: z.enum(['high', 'medium']),
+  reason: z.string(),
 }));
 
+/** Hard cap on LLM-generated no-talk items. Rule-based fallback items are added on top. */
+const NO_TALK_LIST_CAP = 8;
+
 /**
- * Use one LLM call to produce the no-talk list for this room.
+ * Use LLM calls to produce the no-talk list for this room.
  *
  * Input: each witness's relation and a summary of their testimony.
  * Output: topics that would reveal secrets to present witnesses, with
  *   keywords for post-generation checking.
  *
- * The prompt asks the model to systematically check each witness's
- * understanding of the subject's current situation (career, health,
- * finances, relationships, living arrangements, etc.) against every
- * other witness's testimony for contradictions. This avoids hardcoding
- * domain-specific categories.
+ * The prompt restricts the list to high-cost secrets only:
+ *   (a) explicit secrecy requests in the testimony, or
+ *   (b) facts that would directly overturn a present witness's belief
+ *       about the subject's major life situation (career, health,
+ *       relationships, major finances, residence).
+ *
+ * Ordinary details that another witness simply hasn't heard about are
+ * explicitly excluded. The model generates twice; results are unioned
+ * for stability, then capped at {@link NO_TALK_LIST_CAP} by severity.
  */
 export async function generateNoTalkList(
   llm: LLMClient,
@@ -784,59 +797,89 @@ export async function generateNoTalkList(
 ): Promise<NoTalkItem[]> {
   const witnessSummaries = drafts.map((d) => {
     const text = d.memory.map((m) => m.text).join(' ');
-    // Truncate very long testimonies
     const summary = text.length > 300 ? text.substring(0, 300) + '……' : text;
     return `【${d.witness.relation}(${d.witness.id})】${summary}`;
   }).join('\n\n');
 
   const system = [
     `你是一位隐私保护分析师。以下是关于"${subjectName}"的多位证人的证言。这些证人马上要坐在同一个房间里聊天。`,
-    '你的任务:找出哪些事实如果在房间里被说出来,会让在场的某位证人当场得知自己被瞒了的事。',
+    '你的任务:找出少数几件**高代价的秘密**——如果在房间里说出来,会让某位在场证人当场发现自己被瞒了一件大事。',
     '',
-    '方法——逐位检查:',
-    '对每一位在场证人,提取其证言中对此人现状的认知(工作、健康、感情、财务、住处等),然后逐一与其他证人所述的事实核对。',
-    '如果其他证人提到了该证人不知道或明显相反的事实,这个事实就不能在房间里说出来。',
+    '★只收两类:',
+    '(a) 证言中有**明确嘱托保密**的事("别跟XX说""千万别让XX知道"等)。',
+    '(b) 说出后会**直接推翻**某位在场证人对此人**重大现状**的认知的事。',
+    '    "重大现状"指:工作去留(辞职/被辞)、健康(重大疾病)、感情存续(分手/离婚)、重大财务(大额借贷/严重拮据)、居住地变动(搬城市)。',
+    '    判断标准:知道了会**根本改变**此人对主人公处境的理解,且主人公**显然没有告诉**此人。',
     '',
-    '两类情形:',
-    '1. 明确的保密嘱托(如"千万别跟XX说""你别跟XX提"):这件事不能当着被瞒的人说。',
-    '2. 认知矛盾:证人A知道的事实与证人B所相信的版本冲突。若事实在房间里被说出——即使是暗示、间接引用、或换了说法——B都会当场得知自己被瞒了。',
-    '',
-    '示例:',
-    '张三(同学)说"她已经递了离职申请,打算搬去成都";李四(父亲)说"她刚升职,工作很稳定"。',
-    '→ 条目: topic="递了离职申请", blindWitnessId=李四的id, blindClaim="刚升职,工作稳定", keywords=["离职","辞职","申请","搬","走","不干了","换城市"]。',
-    '注意:即使某句台词不直接说"辞职"而说"他走了""不在这边了",只要能让不知情者推断出真相,就应该列入keywords。',
+    '★明确排除——以下不算:',
+    '- 对方只是没听说过的日常细节(团建买单、陪人改PPT、游戏习惯、吃便利店饭团、文档模板……)',
+    '- 性格层面的观察或评价(他嘴严、他发火冷下来、他不会拒绝人……)',
+    '- 已经过去且对当下没有现实后果的旧事(去年搬家、前年露营吵架……)',
+    '- 日常行为(回家吃饭、跑步、看手机、午饭一个人吃……)',
+    '如果一件事只是"A知道而B不知道"但不会伤害任何人,不要列入。这个房间的意义就是各人讲自己视角的细节。',
     '',
     '对每一条,给出:',
-    '- topic: 简短描述这个秘密(10字以内)',
-    '- keywords: 3-6个标志性词/短语,必须涵盖直接说法和间接/委婉说法(如"辞职"和"走了""不干了"),用于检测台词是否触及该话题',
-    '- knowingWitnessIds: 知情的证人id列表',
-    '- blindWitnessId: 不该知道这件事的在场证人id',
+    '- topic: 简短描述(10字以内)',
+    '- keywords: 3-6个标志性词/短语,涵盖直接说法和间接/委婉说法,用于检测',
+    '- knowingWitnessIds: 知情证人id列表',
+    '- blindWitnessId: 不该知道的在场证人id',
     '- blindClaim: 该证人目前相信的版本(20字以内)',
     '- sourceFragment: 判断依据的原文片段(30字以内)',
+    '- severity: "high"(嘱托保密 或 推翻重大现状认知) 或 "medium"',
+    '- reason: 一句话说明为什么算高代价',
     '',
+    `上限 ${NO_TALK_LIST_CAP} 条,按严重度排序(high优先)。如果高代价的事不足 ${NO_TALK_LIST_CAP} 条,就只列那几条。`,
     '只输出 JSON 数组,不要其他文字。如果没有需要禁谈的话题,输出空数组 []。',
   ].join('\n');
 
   const user = `在场证人:\n${witnessSummaries}`;
 
-  const resp = await llm.complete({ system, user });
-  try {
-    // Extract JSON from response
-    const jsonMatch = resp.match(/\[[\s\S]*\]/);
-    if (!jsonMatch) return [];
-    const parsed = NO_TALK_LIST_SCHEMA.parse(JSON.parse(jsonMatch[0]));
-    return parsed.map((item) => ({
-      ...item,
-      elements: {
-        text: item.sourceFragment,
-        amounts: [],
-        verbs: [],
-        nouns: item.keywords.slice(), // keywords serve as the fact elements
-      },
-    }));
-  } catch {
-    return [];
+  // Double-generate and union for stability
+  const parseOne = (resp: string): NoTalkItem[] => {
+    try {
+      const jsonMatch = resp.match(/\[[\s\S]*\]/);
+      if (!jsonMatch) return [];
+      const parsed = NO_TALK_LIST_SCHEMA.parse(JSON.parse(jsonMatch[0]));
+      return parsed.map((item) => ({
+        ...item,
+        elements: {
+          text: item.sourceFragment,
+          amounts: [],
+          verbs: [],
+          nouns: item.keywords.slice(),
+        },
+      }));
+    } catch {
+      return [];
+    }
+  };
+
+  const [resp1, resp2] = await Promise.all([
+    llm.complete({ system, user }),
+    llm.complete({ system, user }),
+  ]);
+
+  const items1 = parseOne(resp1);
+  const items2 = parseOne(resp2);
+
+  // Union by (topic, blindWitnessId) key — prefer item with more keywords
+  const seen = new Map<string, NoTalkItem>();
+  for (const item of [...items1, ...items2]) {
+    const key = `${item.topic}::${item.blindWitnessId}`;
+    const existing = seen.get(key);
+    if (!existing || item.keywords.length > existing.keywords.length) {
+      seen.set(key, item);
+    }
   }
+
+  // Sort by severity (high first), then cap
+  const merged = [...seen.values()].sort((a, b) => {
+    if (a.severity === 'high' && b.severity !== 'high') return -1;
+    if (a.severity !== 'high' && b.severity === 'high') return 1;
+    return 0;
+  });
+
+  return merged.slice(0, NO_TALK_LIST_CAP);
 }
 
 /* ------------------------------------------------------------------ */
@@ -897,6 +940,8 @@ export function buildNoTalkListFallback(
               : '(unknown)',
             knowingWitnessIds: [draft.witness.id],
             sourceFragment: factText.substring(0, 30),
+            severity: 'high',
+            reason: '证言中有明确嘱托保密的标记',
           });
         }
       }
@@ -940,7 +985,8 @@ export async function llmVerifyLeak(
     `在场的"${blindWitnessRelation}"目前相信的版本是:"${blindClaim}"。${contextLine}`,
     `以下这句话如果在聊天室里被说出来,${blindWitnessRelation}会不会因此得知或起疑事实并非如此——也就是发现"${topic}"?`,
     `台词:"${utteranceText}"`,
-    '即使只是暗示、间接提及,只要可能让其产生怀疑,就回答"是"。',
+    '即使没有说出全部事实,只要这句话会让其**起疑或推断出**事实的一部分(例如说出要换城市、要走、不干了、身体出了问题),也算"是"。',
+    '但纯情绪/状态的含糊表达(累、想歇歇、想换个节奏、最近不太开心)不算——这类话不包含可推断的具体事实。',
     '只回答"是"或"否"。',
   ].join('\n');
 
@@ -1754,17 +1800,51 @@ export async function runBehindRoom(
 
   // Build no-talk list from cross-witness knowledge conflicts.
   // Only call the LLM when there are 2+ witnesses (conflict requires at least two).
+  // Rule-based fallback items (explicit secrecy markers) are ALWAYS merged in and
+  // never squeezed out by the LLM cap.
   let noTalkList: NoTalkItem[];
   if (rawDrafts.length >= 2) {
+    let llmItems: NoTalkItem[] = [];
     try {
-      noTalkList = await generateNoTalkList(llm, subjectName, rawDrafts);
+      llmItems = await generateNoTalkList(llm, subjectName, rawDrafts);
     } catch {
-      noTalkList = buildNoTalkListFallback(rawDrafts);
+      // LLM failed; fallback only
     }
-    // If LLM returned nothing, also run the fallback to catch explicit markers
-    if (noTalkList.length === 0) {
-      noTalkList = buildNoTalkListFallback(rawDrafts);
-    }
+    // Always run rule-based fallback and merge on top.
+    // If an LLM item covers the same (blindWitnessId, topic) as a fallback
+    // item, merge the LLM's keywords into the fallback item rather than
+    // dropping one or the other.
+    const fallbackItems = buildNoTalkListFallback(rawDrafts);
+    const mergedFallback = fallbackItems.map((fb) => {
+      // Find an LLM item targeting the same blind witness with overlapping source
+      const llmMatch = llmItems.find(
+        (li) => li.blindWitnessId === fb.blindWitnessId
+          && (li.sourceFragment.includes(fb.sourceFragment.substring(0, 8))
+            || fb.sourceFragment.includes(li.sourceFragment.substring(0, 8))),
+      );
+      if (llmMatch) {
+        // Merge LLM keywords into the fallback item
+        const mergedKeywords = [...new Set([...fb.keywords, ...llmMatch.keywords])];
+        return {
+          ...fb,
+          keywords: mergedKeywords,
+          elements: {
+            ...fb.elements,
+            nouns: [...new Set([...fb.elements.nouns, ...llmMatch.elements.nouns])],
+          },
+        };
+      }
+      return fb;
+    });
+    // Add LLM items that don't overlap with any fallback item
+    const extraLlm = llmItems.filter((item) => {
+      return !fallbackItems.some(
+        (f) => f.blindWitnessId === item.blindWitnessId
+          && (item.sourceFragment.includes(f.sourceFragment.substring(0, 8))
+            || f.sourceFragment.includes(item.sourceFragment.substring(0, 8))),
+      );
+    });
+    noTalkList = [...mergedFallback, ...extraLlm];
   } else {
     noTalkList = [];
   }
@@ -1840,7 +1920,7 @@ export async function runBehindRoom(
     const generationCalls = utterances.length;
     const totalLlmCalls = generationCalls + scheduleStats.verifyCallCount
       + scheduleStats.totalLlmCalls
-      + (noTalkList.length > 0 ? 1 : 0); // +1 for no-talk list generation
+      + (noTalkList.length > 0 ? 2 : 0); // +2 for double-generate no-talk list
     options.onStats({
       noTalkList,
       verifyCallCount: scheduleStats.verifyCallCount,

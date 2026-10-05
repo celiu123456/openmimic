@@ -154,17 +154,20 @@ async function main() {
   // No-talk list and verification stats
   if (roomStats) {
     md.push('### No-Talk List', '');
+    md.push(`清单条数: ${roomStats.noTalkList.length}`, '');
     if (roomStats.noTalkList.length === 0) {
       md.push('(none)', '');
     } else {
-      md.push('| Topic | Keywords | Blind Witness | Blind Claim | Knowing Witnesses |');
-      md.push('|-------|----------|---------------|-------------|-------------------|');
+      md.push('| Topic | Keywords | Blind Witness | Blind Claim | Knowing Witnesses | Severity | Reason |');
+      md.push('|-------|----------|---------------|-------------|-------------------|----------|--------|');
       for (const item of roomStats.noTalkList) {
         const blindRel = witnessRelation.get(item.blindWitnessId) ?? item.blindWitnessId;
         const knowingRels = item.knowingWitnessIds
           .map((id) => witnessRelation.get(id) ?? id)
           .join(', ');
-        md.push(`| ${item.topic} | ${item.keywords.join(', ')} | ${blindRel} | ${item.blindClaim} | ${knowingRels} |`);
+        const severity = item.severity ?? '-';
+        const reason = item.reason ?? '-';
+        md.push(`| ${item.topic} | ${item.keywords.join(', ')} | ${blindRel} | ${item.blindClaim} | ${knowingRels} | ${severity} | ${reason} |`);
       }
       md.push('');
     }

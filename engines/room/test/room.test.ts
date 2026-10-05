@@ -71,8 +71,8 @@ describe('runBehindRoom', () => {
 
   it('keeps each persona blind to the others and caps the transcript', async () => {
     seedSubject(store, threeWitnesses);
-    // First reply is consumed by the LLM-based no-talk list generation
-    const llm = new FakeLLM(['[]', ...Array.from({ length: 12 }, (_, i) => line(`第${i}句`))]);
+    // First two replies are consumed by the double-generate no-talk list generation
+    const llm = new FakeLLM(['[]', '[]', ...Array.from({ length: 12 }, (_, i) => line(`第${i}句`))]);
 
     const room = await runBehindRoom('s1', store, llm);
 
@@ -89,7 +89,7 @@ describe('runBehindRoom', () => {
       ['前任', '丙-只有我知道的细节-冷战十九天'],
     ]);
     const allMarkers = [...markersByRelation.values()];
-    const composeCalls = llm.calls.slice(1); // skip no-talk list call
+    const composeCalls = llm.calls.slice(2); // skip 2 no-talk list calls (double-generate)
 
     for (const call of composeCalls) {
       const prompt = `${call.system}\n${call.user}`;
@@ -126,8 +126,8 @@ describe('runBehindRoom', () => {
       behind: [`记忆-${suffix}`],
     }));
     seedSubject(store, six);
-    // +1 for the no-talk list LLM call at the start
-    const llm = new FakeLLM(['[]', ...Array.from({ length: 12 }, (_, index) => line(`第${index}句`))]);
+    // +2 for the double-generate no-talk list calls at the start
+    const llm = new FakeLLM(['[]', '[]', ...Array.from({ length: 12 }, (_, index) => line(`第${index}句`))]);
 
     const room = await runBehindRoom('s1', store, llm, {
       maxUtterances: 99,
@@ -135,18 +135,18 @@ describe('runBehindRoom', () => {
     });
 
     expect(room.behindTranscript).toHaveLength(12);
-    expect(llm.calls).toHaveLength(13); // 1 no-talk + 12 compose
+    expect(llm.calls).toHaveLength(14); // 2 no-talk + 12 compose
   });
 
   it('honours a smaller cap', async () => {
     seedSubject(store, threeWitnesses);
-    // +1 for the no-talk list LLM call
-    const llm = new FakeLLM(['[]', line('一'), line('二')]);
+    // +2 for the double-generate no-talk list calls
+    const llm = new FakeLLM(['[]', '[]', line('一'), line('二')]);
 
     const room = await runBehindRoom('s1', store, llm, { maxUtterances: 2 });
 
     expect(room.behindTranscript).toHaveLength(2);
-    expect(llm.calls).toHaveLength(3); // 1 no-talk + 2 compose
+    expect(llm.calls).toHaveLength(4); // 2 no-talk + 2 compose
   });
 
   it('refuses a crisis topic before any model call or write', async () => {
