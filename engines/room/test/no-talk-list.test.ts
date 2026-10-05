@@ -10,7 +10,9 @@ import {
   generateNoTalkList,
   llmVerifyLeak,
   runBehindRoom,
+  sanitiseMemoryForNoTalk,
   SECRET_LEAK_FALLBACK_STAGE,
+  NO_TALK_MEMORY_MARKER,
   type NoTalkItem,
 } from '@openmimic/engine-room';
 import { seedSuzhi, SUZHI_SUBJECT_ID, SUZHI_WITNESSES } from '../../../fixtures/suzhi';
@@ -548,6 +550,10 @@ describe('regression: no-talk leak scenarios', () => {
     const llm = new FakeLLM([
       noTalkResponse,                                   // no-talk list generation (call 1)
       noTalkResponse,                                   // no-talk list generation (call 2)
+      // sanitiseMemoryForNoTalk layer 2 calls:
+      '1',                                              // boss: "他走的方式,像个逃兵" reveals departure → strip
+      // (ex: all sentences keyword-stripped, no remaining → no LLM call)
+      // (mother: blind witness, not knowing → no LLM call)
       line('走得让我到现在都别扭'),                     // boss original (euphemism, no keyword)
       '是',                                             // verify: yes, leaks resignation
       line('他辞了以后我一直在想'),                     // rewrite 1: keyword '辞了'
@@ -1025,5 +1031,169 @@ describe('generateNoTalkList item-level parsing', () => {
     expect(items).toHaveLength(1);
     expect(items[0]!.topic).toBe('确诊');
     expect(items[0]!.keywords).toEqual(['体检', '查出']);
+  });
+});
+
+/* ------------------------------------------------------------------ */
+/* sanitiseMemoryForNoTalk: strip knowing witness context              */
+/* ------------------------------------------------------------------ */
+
+describe('sanitiseMemoryForNoTalk', () => {
+  const makeItem = (overrides: Partial<NoTalkItem> = {}): NoTalkItem => ({
+    topic: '已离职',
+    keywords: ['辞职', '裸辞', '辞了', '离职', '走了', '走得'],
+    elements: { text: '他裸辞了', amounts: [], verbs: [], nouns: ['辞职', '裸辞'] },
+    blindWitnessId: 'w-mother',
+    blindClaim: '公司器重他',
+    knowingWitnessIds: ['w-boss', 'w-faxiao'],
+    sourceFragment: '他裸辞了',
+    severity: 'high',
+    reason: '推翻母亲对儿子工作现状的认知',
+    ...overrides,
+  });
+
+  const allDrafts = [
+    { witness: { id: 'w-boss', relation: '前上司' } },
+    { witness: { id: 'w-mother', relation: '母亲' } },
+    { witness: { id: 'w-faxiao', relation: '发小' } },
+  ];
+
+  it('strips sentences with keyword hits (layer 1)', async () => {
+    const text = '他惜才是真惜才。他裸辞前三周就开始交接了。他对团队挺舍得的。';
+    const items = [makeItem()];
+
+    // LLM should not even be needed for the keyword-hit sentence
+    const llm = new FakeLLM(['无']); // layer 2 says nothing more to strip
+    const result = await sanitiseMemoryForNoTalk(text, items, 'w-boss', llm, allDrafts);
+
+    expect(result.strippedCount).toBeGreaterThanOrEqual(1);
+    expect(result.text).not.toContain('裸辞');
+    expect(result.text).toContain(NO_TALK_MEMORY_MARKER);
+    // Non-private sentence should remain
+    expect(result.text).toContain('他惜才是真惜才');
+    expect(result.text).toContain('他对团队挺舍得的');
+  });
+
+  it('strips sentences via LLM judgment (layer 2) when no keyword hit', async () => {
+    // "走得让我到现在都别扭" has no keyword from the list but LLM says it reveals departure
+    // "扛着不说,最后那一下倒是走得干脆" -- "走得干脆" has keyword "走得"
+    const text = '他惜才是真惜才。扛着不说,最后那一下倒是走得干脆。他对团队挺舍得的。';
+    const items = [makeItem()];
+
+    const llm = new FakeLLM(['无']); // layer 2 confirms nothing beyond keyword hits
+    const result = await sanitiseMemoryForNoTalk(text, items, 'w-boss', llm, allDrafts);
+
+    // "走得干脆" should be caught by keyword "走得"
+    expect(result.text).not.toContain('走得干脆');
+    expect(result.strippedCount).toBeGreaterThanOrEqual(1);
+  });
+
+  it('does not strip sentences from non-knowing witnesses', async () => {
+    const text = '他现在工作忙。上个月他还跟我说公司器重他。';
+    const items = [makeItem()];
+
+    const llm = new FakeLLM(); // should not be called
+    const result = await sanitiseMemoryForNoTalk(text, items, 'w-mother', llm, allDrafts);
+
+    // Mother is the blind witness, not a knowing one -- no stripping
+    expect(result.strippedCount).toBe(0);
+    expect(result.text).toBe(text);
+  });
+
+  it('handles LLM judgment: strips sentence flagged by model', async () => {
+    // Sentence has no keywords but the LLM flags it as revealing
+    const text = '他惜才是真惜才。他走之前那阵子天天两点睡。他对团队挺舍得的。';
+    const items = [makeItem({ keywords: ['辞职', '裸辞', '辞了', '离职'] })]; // no '走' keyword
+
+    // Layer 2: LLM says sentence 2 ("他走之前那阵子天天两点睡") should be stripped
+    const llm = new FakeLLM(['2']); // strip sentence #2 in the remaining list
+    const result = await sanitiseMemoryForNoTalk(text, items, 'w-boss', llm, allDrafts);
+
+    expect(result.text).not.toContain('走之前那阵子');
+    expect(result.strippedCount).toBe(1);
+    expect(result.text).toContain('他惜才是真惜才');
+    expect(result.text).toContain('他对团队挺舍得的');
+  });
+
+  it('handles LLM failure gracefully (falls back to keyword-only)', async () => {
+    const text = '他惜才是真惜才。他裸辞前三周就开始交接了。';
+    const items = [makeItem()];
+
+    const llm = new FakeLLM([() => { throw new Error('LLM unavailable'); }]);
+    const result = await sanitiseMemoryForNoTalk(text, items, 'w-boss', llm, allDrafts);
+
+    // Keyword-hit sentence should still be stripped
+    expect(result.text).not.toContain('裸辞');
+    expect(result.strippedCount).toBeGreaterThanOrEqual(1);
+  });
+});
+
+/* ------------------------------------------------------------------ */
+/* Regression: Run 2026-10-09 euphemism leak (Issue #3)                */
+/* ------------------------------------------------------------------ */
+
+describe('regression: 2026-10-09 euphemism leak via knowing witness context', () => {
+  it('strips boss and subordinate context about departure before generation', async () => {
+    // The exact scenario: 前上司 says "扛着不说,最后那一下倒是走得干脆"
+    // and 前下属 says "走得干脆……其实他走之前那阵子,天天两点睡,中午就啃个饭团"
+    //
+    // Root cause: the knowing witnesses (boss, subordinate) had their full
+    // testimony about the resignation in their generation context. The model
+    // naturally used that material to produce euphemisms that leaked the
+    // resignation fact to the mother (blind witness).
+    //
+    // Fix: sanitiseMemoryForNoTalk strips departure-related sentences from
+    // knowing witnesses' context BEFORE generation. The model never sees them.
+
+    const bossText =
+      '他惜才是真惜才,就是最后那一下,走得让我到现在都别扭。' +
+      '他对团队挺舍得的。';
+    const subordinateText =
+      '他确实话少。不过对我们这些下属,他该教的都教,一点没藏。' +
+      '他走之前那阵子,天天两点睡,中午就啃个饭团。';
+
+    const noTalkItem = {
+      topic: '已离职',
+      keywords: ['辞职', '裸辞', '辞了', '离职', '走了', '走得'],
+      elements: { text: '他裸辞了', amounts: [], verbs: [], nouns: ['辞职'] },
+      blindWitnessId: 'w-mother',
+      blindClaim: '公司器重他',
+      knowingWitnessIds: ['w-boss', 'w-subordinate'],
+      sourceFragment: '辞职那天',
+      severity: 'high' as const,
+      reason: '推翻母亲认知',
+    };
+
+    const allDrafts = [
+      { witness: { id: 'w-boss', relation: '前上司' } },
+      { witness: { id: 'w-subordinate', relation: '前下属' } },
+      { witness: { id: 'w-mother', relation: '母亲' } },
+    ];
+
+    // Boss: "走得" is a keyword hit (layer 1)
+    const bossLlm = new FakeLLM(['无']);
+    const bossResult = await sanitiseMemoryForNoTalk(
+      bossText, [noTalkItem], 'w-boss', bossLlm, allDrafts,
+    );
+    expect(bossResult.text).not.toContain('走得');
+    expect(bossResult.text).not.toContain('最后那一下');
+    expect(bossResult.text).toContain('他对团队挺舍得的');
+
+    // Subordinate: "走之前那阵子" has no keyword if we use a narrower list
+    // but with "走得" in keywords it actually won't hit on "走之前".
+    // So this tests the LLM layer (layer 2):
+    const subItems = [{
+      ...noTalkItem,
+      // Narrower keywords: no "走" prefix that would hit "走之前"
+      keywords: ['辞职', '裸辞', '辞了', '离职'],
+    }];
+    // LLM gets 3 sentences numbered 1-3; sentence 3 ("走之前那阵子...")
+    // reveals departure, so LLM flags it
+    const subLlm = new FakeLLM(['3']);
+    const subResult = await sanitiseMemoryForNoTalk(
+      subordinateText, subItems, 'w-subordinate', subLlm, allDrafts,
+    );
+    expect(subResult.text).not.toContain('走之前那阵子');
+    expect(subResult.text).toContain('他确实话少');
   });
 });

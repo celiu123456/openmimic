@@ -184,6 +184,36 @@ guard (capped at `MAX_VERIFY_CALLS_PER_ROOM`). On contradiction:
 The `anchorContradictionCount` is tracked in `RoomStats` and reported in
 `scripts/room-metrics.ts` (metric #10).
 
+### No-talk memory sanitisation (engines/room/src/room.ts)
+
+Input-side defense against euphemistic leaks in behind rooms. When knowing
+witnesses (those who hold secrets a blind witness must not learn) have the
+underlying factual material in their generation context, the model naturally
+produces euphemisms ("走得干脆", "走之前那阵子") that bypass output-side
+keyword/LLM verification. The fix: strip the sensitive material from the
+knowing witness's context *before* the LLM call, so it never sees the facts.
+
+Two-layer stripping in `sanitiseMemoryForNoTalk`:
+
+1. **Keyword scan** (deterministic): sentences containing any no-talk-item
+   keyword are removed.
+2. **LLM judgment** (semantic): remaining sentences are sent to the LLM in one
+   call per witness, asking which would reveal the secret "in any form,
+   including paraphrase, hint, or euphemism". Tagged `room-notalk-sanitise`.
+
+Stripped sentences are replaced by a content-free marker
+(`NO_TALK_MEMORY_MARKER`). Witnesses with fewer than `MIN_USABLE_SENTENCES`
+remaining real sentences are demoted to filler-only (short agreements and stage
+directions). If fewer than `MIN_MATERIAL_WITNESSES` have material after
+stripping, the room is refused (`RoomRefusedError`).
+
+The output-side `llmVerifyLeak` remains as a second line of defense; its prompt
+now includes an explicit euphemism pattern list covering temporal farewell
+expressions ("走", "走了", "走那天", "最后那一下", "临走前", etc.) and
+prerequisite inference patterns.
+
+`noTalkStrippedSentences` is tracked in `RoomStats`.
+
 ### Evidence basis classification (engines/witness/src/basis.ts)
 
 Rule-based epistemic basis classifier with fixes for:

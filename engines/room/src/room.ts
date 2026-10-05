@@ -522,6 +522,11 @@ export interface RoomStats {
   noTalkListWarning?: string;
   /** Number of lines that contradicted their anchored testimony and were rewritten or dropped. */
   anchorContradictionCount: number;
+  /**
+   * Number of sentences stripped from knowing witnesses' context during
+   * no-talk memory sanitisation (per-witness, per-item).
+   */
+  noTalkStrippedSentences: number;
 }
 
 /**
@@ -755,6 +760,145 @@ export function sanitiseMemory(text: string): string {
   }
 
   return result.join('');
+}
+
+/* ------------------------------------------------------------------ */
+/* No-talk memory sanitisation: strip context that causes euphemisms   */
+/* ------------------------------------------------------------------ */
+
+/**
+ * Configurable threshold: when a witness has fewer than this many usable
+ * sentences after no-talk stripping, they are demoted to filler-only
+ * (short agreement and stage directions).
+ */
+export const MIN_USABLE_SENTENCES = 1;
+
+/**
+ * The content-free marker that replaces stripped sentences in a knowing
+ * witness's context. The model sees only this and cannot reconstruct
+ * the private fact.
+ */
+export const NO_TALK_MEMORY_MARKER =
+  '(你知道一件在这间屋里不能提的事,至多欲言又止一次)';
+
+/** Minimum witnesses with material required to generate a behind room. */
+export const MIN_MATERIAL_WITNESSES = 1;
+
+/**
+ * Strip sentences from a knowing witness's memory that relate to a
+ * no-talk item. Two layers:
+ *
+ *   Layer 1 (keyword hit — synchronous): any sentence containing a
+ *   keyword from the no-talk item is stripped immediately.
+ *
+ *   Layer 2 (LLM judgment — async): the remaining sentences for this
+ *   witness are sent to the LLM in one call, asking "which of these
+ *   would let [blind witness relation] discover or infer [topic]?".
+ *   Sentences the LLM flags are also stripped.
+ *
+ * Returns the sanitised text and the count of stripped sentences.
+ */
+export async function sanitiseMemoryForNoTalk(
+  text: string,
+  items: readonly NoTalkItem[],
+  witnessId: string,
+  llm: LLMClient,
+  allDrafts: readonly { witness: { id: string; relation: string } }[],
+): Promise<{ text: string; strippedCount: number }> {
+  const sentences = splitSentences(text);
+  if (sentences.length === 0) return { text, strippedCount: 0 };
+
+  // Collect all no-talk items where this witness is a knowing party
+  const relevantItems = items.filter((item) =>
+    item.knowingWitnessIds.includes(witnessId),
+  );
+  if (relevantItems.length === 0) return { text, strippedCount: 0 };
+
+  // Layer 1: keyword hit — strip sentences containing any keyword
+  const strippedIndices = new Set<number>();
+  for (let i = 0; i < sentences.length; i++) {
+    for (const item of relevantItems) {
+      if (item.keywords.some((kw) => sentences[i]!.includes(kw))) {
+        strippedIndices.add(i);
+        break;
+      }
+    }
+  }
+
+  // Layer 2: LLM judgment on remaining sentences (one call per witness,
+  // not per sentence). Ask for ALL items this witness knows about.
+  // Skip sentences that are just privacy markers (no useful content to evaluate).
+  const PRIVACY_MARKERS = [
+    '(你知道一件TA嘱咐别外传的事,群里不能说;最多欲言又止一次)',
+    NO_TALK_MEMORY_MARKER,
+  ];
+  const remainingIndices = sentences
+    .map((_, i) => i)
+    .filter((i) => !strippedIndices.has(i) && !PRIVACY_MARKERS.includes(sentences[i]!));
+
+  if (remainingIndices.length > 0 && relevantItems.length > 0) {
+    // Build one combined prompt for all no-talk items
+    const topicDescriptions = relevantItems.map((item) => {
+      const blindDraft = allDrafts.find((d) => d.witness.id === item.blindWitnessId);
+      const blindRel = blindDraft?.witness.relation ?? '在场的人';
+      return `- 话题「${item.topic}」,不能让「${blindRel}」知道(TA目前以为:${item.blindClaim})`;
+    }).join('\n');
+
+    const numberedSentences = remainingIndices
+      .map((i, idx) => `${idx + 1}. ${sentences[i]}`)
+      .join('\n');
+
+    const system = '你是一个隐私审核器。只输出需要删除的句子编号(逗号分隔),没有需要删除的就输出"无"。不要输出任何其他文字。';
+    const user = [
+      '以下是一位证人即将带入聊天室的记忆。聊天室里有一些秘密不能提及:',
+      topicDescriptions,
+      '',
+      '请判断以下哪些句子——如果被这位证人在聊天中**以任何形式(包括换一种说法、暗示、欲言又止、委婉表达)**使用——会让上述被瞒者得知或推断出上述话题:',
+      numberedSentences,
+      '',
+      '注意:',
+      '- 包含时间性离开/告别表述(走、走了、走那天、最后那一下、临走前、不干了、辞了)的句子,若与被瞒话题相关,必须删除',
+      '- 包含任何能让人推断出实际情况的事实细节的句子也必须删除',
+      '- 纯粹的性格描述、情绪观察(如"他话少""他脾气好")如果不涉及被瞒事实则保留',
+      '只输出编号(如: 1,3,5),或"无"。',
+    ].join('\n');
+
+    try {
+      const resp = await llm.complete({ system, user, purpose: 'room-notalk-sanitise' });
+      const trimmed = resp.trim();
+      if (trimmed !== '无' && trimmed !== '') {
+        // Parse comma-separated numbers
+        const numbers = trimmed.split(/[,，\s]+/).map((s) => parseInt(s.trim(), 10)).filter((n) => !isNaN(n));
+        for (const num of numbers) {
+          const originalIndex = remainingIndices[num - 1];
+          if (originalIndex !== undefined) {
+            strippedIndices.add(originalIndex);
+          }
+        }
+      }
+    } catch {
+      // LLM call failed: rely on keyword-only stripping (fail-safe)
+    }
+  }
+
+  if (strippedIndices.size === 0) return { text, strippedCount: 0 };
+
+  // Rebuild the text: replace stripped sentences with a single marker
+  const result: string[] = [];
+  let markerInserted = false;
+  for (let i = 0; i < sentences.length; i++) {
+    if (strippedIndices.has(i)) {
+      if (!markerInserted) {
+        result.push(NO_TALK_MEMORY_MARKER);
+        markerInserted = true;
+      }
+    } else {
+      result.push(sentences[i]!);
+      markerInserted = false; // reset for next potential block
+    }
+  }
+
+  return { text: result.join(''), strippedCount: strippedIndices.size };
 }
 
 /* ------------------------------------------------------------------ */
@@ -1156,7 +1300,11 @@ export async function llmVerifyLeak(
     `以下这句话如果在聊天室里被说出来,${blindWitnessRelation}会不会因此得知或起疑事实并非如此——也就是发现"${topic}"?`,
     `台词:"${utteranceText}"`,
     '即使没有说出全部事实,只要这句话会让其**起疑或推断出**事实的一部分,也算"是"。',
-    '尤其注意:时间性的告别/离开表述(如"走那天""最后一天""临走前""这几年""谢完就走")若指向被瞒事实(如离职、分手、搬走),也算泄露。',
+    '尤其注意以下几种委婉泄露:',
+    '- 时间性的告别/离开/过去表述:走、走了、走那天、走得干脆、最后那一下、临走前、走之前那阵子、谢完就走、不干了、离开',
+    '- 结果性暗示:干脆、最后、之后、那以后、后来',
+    '- 前提性推断:走之前那阵子→意味着已经走了;最后那一下→意味着已经离开',
+    '以上表述若与被瞒事实相关(如离职、分手、搬走、生病),即使看起来只是在说感受或过程,也算泄露——因为被瞒者可以从中推断出事实本身。',
     '但纯情绪/状态的含糊表达(累、想歇歇、想换个节奏、最近不太开心)不算——这类话不包含可推断的具体事实。',
     '只回答"是"或"否"。',
   ].join('\n');
@@ -1734,6 +1882,7 @@ async function runSchedule(
           const rewriteUser = buildUser(context, mode, topicSeed, utterances, actionHint, extra)
             + `\n\n★这句话会让「${blindRelation}」知道「${leakedItem!.topic}」,不能说。`
             + `\n禁用词:${forbiddenList}。这些词一个都不能出现。`
+            + `\n不要提及任何与「${leakedItem!.topic}」相关的事,包括暗示、委婉说法、时间性暗示(走、走了、最后那一下、之前那阵子)。`
             + `\n换一个完全不涉及此事的话头。${safeHint}。`
             + '\n只输出 JSON {"text":"...","qids":[...]}。';
           const rewriteResult = await attemptResponse(llm, { system: rewriteSystem, user: rewriteUser }, 1);
@@ -2249,14 +2398,55 @@ export async function runBehindRoom(
     console.warn(`[room] ${noTalkListWarning}`);
   }
 
-  // Second pass: sanitise each witness's memory (strip private sentences)
-  const drafts = rawDrafts.map((draft) => ({
-    ...draft,
-    memory: draft.memory.map((mem) => ({
-      qid: mem.qid,
-      text: sanitiseMemory(mem.text),
-    })),
-  }));
+  // Second pass: sanitise each witness's memory
+  //   (a) strip explicit-marker private sentences (sanitiseMemory)
+  //   (b) strip no-talk-related sentences from knowing witnesses (sanitiseMemoryForNoTalk)
+  let totalNoTalkStripped = 0;
+  const drafts: { witness: typeof rawDrafts[number]['witness']; memory: MemoryEntry[]; witnessTestimonies: typeof rawDrafts[number]['witnessTestimonies'] }[] = [];
+  for (const draft of rawDrafts) {
+    const sanitisedMemory: MemoryEntry[] = [];
+    for (const mem of draft.memory) {
+      // (a) existing marker-based stripping
+      let text = sanitiseMemory(mem.text);
+      // (b) no-talk stripping for knowing witnesses
+      if (noTalkList.length > 0) {
+        const { text: stripped, strippedCount } = await sanitiseMemoryForNoTalk(
+          text,
+          noTalkList,
+          draft.witness.id,
+          llm,
+          rawDrafts,
+        );
+        text = stripped;
+        totalNoTalkStripped += strippedCount;
+      }
+      sanitisedMemory.push({ qid: mem.qid, text });
+    }
+    drafts.push({ ...draft, memory: sanitisedMemory });
+  }
+
+  // Check for insufficient material: if a witness has < MIN_USABLE_SENTENCES
+  // remaining usable sentences, demote them to filler-only by clearing memory.
+  // Track which witnesses are filler-only.
+  const fillerOnlyWitnessIds = new Set<string>();
+  for (const draft of drafts) {
+    const usableSentences = draft.memory
+      .flatMap((m) => splitSentences(m.text))
+      .filter((s) => s !== NO_TALK_MEMORY_MARKER && s.length > 0);
+    if (usableSentences.length < MIN_USABLE_SENTENCES) {
+      fillerOnlyWitnessIds.add(draft.witness.id);
+    }
+  }
+
+  // If fewer than MIN_MATERIAL_WITNESSES have material, refuse to generate
+  const witnessesWithMaterial = drafts.filter(
+    (d) => !fillerOnlyWitnessIds.has(d.witness.id),
+  ).length;
+  if (witnessesWithMaterial < MIN_MATERIAL_WITNESSES) {
+    throw new RoomRefusedError(
+      `知情者记忆剔除后仅 ${witnessesWithMaterial} 位证人仍有素材(需 ${MIN_MATERIAL_WITNESSES} 位),无法生成房间`,
+    );
+  }
 
   const scheduleStats: ScheduleStats = {
     verifyCallCount: 0,
@@ -2336,6 +2526,7 @@ export async function runBehindRoom(
       totalLlmCalls,
       noTalkListWarning,
       anchorContradictionCount: scheduleStats.anchorContradictionCount,
+      noTalkStrippedSentences: totalNoTalkStripped,
     });
   }
 
@@ -2536,6 +2727,40 @@ export async function openDoor(
           nouns: [kw],
         });
       }
+    }
+  }
+
+  // Sanitise front-room drafts: strip no-talk-related sentences from
+  // knowing witnesses' frontText context (same treatment as behind room).
+  if (frontNoTalkList.length > 0) {
+    for (const draft of drafts) {
+      const sanitisedMemory: MemoryEntry[] = [];
+      for (const mem of draft.memory) {
+        const { text } = await sanitiseMemoryForNoTalk(
+          mem.text,
+          frontNoTalkList,
+          draft.witness.id,
+          llm,
+          rawBehindDrafts,
+        );
+        sanitisedMemory.push({ qid: mem.qid, text });
+      }
+      draft.memory = sanitisedMemory;
+    }
+    // Also sanitise the behind memory used for half-truth prompts
+    for (const [wid, mems] of behindMemoryByWit) {
+      const sanitised: MemoryEntry[] = [];
+      for (const mem of mems) {
+        const { text } = await sanitiseMemoryForNoTalk(
+          mem.text,
+          frontNoTalkList,
+          wid,
+          llm,
+          rawBehindDrafts,
+        );
+        sanitised.push({ qid: mem.qid, text });
+      }
+      behindMemoryByWit.set(wid, sanitised);
     }
   }
 
