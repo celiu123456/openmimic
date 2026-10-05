@@ -11,9 +11,15 @@ interface DivergencePosition {
 interface Divergence {
   id: string;
   topic: string;
-  type: 'perspective' | 'factual';
+  type: 'perspective' | 'factual' | 'supersedes' | 'refines' | 'retelling_diverges';
   positions: DivergencePosition[];
   resolution?: string;
+}
+
+interface ClaimVersion {
+  text: string;
+  at: string;
+  reason?: string;
 }
 
 interface Claim {
@@ -24,6 +30,7 @@ interface Claim {
   kind?: string;
   witnessIds?: string[];
   reraised?: boolean;
+  versions?: ClaimVersion[];
 }
 
 interface Witness {
@@ -118,7 +125,14 @@ const contestedClaims = computed(() =>
 );
 
 function typeLabel(type: string): string {
-  return type === 'factual' ? '事实性' : '视角性';
+  switch (type) {
+    case 'factual': return '事实性';
+    case 'perspective': return '视角性';
+    case 'supersedes': return '时间替代';
+    case 'refines': return '细化补充';
+    case 'retelling_diverges': return '转述分歧';
+    default: return type;
+  }
 }
 
 function resolutionLabel(resolution?: string): string {
@@ -126,6 +140,7 @@ function resolutionLabel(resolution?: string): string {
     case 'kept_both': return '两条都保留';
     case 'qualified': return '加限定后共存';
     case 'unresolved': return '未解决';
+    case 'pre_judged': return '规则预判';
     default: return '';
   }
 }
@@ -195,6 +210,18 @@ async function uncontestClaim(claimId: string): Promise<void> {
               <span v-if="claim.kind" class="kind">[{{ claim.kind }}]</span>
               <span v-if="claim.reraised" class="reraised-tag">重新提出</span>
               {{ claim.text }}
+              <details v-if="claim.versions && claim.versions.length > 0" class="version-history">
+                <summary>用词历史 ({{ claim.versions.length }})</summary>
+                <ul class="version-list">
+                  <li v-for="(ver, vi) in claim.versions" :key="vi" class="version-item">
+                    <span class="version-text">{{ ver.text }}</span>
+                    <span class="version-meta">
+                      {{ ver.at ? new Date(ver.at).toLocaleDateString() : '' }}
+                      <span v-if="ver.reason" class="version-reason">{{ ver.reason }}</span>
+                    </span>
+                  </li>
+                </ul>
+              </details>
             </div>
             <button
               v-if="gateEnabled && confirmingClaimId !== claim.id"
@@ -230,6 +257,18 @@ async function uncontestClaim(claimId: string): Promise<void> {
               <span class="conviction">{{ claim.conviction.toFixed(2) }}</span>
               <span v-if="claim.kind" class="kind">[{{ claim.kind }}]</span>
               <s>{{ claim.text }}</s>
+              <details v-if="claim.versions && claim.versions.length > 0" class="version-history">
+                <summary>用词历史 ({{ claim.versions.length }})</summary>
+                <ul class="version-list">
+                  <li v-for="(ver, vi) in claim.versions" :key="vi" class="version-item">
+                    <span class="version-text">{{ ver.text }}</span>
+                    <span class="version-meta">
+                      {{ ver.at ? new Date(ver.at).toLocaleDateString() : '' }}
+                      <span v-if="ver.reason" class="version-reason">{{ ver.reason }}</span>
+                    </span>
+                  </li>
+                </ul>
+              </details>
             </div>
             <button class="withdraw-btn" @click="uncontestClaim(claim.id)">
               撤回否决
@@ -461,6 +500,19 @@ async function uncontestClaim(claimId: string): Promise<void> {
   border-left: 3px solid #3498db;
 }
 
+.divergence-card.supersedes,
+.divergence-card.refines,
+.divergence-card.retelling_diverges {
+  border-left: 3px solid #f39c12;
+}
+
+.supersedes .type-tag,
+.refines .type-tag,
+.retelling_diverges .type-tag {
+  background: #fdebd0;
+  color: #d68910;
+}
+
 .divergence-header {
   display: flex;
   gap: 0.5rem;
@@ -508,6 +560,51 @@ async function uncontestClaim(claimId: string): Promise<void> {
 
 .empty {
   color: #999;
+}
+
+/* Version history */
+.version-history {
+  margin-top: 0.3rem;
+  font-size: 0.85em;
+}
+
+.version-history summary {
+  cursor: pointer;
+  color: #888;
+  user-select: none;
+}
+
+.version-list {
+  list-style: none;
+  padding: 0;
+  margin: 0.25rem 0 0;
+}
+
+.version-item {
+  margin: 0.2rem 0;
+  padding: 0.2rem 0.5rem;
+  background: #f5f5f5;
+  border-radius: 3px;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.version-text {
+  flex: 1;
+  color: #666;
+}
+
+.version-meta {
+  flex-shrink: 0;
+  color: #999;
+  font-size: 0.85em;
+}
+
+.version-reason {
+  font-style: italic;
+  margin-left: 0.3em;
 }
 
 .error {
