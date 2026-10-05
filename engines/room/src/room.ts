@@ -503,6 +503,9 @@ export interface RoomStats {
   stageDirectionCount: number;
   /** Total LLM calls in the room (generation + verification + rewrite). */
   totalLlmCalls: number;
+  /** Warning when no-talk list generation failed or produced an empty list
+   *  despite the presence of explicit secrecy markers. Undefined when healthy. */
+  noTalkListWarning?: string;
 }
 
 /**
@@ -771,16 +774,22 @@ export interface NoTalkItem {
 /* LLM-based no-talk list generation                                   */
 /* ------------------------------------------------------------------ */
 
-const NO_TALK_LIST_SCHEMA = z.array(z.object({
+/** Max keywords we keep per item (prompt asks for 3-6 but models may return more). */
+const KEYWORDS_MAX = 8;
+
+/** Schema for a single no-talk item. Keywords min lowered to 1 so that
+ *  items with fewer keywords are kept instead of silently rejected.
+ *  Max raised to KEYWORDS_MAX to tolerate models that return 7-8. */
+const NO_TALK_ITEM_SCHEMA = z.object({
   topic: z.string(),
-  keywords: z.array(z.string()).min(3).max(6),
+  keywords: z.array(z.string()).min(1).max(KEYWORDS_MAX),
   knowingWitnessIds: z.array(z.string()),
   blindWitnessId: z.string(),
   blindClaim: z.string(),
   sourceFragment: z.string(),
   severity: z.enum(['high', 'medium']),
   reason: z.string(),
-}));
+});
 
 /** Hard cap on LLM-generated no-talk items. Rule-based fallback items are added on top. */
 const NO_TALK_LIST_CAP = 8;
@@ -847,25 +856,58 @@ export async function generateNoTalkList(
   const user = `在场证人:\n${witnessSummaries}`;
 
   const parseOne = (resp: string, logTag?: string): NoTalkItem[] => {
+    // Always log the raw response for diagnostics
+    if (logTag) console.log(`[no-talk-list] ${logTag}: raw LLM response (first 500 chars): ${resp.substring(0, 500)}`);
+
     try {
       const jsonMatch = resp.match(/\[[\s\S]*\]/);
       if (!jsonMatch) {
         if (logTag) console.warn(`[no-talk-list] ${logTag}: LLM response contained no JSON array`);
         return [];
       }
-      const parsed = NO_TALK_LIST_SCHEMA.parse(JSON.parse(jsonMatch[0]));
-      if (parsed.length === 0 && logTag) {
+      const rawArray: unknown[] = JSON.parse(jsonMatch[0]);
+      if (!Array.isArray(rawArray)) {
+        if (logTag) console.warn(`[no-talk-list] ${logTag}: parsed value is not an array`);
+        return [];
+      }
+      if (rawArray.length === 0 && logTag) {
         console.warn(`[no-talk-list] ${logTag}: LLM returned empty no-talk list`);
       }
-      return parsed.map((item) => ({
-        ...item,
-        elements: {
-          text: item.sourceFragment,
-          amounts: [],
-          verbs: [],
-          nouns: item.keywords.slice(),
-        },
-      }));
+      // Parse items individually: valid items are kept, invalid ones are
+      // logged and skipped instead of failing the entire batch.
+      // Pre-process: truncate keywords arrays that exceed the max to avoid
+      // rejecting otherwise-valid items when the model is overly generous.
+      for (const raw of rawArray) {
+        if (raw && typeof raw === 'object' && Array.isArray((raw as Record<string, unknown>).keywords)) {
+          const kw = (raw as Record<string, unknown>).keywords as unknown[];
+          if (kw.length > KEYWORDS_MAX) {
+            (raw as Record<string, unknown>).keywords = kw.slice(0, KEYWORDS_MAX);
+          }
+        }
+      }
+      const items: NoTalkItem[] = [];
+      let rejected = 0;
+      for (let idx = 0; idx < rawArray.length; idx++) {
+        const parsed = NO_TALK_ITEM_SCHEMA.safeParse(rawArray[idx]);
+        if (parsed.success) {
+          items.push({
+            ...parsed.data,
+            elements: {
+              text: parsed.data.sourceFragment,
+              amounts: [],
+              verbs: [],
+              nouns: parsed.data.keywords.slice(),
+            },
+          });
+        } else {
+          rejected++;
+          if (logTag) console.warn(`[no-talk-list] ${logTag}: item[${idx}] rejected: ${parsed.error.message.substring(0, 200)}`);
+        }
+      }
+      if (rejected > 0 && logTag) {
+        console.warn(`[no-talk-list] ${logTag}: ${rejected}/${rawArray.length} items rejected by schema`);
+      }
+      return items;
     } catch (e) {
       if (logTag) console.warn(`[no-talk-list] ${logTag}: parse failed: ${e instanceof Error ? e.message : String(e)}`);
       return [];
@@ -988,6 +1030,76 @@ export function buildNoTalkListFallback(
         }
       }
     }
+  }
+
+  return items;
+}
+
+/* ------------------------------------------------------------------ */
+/* LLM fallback keyword enrichment                                     */
+/* ------------------------------------------------------------------ */
+
+/**
+ * When rule-based fallback items have empty keywords (because
+ * extractFactElements found no amounts, verbs, or nouns in the domain),
+ * use one LLM call to extract key topical elements from the fact sentence.
+ *
+ * This is called ONLY on the fallback path and only for items with empty
+ * keywords — one LLM call total (batched), not per item.
+ */
+export async function enrichFallbackKeywords(
+  llm: LLMClient,
+  items: NoTalkItem[],
+): Promise<NoTalkItem[]> {
+  const emptyItems = items.filter((it) => it.keywords.length === 0);
+  if (emptyItems.length === 0) return items;
+
+  // Build a single prompt asking for keywords for all empty items
+  const fragments = emptyItems.map((it, i) =>
+    `${i + 1}. "${it.sourceFragment}"`,
+  ).join('\n');
+
+  const system = [
+    '你是一个关键词抽取器。给定若干句被嘱托保密的事实句,',
+    '请为每句提取2-5个标志性词或短语,用于在对话中检测泄露。',
+    '包括直接说法和常见的委婉/间接说法。',
+    '只输出 JSON 数组(与输入顺序对应),每个元素是一个字符串数组。不要其他文字。',
+  ].join('');
+
+  try {
+    const resp = await llm.complete({
+      system,
+      user: fragments,
+      purpose: 'room-notalk-enrich',
+    });
+    const jsonMatch = resp.match(/\[[\s\S]*\]/);
+    if (!jsonMatch) return items;
+    const parsed = JSON.parse(jsonMatch[0]);
+    if (!Array.isArray(parsed)) return items;
+
+    let enriched = 0;
+    for (let i = 0; i < emptyItems.length && i < parsed.length; i++) {
+      const kws = parsed[i];
+      if (Array.isArray(kws) && kws.length > 0) {
+        const filtered = kws.filter((k: unknown): k is string =>
+          typeof k === 'string' && k.length > 0 && k.length <= 20,
+        );
+        if (filtered.length > 0) {
+          emptyItems[i]!.keywords = filtered.slice(0, 6);
+          emptyItems[i]!.elements = {
+            ...emptyItems[i]!.elements,
+            nouns: [...new Set([...emptyItems[i]!.elements.nouns, ...filtered])],
+          };
+          enriched++;
+        }
+      }
+    }
+    if (enriched > 0) {
+      console.log(`[no-talk-list] enrichFallbackKeywords: enriched ${enriched}/${emptyItems.length} items`);
+    }
+  } catch (e) {
+    console.warn(`[no-talk-list] enrichFallbackKeywords failed: ${e instanceof Error ? e.message : String(e)}`);
+    // Non-fatal: items keep empty keywords and rely on LLM verification
   }
 
   return items;
@@ -1905,7 +2017,16 @@ export async function runBehindRoom(
     // If an LLM item covers the same (blindWitnessId, topic) as a fallback
     // item, merge the LLM's keywords into the fallback item rather than
     // dropping one or the other.
-    const fallbackItems = buildNoTalkListFallback(rawDrafts);
+    let fallbackItems = buildNoTalkListFallback(rawDrafts);
+    // Enrich empty-keyword fallback items with LLM element extraction
+    // (one LLM call total for all empty items, only on the fallback path)
+    if (fallbackItems.some((it) => it.keywords.length === 0)) {
+      try {
+        fallbackItems = await enrichFallbackKeywords(llm, fallbackItems);
+      } catch {
+        // Non-fatal: items keep empty keywords
+      }
+    }
     const mergedFallback = fallbackItems.map((fb) => {
       // Find an LLM item targeting the same blind witness with overlapping source
       const llmMatch = llmItems.find(
@@ -1955,6 +2076,21 @@ export async function runBehindRoom(
     }
   }
 
+  // Detect and warn when the no-talk list is suspiciously empty or weak.
+  // Only warn when there are 2+ witnesses (a single witness has no cross-witness
+  // conflict by definition, so an empty no-talk list is expected).
+  const hasExplicitMarkers = rawDrafts.length >= 2 && rawDrafts.some((d) =>
+    d.memory.some((m) => PRIVATE_MARKERS.some((marker) => m.text.includes(marker))),
+  );
+  let noTalkListWarning: string | undefined;
+  if (hasExplicitMarkers && noTalkList.length === 0) {
+    noTalkListWarning = 'WARNING: testimony contains explicit secrecy markers but no-talk list is empty';
+    console.warn(`[room] ${noTalkListWarning}`);
+  } else if (hasExplicitMarkers && noTalkList.every((item) => item.keywords.length === 0)) {
+    noTalkListWarning = 'WARNING: all no-talk items have empty keywords (detection will rely on LLM verification only)';
+    console.warn(`[room] ${noTalkListWarning}`);
+  }
+
   // Second pass: sanitise each witness's memory (strip private sentences)
   const drafts = rawDrafts.map((draft) => ({
     ...draft,
@@ -1995,6 +2131,17 @@ export async function runBehindRoom(
     scheduleStats,
   );
 
+  // Prepend a system warning entry if no-talk list is suspect
+  if (noTalkListWarning) {
+    utterances.unshift({
+      kind: 'stage' as const,
+      witnessId: '__system__',
+      displayLabel: '[system]',
+      text: noTalkListWarning,
+      at: now(),
+    });
+  }
+
   const room: Room = {
     id: newId(),
     subjectId,
@@ -2028,6 +2175,7 @@ export async function runBehindRoom(
       rewriteSuccessCount: scheduleStats.rewriteSuccessCount,
       stageDirectionCount: totalStageDirections,
       totalLlmCalls,
+      noTalkListWarning,
     });
   }
 
@@ -2170,7 +2318,15 @@ export async function openDoor(
     } catch {
       // LLM failed; fallback only
     }
-    const fallbackItems = buildNoTalkListFallback(rawBehindDrafts);
+    let fallbackItems = buildNoTalkListFallback(rawBehindDrafts);
+    // Enrich empty-keyword fallback items with LLM element extraction
+    if (fallbackItems.some((it) => it.keywords.length === 0)) {
+      try {
+        fallbackItems = await enrichFallbackKeywords(llm, fallbackItems);
+      } catch {
+        // Non-fatal
+      }
+    }
     const mergedFallback = fallbackItems.map((fb) => {
       const llmMatch = llmItems.find(
         (li) => li.blindWitnessId === fb.blindWitnessId

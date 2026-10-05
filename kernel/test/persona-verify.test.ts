@@ -281,3 +281,105 @@ describe('verifyPersonaResponse', () => {
     expect(result.verifyCallCount).toBe(3);
   });
 });
+
+/* ---------------------------------------------------------------- */
+/* Private topic confirmation/denial detection (Problem 2)           */
+/* ---------------------------------------------------------------- */
+
+describe('private topic confirmation/denial', () => {
+  it('blocks "借过" when the user asks about a privately-excluded borrowing topic', async () => {
+    const result = await verifyPersonaResponse({
+      systemPrompt: SAMPLE_SYSTEM_PROMPT,
+      userMessage: '有人跟我提过你之前借钱的事，到底什么情况？',
+      response: '借过，具体多少记不太清了。这事不方便细说。',
+      llm: fakeLLM([]),
+      displayName: '林默',
+      excludedPrivateTopics: ['借了两万,说手头周转'],
+    });
+    expect(result.verified).toBe(true);
+    expect(result.passed).toBe(false);
+    expect(result.finalResponse).toBe('这事不方便说。');
+    expect(result.verifyCallCount).toBe(0);
+  });
+
+  it('blocks bare "是的" confirmation of a private topic', async () => {
+    const result = await verifyPersonaResponse({
+      systemPrompt: SAMPLE_SYSTEM_PROMPT,
+      userMessage: '听说你辞职了？',
+      response: '是的。',
+      llm: fakeLLM([]),
+      displayName: '林默',
+      excludedPrivateTopics: ['他裸辞前三周'],
+    });
+    expect(result.verified).toBe(true);
+    expect(result.passed).toBe(false);
+    expect(result.finalResponse).toBe('这事不方便说。');
+  });
+
+  it('blocks "没有" denial of a private topic', async () => {
+    const result = await verifyPersonaResponse({
+      systemPrompt: SAMPLE_SYSTEM_PROMPT,
+      userMessage: '听说你跟人借过钱？',
+      response: '没有，我不是那种人。',
+      llm: fakeLLM([]),
+      displayName: '林默',
+      excludedPrivateTopics: ['借了两万,说手头周转'],
+    });
+    expect(result.verified).toBe(true);
+    expect(result.passed).toBe(false);
+    expect(result.finalResponse).toBe('这事不方便说。');
+  });
+
+  it('passes through deflections like "这事不方便说"', async () => {
+    const result = await verifyPersonaResponse({
+      systemPrompt: SAMPLE_SYSTEM_PROMPT,
+      userMessage: '有人跟我提过你之前借钱的事？',
+      response: '这事不方便说。',
+      llm: fakeLLM([]),
+      displayName: '林默',
+      excludedPrivateTopics: ['借了两万,说手头周转'],
+    });
+    // Deflection is safe — pre-screen should pass it
+    expect(result.passed).toBe(true);
+    expect(result.finalResponse).toBe('这事不方便说。');
+  });
+
+  it('does not trigger when no private topics are provided', async () => {
+    const result = await verifyPersonaResponse({
+      systemPrompt: SAMPLE_SYSTEM_PROMPT,
+      userMessage: '听说你帮周野搬过家？',
+      response: '嗯,搬过。',
+      llm: fakeLLM([]),
+      displayName: '林默',
+      // No excludedPrivateTopics
+    });
+    // Should pass through (pre-screen: short response)
+    expect(result.passed).toBe(true);
+  });
+
+  it('does not trigger when user question is about a non-private topic', async () => {
+    const result = await verifyPersonaResponse({
+      systemPrompt: SAMPLE_SYSTEM_PROMPT,
+      userMessage: '最近天气怎么样？',
+      response: '还行吧。',
+      llm: fakeLLM([]),
+      displayName: '林默',
+      excludedPrivateTopics: ['借了两万,说手头周转'],
+    });
+    expect(result.passed).toBe(true);
+  });
+
+  it('blocks confirmation of illness-domain private topic', async () => {
+    const result = await verifyPersonaResponse({
+      systemPrompt: SAMPLE_SYSTEM_PROMPT,
+      userMessage: '听说你体检查出来什么问题？',
+      response: '嗯,确实查出来一个东西。',
+      llm: fakeLLM([]),
+      displayName: '苏芷',
+      excludedPrivateTopics: ['体检查出来一个东西'],
+    });
+    expect(result.verified).toBe(true);
+    expect(result.passed).toBe(false);
+    expect(result.finalResponse).toBe('这事不方便说。');
+  });
+});

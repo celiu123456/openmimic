@@ -35,6 +35,14 @@ export interface PersonaVerifyOptions {
   llm: VerifyLLM;
   /** Display name of the persona subject. */
   displayName: string;
+  /**
+   * Topic labels of content excluded from the persona prompt due to
+   * privacy/secrecy markers. When provided, the verifier will flag
+   * responses that confirm or deny user premises touching these topics.
+   * Contains only short topic markers (e.g. "借钱"), NOT the private
+   * content itself.
+   */
+  excludedPrivateTopics?: string[];
 }
 
 export interface PersonaVerifyResult {
@@ -194,6 +202,81 @@ function getUnfounded(cats: VerifyCategories): string[] {
 
 const FALLBACK_RESPONSE = '记不太清了。';
 
+/** Deflection response for questions about privately-excluded topics. */
+const PRIVATE_TOPIC_DEFLECTION = '这事不方便说。';
+
+/**
+ * Confirmation/denial patterns that indicate the persona is acknowledging
+ * or explicitly refusing a factual premise from the user's question.
+ */
+const CONFIRM_DENY_PATTERNS: RegExp[] = [
+  /^[是嗯对啊]的?[,，。！]?/,         // "是的" "嗯" "对"
+  /^没[有错]?[,，。！]?/,              // "没有" "没"
+  /^不是[,，。！]?/,                    // "不是"
+  /^确实[,，。！]?/,                    // "确实"
+  /[借做去来过了]过/,                    // verb+过 confirmation pattern
+  /^(有|没有)这[回个件]事/,             // "有这回事" "没有这件事"
+];
+
+/** Function-word characters that should not count as topic signals. */
+const STOP_CHARS = new Set('的了是在有他她我你不也就都很和跟对这那个人说么什吗呢把被让给到为以上下中大小多少可会能要想着过被与');
+
+/**
+ * Extract content characters from a Chinese text: characters that carry
+ * topical meaning (not punctuation, not function words).
+ */
+function extractContentChars(text: string): Set<string> {
+  const chars = new Set<string>();
+  for (const ch of text) {
+    // Only keep CJK characters that are not stop words
+    if (/[一-鿿]/.test(ch) && !STOP_CHARS.has(ch)) {
+      chars.add(ch);
+    }
+  }
+  return chars;
+}
+
+/**
+ * Check whether the user's question touches any of the excluded private
+ * topics, and whether the response confirms or denies it.
+ *
+ * Returns the deflection response if a private topic confirmation/denial
+ * is detected, or null if the response is safe.
+ */
+function checkPrivateTopicConfirmation(
+  userMessage: string,
+  response: string,
+  excludedPrivateTopics: readonly string[],
+): string | null {
+  if (excludedPrivateTopics.length === 0) return null;
+
+  const userChars = extractContentChars(userMessage);
+
+  // Check if the user's question references any excluded private topic.
+  // A topic is "referenced" if:
+  //   (a) the full topic substring appears in the user message, OR
+  //   (b) at least 1 content character from the topic appears in the user
+  //       message (single-char match suffices because Chinese content
+  //       morphemes like 借/辞/病 are highly specific to their domain).
+  const touched = excludedPrivateTopics.some((topic) => {
+    if (userMessage.includes(topic)) return true;
+    const topicChars = extractContentChars(topic);
+    for (const ch of topicChars) {
+      if (userChars.has(ch)) return true;
+    }
+    return false;
+  });
+  if (!touched) return null;
+
+  // Check if the response confirms or denies the premise
+  const trimmedResponse = response.trim();
+  if (CONFIRM_DENY_PATTERNS.some((pat) => pat.test(trimmedResponse))) {
+    return PRIVATE_TOPIC_DEFLECTION;
+  }
+
+  return null;
+}
+
 /* ------------------------------------------------------------------ */
 /* Main entry point                                                    */
 /* ------------------------------------------------------------------ */
@@ -211,7 +294,7 @@ const FALLBACK_RESPONSE = '记不太清了。';
 export async function verifyPersonaResponse(
   opts: PersonaVerifyOptions,
 ): Promise<PersonaVerifyResult> {
-  const { systemPrompt, userMessage, response, llm, displayName: _displayName } = opts;
+  const { systemPrompt, userMessage, response, llm, displayName: _displayName, excludedPrivateTopics } = opts;
 
   // Environment toggle (default: enabled)
   if (process.env.PERSONA_VERIFY === '0') {
@@ -222,6 +305,25 @@ export async function verifyPersonaResponse(
       finalResponse: response,
       verifyCallCount: 0,
     };
+  }
+
+  // Private topic confirmation/denial check (runs BEFORE pre-screen because
+  // short confirmations like "借过" would be pre-screened out as safe).
+  if (excludedPrivateTopics && excludedPrivateTopics.length > 0) {
+    const deflection = checkPrivateTopicConfirmation(
+      userMessage,
+      response,
+      excludedPrivateTopics,
+    );
+    if (deflection) {
+      return {
+        verified: true,
+        passed: false,
+        unfoundedFragments: [response],
+        finalResponse: deflection,
+        verifyCallCount: 0,
+      };
+    }
   }
 
   // Pre-screen: skip verification for safe responses
