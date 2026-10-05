@@ -161,6 +161,11 @@
 - 曲线比的是 **不同证人子集** 之间的重合, 混入了证人构成差异 (n=3 两个子集论断数 50 对 32, 重合 2.6%), 不是纯粹的稳定度; 且运行文件没有记录每个子集包含哪些证人, 无法事后分解。曲线目前不支持 "证人越多越稳" 或相反的任何说法。
 - 重复重合率 46.9% 是本节唯一可用的方向性读数; N=3 对, 林默是手写虚构数据。
 
-### 6. LOWO 对照臂 (完整人格 vs 去掉论断区的人格)
+### 6. LOWO 对照臂 (完整人格 vs 去掉论断区的人格) — 未产出读数
 
-- **进行中** (2026-10-05 10:45:11 本地时间启动, Commit 060c869, 未入账读数): 后台进程 PID 3943430 3943469 3943470 3943481 3946038 3946039 ; 日志 `/tmp/eval-lowo-ablation.log`; 续跑进度文件 `/tmp/eval-lowo-ablation-progress.json`; 完成后运行文件为 `eval/runs/*-lowo-ablation-episodes-only.json`。读法: personaWins = 完整人格胜, baselineWins = 仅事例人格胜。续跑命令: `npx tsx eval/src/cli-lowo.ts --max-questions 3 --ablation-episodes-only --progress /tmp/eval-lowo-ablation-progress.json`
+- **日期**: 2026-10-05, Commit 060c869, 10:45:11 启动, 第 1 场法庭后中止 (约 1.5 分钟)
+- **结果**: 无读数。第 1 场法庭 (留出 w-faxiao) 产出 54 条存活论断、人格 3027 字, 但人格里事例数为 0, 对照臂的前置检查报错中止 (`Ablation needs episodes in the persona`)。没有任何成对判定产生, 也没有写运行文件。
+- **日志**: `/tmp/eval-lowo-ablation.log`
+- **已知事实**: 主干两次真跑 (docs/p1a-real-run-2.md、-3.md) 法庭分别抽出 91 / 65 条事例, 但人格 meta 的 episodeCount 同样是 0。也就是说林默的人格 prompt 里本来就不带事例区, "仅事例" 臂在这份数据上是空的。
+- **原因未查实**: 人格装配只收 consentLevel 为 quotable 的证人的事例, 且超预算时先丢事例; 是哪一条导致 0, 没有核实。
+- **含义**: 第 4 节 LOWO 的 "完整人格" 实际是 "论断 + 纪律等, 不含事例"。"论断相对事例有无增量" 这个问题目前在林默上无法回答, 需要先让事例进得了人格 (改数据的授权级别或装配逻辑, 属主干范围), 再重跑本臂。
