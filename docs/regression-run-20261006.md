@@ -1,4 +1,9 @@
-# Regression Run 2026-10-06
+# Regression Run 2026-10-06 (SUPERSEDED)
+
+> **Superseded by `regression-run-20261006b.md`.**
+> This run exposed three bugs (empty persona shell, observer guard in persona,
+> divergence flooding) that were all marked PASS incorrectly.
+> The bugs are fixed and verified in the b run.
 
 Date: 2026-10-05T17:05:44.980Z
 Model: deepseek-flash

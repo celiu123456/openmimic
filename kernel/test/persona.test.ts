@@ -607,4 +607,95 @@ describe('assemblePersonaContext v2', () => {
     // Both should be present since budget is sufficient
     expect(meta.episodeCount).toBe(2);
   });
+
+  /* ------------------------------------------------------------------ */
+  /* Invariant: quota-based truncation never zeroes all sections          */
+  /* ------------------------------------------------------------------ */
+
+  it('INVARIANT: many claims + episodes keep both sections non-empty', async () => {
+    // Reproduce the regression: >100 claims + >80 episodes should not
+    // cascade-drop everything. With quota-based truncation, each section
+    // keeps its minimum.
+    seedSubject(store, '我很累。');
+    const witnesses = ['发小', '前上司', '前任', '母亲', '同事', '网友'];
+    for (let w = 0; w < witnesses.length; w++) {
+      const wid = `w${w}`;
+      addWitness(store, wid, witnesses[w]);
+      // Build testimony text containing all episode texts as substrings
+      const episodeTexts: string[] = [];
+      for (let e = 0; e < 15; e++) {
+        episodeTexts.push(`林默在场合${w}之${e}做了事情`);
+      }
+      const behindText = episodeTexts.join(',') + '。';
+      addTestimony(store, `t${w}`, wid, behindText);
+      // Add 18 claims per witness (108 total, exceeding old cascade threshold)
+      for (let c = 0; c < 18; c++) {
+        addClaim(store, `c${w}-${c}`, `林默在${witnesses[w]}看来有特质${c}。`, [`t${w}`], 0.55, {
+          witnessIds: [wid],
+        });
+      }
+      // Add 15 episodes per witness (90 total), each is verbatim substring of behindText
+      for (let e = 0; e < 15; e++) {
+        store.putEpisode({
+          id: `ep${w}-${e}`,
+          subjectId: SUBJECT,
+          witnessId: wid,
+          testimonyId: `t${w}`,
+          qid: 'q1',
+          text: episodeTexts[e],
+          elicited: false,
+        });
+      }
+    }
+
+    const { systemPrompt, meta } = await assemblePersonaContext(SUBJECT, store);
+
+    // INVARIANT: episodes must not be zeroed
+    expect(meta.episodeCount).toBeGreaterThanOrEqual(5);
+    // INVARIANT: claims must not be zeroed
+    expect(meta.includedClaimIds.length).toBeGreaterThanOrEqual(3);
+    // INVARIANT: prompt is within budget
+    expect(meta.charCount).toBeLessThanOrEqual(PERSONA_PROMPT_BUDGET);
+    // INVARIANT: sections that had content but kept 0 items should not happen
+    // for episodes and claims (they have minimums)
+    expect(meta.sectionBudgets?.episodes.available).toBeGreaterThan(0);
+    expect(meta.sectionBudgets?.episodes.kept).toBeGreaterThan(0);
+    expect(meta.sectionBudgets?.claims.available).toBeGreaterThan(0);
+    expect(meta.sectionBudgets?.claims.kept).toBeGreaterThan(0);
+    // INVARIANT: prompt contains episode and claim sections
+    expect(systemPrompt).toContain('别人讲过的事');
+    expect(systemPrompt).toContain('他在不同人面前');
+    // INVARIANT: discipline section always present
+    expect(systemPrompt).toContain('行为纪律');
+    expect(systemPrompt).toContain('不给人下诊断');
+    expect(systemPrompt).toContain('记不清');
+  });
+
+  it('INVARIANT: no-fabrication discipline always present even when truncated', async () => {
+    seedSubject(store);
+    addWitness(store, 'w1', '发小');
+    addTestimony(store, 't1', 'w1', '他不说话。');
+    addClaim(store, 'c1', '林默沉默。', ['t1'], 0.8);
+
+    const { systemPrompt } = await assemblePersonaContext(SUBJECT, store);
+    expect(systemPrompt).toContain('被问到的事不在上面的素材里,就按本人口吻说记不清或不接,不要补细节');
+    expect(systemPrompt).toContain('素材里有的事,可以用自己的口吻简短地说');
+    expect(systemPrompt).not.toContain('AI观测者硬边界');
+    expect(systemPrompt).not.toContain('我观察到');
+  });
+
+  it('INVARIANT: sectionBudgets meta is present after assembly', async () => {
+    seedSubject(store);
+    addWitness(store, 'w1', '发小');
+    addTestimony(store, 't1', 'w1', '他不说话。');
+    addClaim(store, 'c1', '林默沉默。', ['t1'], 0.8);
+
+    const { meta } = await assemblePersonaContext(SUBJECT, store);
+    expect(meta.sectionBudgets).toBeDefined();
+    expect(meta.sectionBudgets!.episodes).toBeDefined();
+    expect(meta.sectionBudgets!.claims).toBeDefined();
+    expect(meta.sectionBudgets!.corpus).toBeDefined();
+    expect(meta.sectionBudgets!.selfReport).toBeDefined();
+    expect(meta.sectionBudgets!.style).toBeDefined();
+  });
 });

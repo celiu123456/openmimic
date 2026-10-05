@@ -340,17 +340,14 @@ function isPerspectiveDifference(a: Claim, b: Claim, subjectWitnessId?: string):
   const wB = b.witnessIds?.[0];
   if (!wA || !wB || wA === wB) return false;
 
-  // Rule: one side must be the subject's own self-report witness
+  // Rule: one side must be the subject's own self-report witness.
+  // Two third-party witnesses with different audiences are NOT pre-judged
+  // as perspective differences — only the LLM can determine whether they
+  // are observing the same behavioral dimension from different angles.
   if (subjectWitnessId) {
     const oneIsSelf = wA === subjectWitnessId || wB === subjectWitnessId;
     if (oneIsSelf && a.domain === 'evaluative' && b.domain === 'evaluative') return true;
   }
-
-  // Different audience contexts → still a perspective difference
-  // (e.g. one claim about behavior at work, other about behavior at home)
-  const audA = a.context?.audience;
-  const audB = b.context?.audience;
-  if (audA && audB && audA !== audB) return true;
 
   return false;
 }

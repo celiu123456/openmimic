@@ -27,7 +27,6 @@ import {
 } from '@openmimic/engine-room';
 import { FakeEmbedding } from '@openmimic/kernel';
 import {
-  OBSERVER_GUARD,
   generateStructuredJson,
   type Claim,
 } from '@openmimic/shared';
@@ -390,11 +389,11 @@ describe('Item 5: disclosure grading in persona', () => {
 });
 
 /* ================================================================== */
-/* Item 6: OBSERVER_GUARD in filing prompt and persona discipline      */
+/* Item 6: filing extraction discipline and persona no-diagnosis guard */
 /* ================================================================== */
 
-describe('Item 6: OBSERVER_GUARD wiring', () => {
-  it('OBSERVER_GUARD text appears in court filing prompt', async () => {
+describe('Item 6: filing extraction discipline and persona no-diagnosis guard', () => {
+  it('filing prompt contains extraction discipline (replaces OBSERVER_GUARD)', async () => {
     const store = new Store();
     try {
       seedTwoWitnessTrial(store);
@@ -408,11 +407,11 @@ describe('Item 6: OBSERVER_GUARD wiring', () => {
         pairFinder: new EmbeddingClaimPairFinder(new FakeEmbedding()),
       });
 
-      // Filing calls should contain OBSERVER_GUARD text
+      // Filing calls should contain the simplified extraction discipline
       const filingCalls = llm.calls.filter(c => c.purpose === 'court-filing');
       expect(filingCalls.length).toBeGreaterThanOrEqual(1);
       for (const call of filingCalls) {
-        expect(call.system).toContain('AI观测者硬边界');
+        expect(call.system).toContain('不写诊断结论');
         expect(call.system).toContain('不提供建议');
         expect(call.system).toContain('不评判谁对谁错');
       }
@@ -421,13 +420,21 @@ describe('Item 6: OBSERVER_GUARD wiring', () => {
     }
   });
 
-  it('OBSERVER_GUARD text appears in PERSONA_DISCIPLINE', () => {
-    expect(PERSONA_DISCIPLINE).toContain('AI观测者硬边界');
-    expect(PERSONA_DISCIPLINE).toContain('不提供建议');
-    expect(PERSONA_DISCIPLINE).toContain('不评判谁对谁错');
+  it('PERSONA_DISCIPLINE has human-appropriate no-diagnosis rule instead of OBSERVER_GUARD', () => {
+    // OBSERVER_GUARD (AI observer language) is removed from persona discipline.
+    // Replaced with a human-appropriate constraint.
+    expect(PERSONA_DISCIPLINE).not.toContain('AI观测者硬边界');
+    expect(PERSONA_DISCIPLINE).not.toContain('我观察到');
+    expect(PERSONA_DISCIPLINE).toContain('不给人下诊断');
+    expect(PERSONA_DISCIPLINE).toContain('不替人做重大决定');
   });
 
-  it('persona system prompt contains OBSERVER_GUARD', async () => {
+  it('PERSONA_DISCIPLINE has no-fabrication rule', () => {
+    expect(PERSONA_DISCIPLINE).toContain('记不清');
+    expect(PERSONA_DISCIPLINE).toContain('不要补细节');
+  });
+
+  it('persona system prompt does not contain OBSERVER_GUARD', async () => {
     const store = new Store();
     try {
       store.putSubject({ id: 's1', displayName: 'Alice' });
@@ -438,7 +445,9 @@ describe('Item 6: OBSERVER_GUARD wiring', () => {
       });
 
       const { systemPrompt } = await assemblePersonaContext('s1', store);
-      expect(systemPrompt).toContain('AI观测者硬边界');
+      expect(systemPrompt).not.toContain('AI观测者硬边界');
+      expect(systemPrompt).not.toContain('我观察到');
+      expect(systemPrompt).toContain('不给人下诊断');
     } finally {
       store.close();
     }

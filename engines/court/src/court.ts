@@ -3,7 +3,6 @@ import { z } from 'zod';
 import {
   CONVICTION_UNCHALLENGED_CAP,
   CONTRADICTION_CHECK_RULES,
-  OBSERVER_GUARD,
   SOURCE_GUARD,
   extractJson,
   generateStructuredJson,
@@ -110,7 +109,7 @@ function buildFilingSystem(displayName: string): string {
     '',
     SOURCE_GUARD,
     '',
-    OBSERVER_GUARD,
+    '【提取纪律】不写诊断结论、不提供建议、不评判谁对谁错——只提取事件和可观察行为。',
     '★ 三层分开:证人对自己的评价不得立为关于被描述者的论断;证人的感受归证人,被描述者的行为归被描述者,两人的互动归关系。',
   ].join('\n');
 }
@@ -673,33 +672,37 @@ export async function runCourt(
     const preJudgment: PairPreJudgmentResult | null = classifyPair(pair.claimA, pair.claimB);
     if (preJudgment) {
       preJudgedPairs += 1;
-      const NEW_DIV_TYPES = new Set(['supersedes', 'refines', 'retelling_diverges'] as const);
-      type NewDivType = 'supersedes' | 'refines' | 'retelling_diverges';
-      const divType: Divergence['type'] = (NEW_DIV_TYPES as ReadonlySet<string>).has(preJudgment.relation)
-        ? (preJudgment.relation as NewDivType)
-        : preJudgment.relation === 'contradicts'
-          ? 'factual'
-          : 'perspective';
-      const divId = newId();
-      const divergence: Divergence = {
-        id: divId,
-        subjectId,
-        courtSessionId: sessionId,
-        topic: pair.claimA.text.slice(0, 50),
-        type: divType,
-        positions: [
-          { witnessId: pair.claimA.witnessIds?.[0] ?? '', claimId: pair.claimA.id, summary: pair.claimA.text },
-          { witnessId: pair.claimB.witnessIds?.[0] ?? '', claimId: pair.claimB.id, summary: pair.claimB.text },
-        ],
-        resolution: 'pre_judged',
-      };
-      store.putDivergence(divergence);
-      divergences.push(divergence);
 
-      // For contradicts, mark both contested just like factual_conflict unresolved
-      if (preJudgment.relation === 'contradicts') {
-        store.putClaim({ ...pair.claimA, status: 'contested' });
-        store.putClaim({ ...pair.claimB, status: 'contested' });
+      // Only contradicts and supersedes produce divergences.
+      // refines and perspective_differs from pre-judgment are logged but do
+      // not fabricate divergence entries — only the LLM can determine true
+      // perspective differences between third-party witnesses.
+      const DIVERGENCE_WORTHY = new Set(['contradicts', 'supersedes']);
+      if (DIVERGENCE_WORTHY.has(preJudgment.relation)) {
+        const divType: Divergence['type'] = preJudgment.relation === 'contradicts'
+          ? 'factual' : 'supersedes';
+        // Extract short dimension name from claim domain/kind, max 12 chars
+        const dimension = (pair.claimA.domain ?? pair.claimA.kind ?? '').slice(0, 12) || '待定';
+        const divId = newId();
+        const divergence: Divergence = {
+          id: divId,
+          subjectId,
+          courtSessionId: sessionId,
+          topic: dimension,
+          type: divType,
+          positions: [
+            { witnessId: pair.claimA.witnessIds?.[0] ?? '', claimId: pair.claimA.id, summary: pair.claimA.text },
+            { witnessId: pair.claimB.witnessIds?.[0] ?? '', claimId: pair.claimB.id, summary: pair.claimB.text },
+          ],
+          resolution: 'pre_judged',
+        };
+        store.putDivergence(divergence);
+        divergences.push(divergence);
+
+        if (preJudgment.relation === 'contradicts') {
+          store.putClaim({ ...pair.claimA, status: 'contested' });
+          store.putClaim({ ...pair.claimB, status: 'contested' });
+        }
       }
 
       transcript.push({
@@ -778,7 +781,7 @@ export async function runCourt(
         id: divId,
         subjectId,
         courtSessionId: sessionId,
-        topic: relation.topic ?? pair.claimA.text.slice(0, 50),
+        topic: (relation.topic ?? '').slice(0, 12) || (pair.claimA.domain ?? pair.claimA.kind ?? '').slice(0, 12) || '待定',
         type: 'perspective',
         positions: [
           { witnessId: pair.claimA.witnessIds?.[0] ?? '', claimId: pair.claimA.id, summary: pair.claimA.text },
@@ -819,7 +822,7 @@ export async function runCourt(
           id: divId,
           subjectId,
           courtSessionId: sessionId,
-          topic: relation.topic ?? pair.claimA.text.slice(0, 50),
+          topic: (relation.topic ?? '').slice(0, 12) || (pair.claimA.domain ?? pair.claimA.kind ?? '').slice(0, 12) || '待定',
           type: 'factual',
           positions: [
             { witnessId: pair.claimA.witnessIds?.[0] ?? '', claimId: pair.claimA.id, summary: pair.claimA.text },
@@ -852,7 +855,7 @@ export async function runCourt(
           id: divId,
           subjectId,
           courtSessionId: sessionId,
-          topic: relation.topic ?? pair.claimA.text.slice(0, 50),
+          topic: (relation.topic ?? '').slice(0, 12) || (pair.claimA.domain ?? pair.claimA.kind ?? '').slice(0, 12) || '待定',
           type: 'factual',
           positions: [
             { witnessId: pair.claimA.witnessIds?.[0] ?? '', claimId: pair.claimA.id, summary: pair.claimA.text },

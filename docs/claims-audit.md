@@ -172,22 +172,31 @@ divergences 段落已占满 6000 字符预算,episodes 是第一个被砍的段�
 这是单纯的 Phase 排列错误——事例应当是最后被砍的内容(它们是最有价值的第一手
 叙事材料),而低置信论断、语料样本、自述应先被裁剪。
 
-### 修复
+### 修复 (2026-10-06b)
 
-将裁剪顺序改为:
+旧的 cascade 裁剪(逐段全量砍)已替换为 **quota-based per-section truncation**:
+固定段(identity + divergences + discipline)占固定开销,剩余预算按比例分配:
+- episodes: 50% (最有价值,eval-ledger 消融实验验证)
+- claims: 25%
+- corpus: 10%
+- style: 10%
+- self-report: 5%
 
-1. Phase 1: drop low-conviction claims (从最低置信开始)
-2. Phase 2: drop corpus
-3. Phase 3: clip self-report
-4. Phase 4: drop episodes (最后手段)
+每段有最低保留数(episodes >= 5, claims >= 3, corpus >= 3),防止任何段被完全清零。
+`PersonaContextMeta.sectionBudgets` 记录每段的 available/kept/excludedReason。
 
-身份声明行(identity)始终保留,不参与裁剪(原有不变量,已有测试保护)。
+同时:
+- `OBSERVER_GUARD` 从 `PERSONA_DISCIPLINE` 移除(AI 观测者语言不适用于人格角色)
+- 新增 "不给人下诊断,不替人做重大决定"
+- 新增 "被问到的事不在素材里,就说记不清,不要补细节"
+- divergence topic 限制 <=12 字符(原来用 claim text 50 字)
+- `refines` pre-judgment 不再产生 divergence 条目
+- `isPerspectiveDifference` 的 audience-context 规则移除(只保留 self-report vs witness)
 
-新增 4 条测试:
-- episodes 正常进入 prompt 且 episodeCount 计数准确
-- 裁剪顺序验证:预算不足时 claims 先被裁、episodes 存活
-- synthesis_only 证人的事例原文不进入 prompt
-- meta.episodeCount 与 prompt 中实际出现的事例数一致
+新增 3 条 invariant 测试(persona.test.ts):
+- 大量 claims+episodes 下 episodes >= 5, claims >= 3, 在预算内
+- no-fabrication discipline 始终存在
+- sectionBudgets meta 始终存在
 
 ---
 

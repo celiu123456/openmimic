@@ -236,10 +236,21 @@ All previously deferred items are now wired:
 - **Knowledge boundary wiring into room**: `filterByKnowledgeBoundary` applied per-witness
   during draft assembly, filtering memory entries mentioning years beyond `knownToYear`.
 - **classifyPair pre-judgment wiring into court**: `classifyPair` called before LLM relation
-  judgment; deterministic results skip the LLM call. `preJudgedPairs`/`llmJudgedPairs` stats
-  recorded in CourtReport.
-- **Observer guard wiring**: `OBSERVER_GUARD` injected into court filing prompt and
-  `PERSONA_DISCIPLINE` (persona assembly behavioral guardrails).
+  judgment; deterministic results skip the LLM call. Only `contradicts` and `supersedes`
+  pre-judgments create divergence entries; `refines` and `perspective_differs` are logged
+  but do not produce divergences (only the LLM can determine true perspective differences
+  between third-party witnesses). `preJudgedPairs`/`llmJudgedPairs` stats in CourtReport.
+  The `isPerspectiveDifference` function fires only on self-report vs witness (not on
+  differing audience contexts alone).
+- **Persona discipline**: `PERSONA_DISCIPLINE` includes a human-appropriate no-diagnosis
+  rule ("不给人下诊断,不替人做重大决定") and a no-fabrication rule ("被问到的事不在上面的
+  素材里,就按本人口吻说记不清或不接"). `OBSERVER_GUARD` (AI observer language) is NOT
+  used in persona discipline; court filing uses a simplified extraction discipline instead.
+- **Quota-based truncation**: `assemblePersonaContext` allocates the variable portion of
+  `PERSONA_PROMPT_BUDGET` (default 6000 chars) proportionally: episodes 50%, claims 25%,
+  corpus 10%, style 10%, self-report 5%. Each section keeps a minimum item count (episodes
+  >= 5, claims >= 3, corpus >= 3) to prevent total section zeroing. `PersonaContextMeta`
+  includes `sectionBudgets` for per-section diagnostics.
 - **Full Claim.versions lifecycle**: CourtReportView displays wording history as a collapsible
   trail on each claim (surviving and contested).
 - **Structured JSON repair loop**: All LLM JSON call sites (court filing/relation/confrontation,
