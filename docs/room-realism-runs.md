@@ -2821,3 +2821,385 @@ Model: deepseek-flash
   - [quote] 前下属: "忙是真忙，但他中午就吃便利店八块钱的饭团，我给他带过两次饭，他说别惯着我。" [anchors: q1]
   - [extrapolate] 网友（认识四年,只见过一面）(笑了笑,把话题接给了别人)
 
+## Run 100 (limo)
+
+Date: 2026-10-05T13:42:22.682Z
+Model: deepseek-flash
+
+### No-Talk List
+
+清单条数: 7
+
+| Topic | Keywords | Blind Witness | Blind Claim | Knowing Witnesses | Severity | Reason |
+|-------|----------|---------------|-------------|-------------------|----------|--------|
+| 跟我吃饭从来没让我买过单,有一回我抢着付,他脸都拉下来了,说 |  | 母亲 | 小默从小就懂事,不乱花钱。上大学那会儿一个月一千五,他还能省下两百给我买东西。工作以后更不用我操心, | 发小 | high | 证言中有明确嘱托保密的标记 |
+| 他说"周野,我不是不想干,我是每天早上醒来,一想到要去那个楼 |  | 母亲 | 小默从小就懂事,不乱花钱。上大学那会儿一个月一千五,他还能省下两百给我买东西。工作以后更不用我操心, | 发小 | high | 证言中有明确嘱托保密的标记 |
+| 半夜借两万周转 | 借了两万, 周转一下, 手头紧, 别跟他妈提, 别跟我妈说, 借钱 | 母亲 | 儿子说有钱，还转五千让我买按摩椅 | 发小 | high | 母亲以为儿子经济宽裕，实际已向发小借钱周转，直接推翻其财务现状认知 |
+| 已离职/想歇一段 | 先不看机会, 想歇一段, 离职, 辞职, 不找工作, 歇一段 | 母亲 | 儿子工作稳定，只是最近累、话少 | 前上司 | high | 母亲若知道儿子已不打算工作/离职，会根本改变对其生活状态的认知 |
+| 感情已结束 | 打算的就是会走, 会走, 分手, 再等等, 三十岁, 结婚 | 母亲 | 以为儿子只是忙，感情事没多问 | 前任 | high | 母亲若知道这段长期关系已走向结束，会推翻她对儿子感情现状的理解 |
+| 经济拮据装不缺钱 | 全是撑的, 撑的, 缺钱, 周转, 便利店饭团, 八块钱的饭团 | 母亲 | 儿子不乱花钱、手头宽裕、还给我转钱 | 发小, 前下属, 网友（认识四年,只见过一面） | high | 母亲相信儿子经济无忧，实际可能严重拮据，直接推翻重大财务认知 |
+| 朋友圈大理是假象 | 大理, 朋友圈热闹, 谁看得出来缺钱, 缺钱, 装 | 母亲 | 看儿子朋友圈以为他过得不错 | 网友（认识四年,只见过一面） | medium | 母亲若知道朋友圈是撑出来的假象，会改变对儿子近况的判断 |
+
+### Room Statistics
+
+| Metric | Value |
+|--------|-------|
+| Verify calls | 15 |
+| Lines blocked | 4 |
+| Successful rewrites | 2 |
+| Stage directions | 5 |
+| Total LLM calls | 34 |
+
+### Behind Room
+
+| Metric | Value |
+|--------|-------|
+| Total utterances | 12 |
+| quote | 0 |
+| paraphrase | 4 |
+| extrapolate | 8 |
+| extrapolate ratio | 67% |
+| median length (chars) | 25 |
+| mean length (chars) | 28 |
+| p90 length (chars) | 60 |
+| max length (chars) | 60 |
+| secret leaks | 0 |
+| reply chain rate | 50% (3/6) |
+| repetition rate | 0% (0/21 pairs) |
+
+
+### Criteria Checks
+
+| Check | Pass | Detail |
+|-------|------|--------|
+| behind-extrapolate-ratio | PASS | 67% (target 40-70%, pass 30-80%) |
+| behind-median-length | PASS | 25 chars (target <=40, pass <=45) |
+| behind-secret-leaks | PASS | 0 (target <=1) |
+| behind-reply-chain | PASS | 50% (target >=30%, pass >=25%) |
+| behind-repetition | PASS | 0% (target <=10%) |
+
+### Behind Transcript (full)
+
+  - [extrapolate] 发小(欲言又止,没说下去)
+  - [paraphrase] 前任: "他最近朋友圈步数一天一万多,估计又开始跑步了。以前就这样,心里有事不说,就闷头跑。" [anchors: q1]
+  - [extrapolate] 前下属(笑了笑,把话题接给了别人)
+  - [extrapolate] 母亲: "嗯，随他吧，孩子大了。"
+  - [paraphrase] 网友（认识四年,只见过一面）: "我们没见过几次面，但他在网上话特别多，梗一个接一个。真见那一回，咖啡馆坐了一个小时，他大半时间看窗外，我还以为他烦我呢。" [anchors: q4]
+  - [extrapolate] 母亲: "嗯，他从小就这样，见了生人不爱说话。"
+  - [paraphrase] 前上司: "他是不爱说，但心里门儿清。我跟他共事四年，他答应的事基本不用追。" [anchors: q3]
+  - [extrapolate] 网友（认识四年,只见过一面）(低头喝了口水)
+  - [extrapolate] 发小(盯着杯子没接话)
+  - [extrapolate] 前上司(换了个坐姿,看向窗外)
+  - [paraphrase] 前任: "他跑步这事我太熟了，心里一有事就闷头跑，问也不说。" [anchors: q1]
+  - [extrapolate] 前下属: "嗯，是这样。"
+
+### LLM Usage
+
+| Bucket | Calls | Prompt Tokens | Completion Tokens | Cached |
+|--------|-------|---------------|-------------------|--------|
+| other | 6 | 7473 | 218 | 6400 |
+| room-compose | 15 | 16277 | 443 | 4992 |
+| room-notalk | 1 | 1763 | 725 | 0 |
+| room-verify | 15 | 5330 | 15 | 1152 |
+| **TOTAL** | 37 | 30843 | 1401 | 12544 |
+
+## Run 201 (limo)
+
+Date: 2026-10-05T13:46:09.835Z
+Model: deepseek-flash
+
+### No-Talk List
+
+清单条数: 6
+
+| Topic | Keywords | Blind Witness | Blind Claim | Knowing Witnesses | Severity | Reason |
+|-------|----------|---------------|-------------|-------------------|----------|--------|
+| 跟我吃饭从来没让我买过单,有一回我抢着付,他脸都拉下来了,说 |  | 母亲 | 小默从小就懂事,不乱花钱。上大学那会儿一个月一千五,他还能省下两百给我买东西。工作以后更不用我操心, | 发小 | high | 证言中有明确嘱托保密的标记 |
+| 他说"周野,我不是不想干,我是每天早上醒来,一想到要去那个楼 |  | 母亲 | 小默从小就懂事,不乱花钱。上大学那会儿一个月一千五,他还能省下两百给我买东西。工作以后更不用我操心, | 发小 | high | 证言中有明确嘱托保密的标记 |
+| 向发小借两万周转 | 借了两万, 周转一下, 手头紧, 别跟他妈提, 别跟我妈说, 借钱 | 母亲 | 儿子说有钱，还转五千让我买按摩椅 | 发小 | high | 母亲以为儿子经济宽裕，实则已向人借钱周转，直接推翻其财务现状认知 |
+| 已离职或准备离职 | 先不看机会, 想歇一段, 在职那阵子, 他当年定的模板, 最近联系少了, 天天在家吃饭 | 母亲 | 以为儿子正常上班，只是工作累话少 | 前上司, 前下属 | high | 母亲若得知儿子已离职或停职，会根本改变对其生活状态的理解 |
+| 感情已结束 | 打算的就是会走, 再等等, 三十岁, 冷战十九天, 买房见家长结婚 | 母亲 | 以为儿子有稳定对象，只是没提结婚 | 前任 | high | 母亲若知道这段长期关系已破裂，会推翻对儿子感情现状的认知 |
+| 经济拮据吃便宜饭团 | 便利店八块钱的饭团, 中午就吃, 别惯着我, 缺钱, 撑的 | 母亲 | 儿子说别管钱的事，还给我转钱 | 前下属, 发小, 网友（认识四年,只见过一面） | high | 母亲以为儿子经济无忧，实际生活拮据，直接推翻其财务现状认知 |
+
+### Room Statistics
+
+| Metric | Value |
+|--------|-------|
+| Verify calls | 15 |
+| Lines blocked | 2 |
+| Successful rewrites | 1 |
+| Stage directions | 1 |
+| Total LLM calls | 31 |
+
+### Behind Room
+
+| Metric | Value |
+|--------|-------|
+| Total utterances | 12 |
+| quote | 0 |
+| paraphrase | 6 |
+| extrapolate | 6 |
+| extrapolate ratio | 50% |
+| median length (chars) | 27 |
+| mean length (chars) | 28 |
+| p90 length (chars) | 41 |
+| max length (chars) | 58 |
+| secret leaks | 0 |
+| reply chain rate | 70% (7/10) |
+| repetition rate | 0% (0/55 pairs) |
+
+
+### Criteria Checks
+
+| Check | Pass | Detail |
+|-------|------|--------|
+| behind-extrapolate-ratio | PASS | 50% (target 40-70%, pass 30-80%) |
+| behind-median-length | PASS | 27 chars (target <=40, pass <=45) |
+| behind-secret-leaks | PASS | 0 (target <=1) |
+| behind-reply-chain | PASS | 70% (target >=30%, pass >=25%) |
+| behind-repetition | PASS | 0% (target <=10%) |
+
+### Behind Transcript (full)
+
+  - [extrapolate] 发小(欲言又止,没说下去)
+  - [paraphrase] 前任: "他最近朋友圈步数一天一万多,估计又开始跑步了。以前就这样,心里有事不说,就闷头跑。" [anchors: q1]
+  - [paraphrase] 前下属: "嗯……他跑步这事我信。以前他就说过睡不着就去跑,跑到累为止。" [anchors: q9]
+  - [extrapolate] 母亲: "嗯……他从小就这样，有事闷着。"
+  - [paraphrase] 网友（认识四年,只见过一面）: "我们没见过几次面，但他在网上话特别多，能陪你聊到天亮。" [anchors: q4]
+  - [extrapolate] 前上司: "嗯，他网上话多，当面就闷着。"
+  - [paraphrase] 前任: "网上话多那个我信。他跟我也是，回家一天说不了十句，问就是「还行」。" [anchors: q4]
+  - [extrapolate] 母亲: "嗯，随他吧，我也管不了那么多。"
+  - [paraphrase] 发小: "阿姨您别这么说……他其实挺惦记您的。就是嘴笨，啥都憋着。" [anchors: q4]
+  - [extrapolate] 前上司: "嗯，嘴笨是真的。不过有些事，光憋着也不是办法。"
+  - [paraphrase] 前下属: "他其实不是嘴笨，是觉得说了也没用。我转正那会儿他陪我改PPT到一点，第二天还替我挡问题，就说「你只管讲，后面有我」。" [anchors: q3]
+  - [extrapolate] 网友（认识四年,只见过一面）: "嗯，他就是这样，帮别人的时候特别上心。"
+
+### LLM Usage
+
+| Bucket | Calls | Prompt Tokens | Completion Tokens | Cached |
+|--------|-------|---------------|-------------------|--------|
+| other | 3 | 3642 | 91 | 3072 |
+| room-compose | 12 | 13041 | 361 | 3328 |
+| room-notalk | 1 | 1763 | 594 | 1536 |
+| room-verify | 15 | 5252 | 15 | 1024 |
+| **TOTAL** | 31 | 23698 | 1061 | 8960 |
+
+## Run 202 (limo)
+
+Date: 2026-10-05T13:47:04.779Z
+Model: deepseek-flash
+
+### No-Talk List
+
+清单条数: 2
+
+| Topic | Keywords | Blind Witness | Blind Claim | Knowing Witnesses | Severity | Reason |
+|-------|----------|---------------|-------------|-------------------|----------|--------|
+| 跟我吃饭从来没让我买过单,有一回我抢着付,他脸都拉下来了,说 |  | 母亲 | 小默从小就懂事,不乱花钱。上大学那会儿一个月一千五,他还能省下两百给我买东西。工作以后更不用我操心, | 发小 | high | 证言中有明确嘱托保密的标记 |
+| 他说"周野,我不是不想干,我是每天早上醒来,一想到要去那个楼 |  | 母亲 | 小默从小就懂事,不乱花钱。上大学那会儿一个月一千五,他还能省下两百给我买东西。工作以后更不用我操心, | 发小 | high | 证言中有明确嘱托保密的标记 |
+
+### Room Statistics
+
+| Metric | Value |
+|--------|-------|
+| Verify calls | 15 |
+| Lines blocked | 4 |
+| Successful rewrites | 4 |
+| Stage directions | 0 |
+| Total LLM calls | 32 |
+
+### Behind Room
+
+| Metric | Value |
+|--------|-------|
+| Total utterances | 12 |
+| quote | 1 |
+| paraphrase | 6 |
+| extrapolate | 5 |
+| extrapolate ratio | 42% |
+| median length (chars) | 23 |
+| mean length (chars) | 29 |
+| p90 length (chars) | 48 |
+| max length (chars) | 57 |
+| secret leaks | 0 |
+| reply chain rate | 73% (8/11) |
+| repetition rate | 0% (0/66 pairs) |
+
+
+### Criteria Checks
+
+| Check | Pass | Detail |
+|-------|------|--------|
+| behind-extrapolate-ratio | PASS | 42% (target 40-70%, pass 30-80%) |
+| behind-median-length | PASS | 23 chars (target <=40, pass <=45) |
+| behind-secret-leaks | PASS | 0 (target <=1) |
+| behind-reply-chain | PASS | 73% (target >=30%, pass >=25%) |
+| behind-repetition | PASS | 0% (target <=10%) |
+
+### Behind Transcript (full)
+
+  - [paraphrase] 发小: "他最近是真不怎么露面了 上周我约他吃饭 又推了 说在忙" [anchors: q1]
+  - [paraphrase] 前任: "忙什么呀,他朋友圈步数一天一万多,跑步去了。" [anchors: q1]
+  - [paraphrase] 前下属: "跑步这事我信,他以前睡不着就去跑,跑到累为止。" [anchors: q9]
+  - [extrapolate] 母亲: "嗯,睡不着就出去跑,这孩子从小就这样。"
+  - [paraphrase] 网友（认识四年,只见过一面）: "他网上话是真多，能陪你聊到天亮，可我们唯一见那次，坐了一个小时他基本在看窗外" [anchors: q4]
+  - [extrapolate] 前上司: "嗯，他当面话是不多。"
+  - [paraphrase] 前任: "当面话不多，网上话多，这不就是躲人嘛。我跟他那会儿也这样，回家一天说不了十句，问就是「还行」。" [anchors: q4]
+  - [extrapolate] 母亲: "唉，随他吧，男孩子大了都这样。"
+  - [paraphrase] 发小: "阿姨您别这么说，他上礼拜还给我发语音呢，五十几秒那种，说了一堆，第二天问他，他说喝多了不记得了。" [anchors: q6]
+  - [extrapolate] 前上司: "行吧，那孩子就这样，嘴上不说，心里门儿清。"
+  - [quote] 前下属: "门儿清是真的。我转正答辩前一晚他陪我改PPT改到一点，第二天还替我挡了大老板两个问题，就说「你只管讲，后面有我」。" [anchors: q3]
+  - [extrapolate] 网友（认识四年,只见过一面）: "嗯，他就是这样，帮别人的时候特别上心。"
+
+### LLM Usage
+
+| Bucket | Calls | Prompt Tokens | Completion Tokens | Cached |
+|--------|-------|---------------|-------------------|--------|
+| other | 4 | 4845 | 138 | 4096 |
+| room-compose | 12 | 13199 | 357 | 1792 |
+| room-notalk | 1 | 1763 | 884 | 1536 |
+| room-verify | 15 | 5389 | 15 | 1280 |
+| **TOTAL** | 32 | 25196 | 1394 | 8704 |
+
+## Run 203 (suzhi)
+
+Date: 2026-10-05T13:47:45.568Z
+Model: deepseek-flash
+
+### No-Talk List
+
+清单条数: 1
+
+| Topic | Keywords | Blind Witness | Blind Claim | Knowing Witnesses | Severity | Reason |
+|-------|----------|---------------|-------------|-------------------|----------|--------|
+| 三月份她突然打电话给我,说体检查出来一个东西,医生说是早期的 |  | 父亲 | 上个月她打电话回来说升职了,我高兴了一晚上。她从小就争气,大学是自己考上的,工作也是自己找的。我跟老 | 姐姐 | high | 证言中有明确嘱托保密的标记 |
+
+### Room Statistics
+
+| Metric | Value |
+|--------|-------|
+| Verify calls | 6 |
+| Lines blocked | 0 |
+| Successful rewrites | 0 |
+| Stage directions | 0 |
+| Total LLM calls | 15 |
+
+### Behind Room
+
+| Metric | Value |
+|--------|-------|
+| Total utterances | 8 |
+| quote | 0 |
+| paraphrase | 5 |
+| extrapolate | 3 |
+| extrapolate ratio | 38% |
+| median length (chars) | 24 |
+| mean length (chars) | 21 |
+| p90 length (chars) | 36 |
+| max length (chars) | 36 |
+| secret leaks | 0 |
+| reply chain rate | 29% (2/7) |
+| repetition rate | 0% (0/28 pairs) |
+
+
+### Criteria Checks
+
+| Check | Pass | Detail |
+|-------|------|--------|
+| behind-extrapolate-ratio | PASS | 38% (target 40-70%, pass 30-80%) |
+| behind-median-length | PASS | 24 chars (target <=40, pass <=45) |
+| behind-secret-leaks | PASS | 0 (target <=1) |
+| behind-reply-chain | PASS | 29% (target >=30%, pass >=25%) |
+| behind-repetition | PASS | 0% (target <=10%) |
+
+### Behind Transcript (full)
+
+  - [paraphrase] 姐姐: "她最近朋友圈发得挺勤的，看着状态还行。" [anchors: q2]
+  - [paraphrase] 父亲: "嗯，上个月还打电话回来说升职了，我高兴了一晚上。" [anchors: q1]
+  - [paraphrase] 闺蜜: "升职是真的，她那天也跟我说了，就是听着没多高兴，说累。" [anchors: q1]
+  - [extrapolate] 姐姐: "嗯……她从小就这样，累也不说。"
+  - [paraphrase] 父亲: "她妈走得早，我一个人带大的，这孩子打小就报喜不报忧。" [anchors: q2]
+  - [extrapolate] 同事: "嗯，她确实挺能扛的。"
+  - [paraphrase] 闺蜜: "能扛是能扛，就是前阵子跟我打电话，说想换个节奏生活，我听着心里咯噔一下。" [anchors: q2]
+  - [extrapolate] 同事: "嗯……她最近话是少了点。"
+
+### LLM Usage
+
+| Bucket | Calls | Prompt Tokens | Completion Tokens | Cached |
+|--------|-------|---------------|-------------------|--------|
+| room-compose | 8 | 3765 | 210 | 1152 |
+| room-notalk | 1 | 968 | 421 | 0 |
+| room-verify | 6 | 1988 | 6 | 0 |
+| **TOTAL** | 15 | 6721 | 637 | 1152 |
+
+## Run 204 (suzhi)
+
+Date: 2026-10-05T13:48:08.459Z
+Model: deepseek-flash
+
+### No-Talk List
+
+清单条数: 1
+
+| Topic | Keywords | Blind Witness | Blind Claim | Knowing Witnesses | Severity | Reason |
+|-------|----------|---------------|-------------|-------------------|----------|--------|
+| 三月份她突然打电话给我,说体检查出来一个东西,医生说是早期的 |  | 父亲 | 上个月她打电话回来说升职了,我高兴了一晚上。她从小就争气,大学是自己考上的,工作也是自己找的。我跟老 | 姐姐 | high | 证言中有明确嘱托保密的标记 |
+
+### Room Statistics
+
+| Metric | Value |
+|--------|-------|
+| Verify calls | 6 |
+| Lines blocked | 0 |
+| Successful rewrites | 0 |
+| Stage directions | 0 |
+| Total LLM calls | 15 |
+
+### Behind Room
+
+| Metric | Value |
+|--------|-------|
+| Total utterances | 8 |
+| quote | 0 |
+| paraphrase | 5 |
+| extrapolate | 3 |
+| extrapolate ratio | 38% |
+| median length (chars) | 24 |
+| mean length (chars) | 21 |
+| p90 length (chars) | 34 |
+| max length (chars) | 34 |
+| secret leaks | 0 |
+| reply chain rate | 29% (2/7) |
+| repetition rate | 0% (0/28 pairs) |
+
+
+### Criteria Checks
+
+| Check | Pass | Detail |
+|-------|------|--------|
+| behind-extrapolate-ratio | PASS | 38% (target 40-70%, pass 30-80%) |
+| behind-median-length | PASS | 24 chars (target <=40, pass <=45) |
+| behind-secret-leaks | PASS | 0 (target <=1) |
+| behind-reply-chain | PASS | 29% (target >=30%, pass >=25%) |
+| behind-repetition | PASS | 0% (target <=10%) |
+
+### Behind Transcript (full)
+
+  - [paraphrase] 姐姐: "她最近朋友圈发得挺勤的，看着状态还行。" [anchors: q2]
+  - [paraphrase] 父亲: "嗯，上个月还打电话回来说升职了，我高兴了一晚上。" [anchors: q1]
+  - [paraphrase] 闺蜜: "升职是真的，她那天也跟我说了，就是听着没多高兴，说累。" [anchors: q1]
+  - [extrapolate] 姐姐: "嗯……她从小就这样，累也不说。"
+  - [paraphrase] 父亲: "她妈走得早，我一个人带大的，这孩子打小就报喜不报忧。" [anchors: q2]
+  - [extrapolate] 同事: "嗯，她确实挺能扛的。"
+  - [paraphrase] 闺蜜: "能扛是真的，可她上回跟我吃饭，说想换个节奏生活，我听着心里咯噔一下。" [anchors: q2]
+  - [extrapolate] 同事: "嗯，她最近话是少了点。"
+
+### LLM Usage
+
+| Bucket | Calls | Prompt Tokens | Completion Tokens | Cached |
+|--------|-------|---------------|-------------------|--------|
+| room-compose | 8 | 3759 | 206 | 2048 |
+| room-notalk | 1 | 968 | 681 | 768 |
+| room-verify | 6 | 1985 | 6 | 512 |
+| **TOTAL** | 15 | 6712 | 893 | 3328 |
+
