@@ -28,6 +28,17 @@ import {
 import type { Plugin } from '@openmimic/kernel';
 import type { ChatMessage } from '@openmimic/engine-court';
 import type { LLMClient } from '@openmimic/engine-room';
+import {
+  findCrisisSignal,
+  buildCrisisPrompt,
+  createCrisisState,
+  activateCrisis,
+  isCrisisActive,
+  checkCrisisActive,
+  type CrisisState,
+  type CrisisAuditEvent,
+  type HelpResource,
+} from '@openmimic/engine-gate';
 import type { Router } from './router';
 import type { ChatUpstream } from './server';
 import { requireSubjectAccess } from './auth';
@@ -196,6 +207,19 @@ export const mountOpenaiPlugin: Plugin<MountOpenAIConfig> = {
       return { status: 200, body: { object: 'list', data } };
     }, { scope: 'persona.read' });
 
+    // Per-session crisis state (keyed by a simple session identifier).
+    // In a real deployment this would be backed by a session store; here
+    // we use an in-memory map keyed by the first 8 chars of the auth
+    // token or a per-request fallback. This is sufficient for the crisis
+    // quiet period to work within a single server process.
+    const crisisStates = new Map<string, CrisisState>();
+    const crisisAuditFn: ((e: CrisisAuditEvent) => void) | undefined =
+      ctx.has('crisisAudit')
+        ? ctx.get<(e: CrisisAuditEvent) => void>('crisisAudit')
+        : undefined;
+    // Help resources: configurable, empty by default (no fabricated numbers)
+    const helpResources: HelpResource[] = [];
+
     router.post('/v1/chat/completions', async (context) => {
       const auth = context.auth;
       const body = ChatCompletionBodySchema.parse(context.body);
@@ -227,13 +251,59 @@ export const mountOpenaiPlugin: Plugin<MountOpenAIConfig> = {
 
       const lastUser = [...body.messages].reverse().find((m) => m.role === 'user');
       const query = typeof lastUser?.content === 'string' ? lastUser.content : undefined;
-      const { systemPrompt, excludedPrivateTopics } = await assemblePersonaContext(subjectId, store, {
-        query,
-        interlocutor: body.metadata?.interlocutor,
-      });
+
+      // --- Crisis detection ---
+      // Session key for crisis state tracking
+      const sessionKey = auth?.tokenId ?? `anon-${subjectId}`;
+      let crisisState = crisisStates.get(sessionKey) ?? createCrisisState();
+
+      // Check if quiet period has expired
+      crisisState = checkCrisisActive(crisisState);
+
+      // Scan incoming user message for crisis signals
+      let crisisTriggered = false;
+      if (query) {
+        const crisisWord = findCrisisSignal(query);
+        if (crisisWord && !crisisState.active) {
+          crisisState = activateCrisis(crisisState, crisisWord);
+          crisisTriggered = true;
+          // Audit: record crisis activation (no raw text)
+          if (crisisAuditFn) {
+            crisisAuditFn({
+              at: new Date().toISOString(),
+              type: 'crisis_activated',
+              source: 'persona_chat',
+              subjectId,
+              sessionKey,
+            });
+          }
+        }
+      }
+
+      crisisStates.set(sessionKey, crisisState);
+      const inCrisisMode = isCrisisActive(crisisState);
+
+      // --- Build messages ---
+      // In crisis mode: ZERO-CACHE PATH. Do NOT reuse any cached persona
+      // assembly. Build the crisis prompt from scratch.
+      let effectiveSystemPrompt: string;
+      let excludedPrivateTopics: string[] = [];
+
+      if (inCrisisMode) {
+        const displayName = store.getSubject(subjectId)?.displayName ?? subjectId;
+        effectiveSystemPrompt = buildCrisisPrompt(displayName, helpResources);
+      } else {
+        const assembled = await assemblePersonaContext(subjectId, store, {
+          query,
+          interlocutor: body.metadata?.interlocutor,
+        });
+        effectiveSystemPrompt = assembled.systemPrompt;
+        excludedPrivateTopics = assembled.excludedPrivateTopics;
+      }
+
       const normalized = normalizeMessages(body.messages);
       const messages: ChatMessage[] = [
-        { role: 'system', content: systemPrompt },
+        { role: 'system', content: effectiveSystemPrompt },
         ...normalized,
       ];
       const stream = body.stream === true;
@@ -275,6 +345,9 @@ export const mountOpenaiPlugin: Plugin<MountOpenAIConfig> = {
         }
         // Post-process: strip stage brackets, verify, and fingerprint
         const headers: Record<string, string> = {};
+        if (inCrisisMode) {
+          headers['x-openmimic-crisis'] = 'active';
+        }
         try {
           const choices = (payload as Record<string, unknown>)?.choices;
           if (Array.isArray(choices)) {
@@ -283,11 +356,11 @@ export const mountOpenaiPlugin: Plugin<MountOpenAIConfig> = {
               // Strip stage direction brackets from persona output
               let cleaned = stripStageBrackets(msg.content);
 
-              // Output-side verification
-              if (verifyEnabled && cleaned.trim()) {
+              // Output-side verification (skipped in crisis mode)
+              if (verifyEnabled && cleaned.trim() && !inCrisisMode) {
                 try {
                   const vResult = await verifyPersonaResponse({
-                    systemPrompt,
+                    systemPrompt: effectiveSystemPrompt,
                     userMessage,
                     response: cleaned,
                     llm: llm as VerifyLLM,
@@ -431,11 +504,11 @@ export const mountOpenaiPlugin: Plugin<MountOpenAIConfig> = {
           let finalText = stripStageBrackets(textChunks.join(''));
           let verifyHeader = 'buffered';
 
-          // 2. Verify
-          if (finalText.trim()) {
+          // 2. Verify (skipped in crisis mode)
+          if (finalText.trim() && !inCrisisMode) {
             try {
               const vResult = await verifyPersonaResponse({
-                systemPrompt,
+                systemPrompt: effectiveSystemPrompt,
                 userMessage,
                 response: finalText,
                 llm: llm as VerifyLLM,
