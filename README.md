@@ -177,6 +177,12 @@ resp = client.chat.completions.create(
 - P3c-c1:集体沉默信号(silence-signal),avoidedQids >= half 且 >= 3 → SilenceSignal,人格纪律一行
 - GateEngine:论断否决(contest/uncontest) + 诊断词/危机词权限墙 + re-raise + reraised 结构化字段
 - 插件持久化:store.registerPluginTable(沙箱表,表名强制前缀,无法触及证言表,可选 append-only)
+- P4:安全与可靠性批次(从此前平台项目迁移 + 新增)
+  - 不可信内容隔离:所有用户文本入 LLM 前包裹数据块 + 注入检测 + 守卫指令
+  - AI 产物回流检测:3-char shingle MinHash(128 维)指纹 + 提交时筛查 + 法庭过滤
+  - 模型调用可靠性:9 类错误分类 + retry-after 解析 + 修复 attemptJson 盲重试 + 合并 extractJson
+  - PII 脱敏:手机/邮箱/身份证/银行卡/凭据泄露正则 + 敏感字段掩码 + 稳定序列化
+  - 证据基础分类修复:"大概/差不多"+数字不触发 inferred、一人称事件叙事归 witnessed、unknown 上限 0.6→0.85
 
 ### 计划
 

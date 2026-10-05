@@ -1,6 +1,6 @@
 # README 声明逐条审计
 
-> 生成时间:2026-10-06 · 基线:main(484 测试)
+> 生成时间:2026-10-06 · 基线:main(696 测试)
 
 状态说明:
 - **已实现**:有代码路径,有测试覆盖
@@ -191,10 +191,32 @@ divergences 段落已占满 6000 字符预算,episodes 是第一个被砍的段�
 
 ---
 
+---
+
+## P4: 安全与可靠性批次
+
+| 声明 | 状态 | 代码依据 | 备注 |
+|---|---|---|---|
+| 不可信内容隔离(所有用户文本入 LLM 前包裹数据块) | 已实现 | `shared/src/prompt/untrusted.ts` · `shared/src/prompt/render.ts` · 五个引擎各自的 prompt 构造函数 | 守卫测试(`shared/test/prompt-guard.test.ts`)扫描所有引擎源码确认覆盖 |
+| 注入检测(正则匹配中英文覆写/角色伪装/定界符伪造) | 已实现 | `shared/src/prompt/untrusted.ts`(detectInjection) · `engines/witness/src/testimony.ts` | 提交时标记 suspectedInjection,不拒收(flag, don't reject) |
+| AI 产物回流检测(MinHash 指纹 + 筛查) | 已实现 | `kernel/src/reflux.ts` · `kernel/src/store.ts`(ai_fingerprints 表) · room/court 注册指纹 · witness 筛查 | 3-char shingle MinHash 128 维,threshold 0.5;high(逐句匹配)/ low(结构相似) |
+| 法庭过滤 medium/high 回流证言 | 已实现 | `engines/court/src/court.ts`(allTestimonies 过滤) | court filing 阶段跳过 refluxSuspicion=medium/high |
+| 模型调用错误分类(9 类) | 已实现 | `shared/src/provider-error.ts` | RATE_LIMIT / AUTH_FAILED / QUOTA_EXHAUSTED / TIMEOUT / TEMPORARY_UPSTREAM_ERROR / PERMANENT_BAD_REQUEST / BAD_RESPONSE / CONTENT_FILTERED / UNKNOWN |
+| 修复 attemptJson 盲重试(402/quota 不应重试) | 已实现 | `engines/court/src/court.ts`(attemptJson) · `engines/room/src/room.ts`(attemptResponse) | 非 retryable 错误立即返回;节省预算 |
+| 合并 extractJson(3 个副本→1 个共享实现) | 已实现 | `shared/src/llm-json.ts` · court 的 extractJson 改为 re-export | tryExtractJson 不抛异常版也可用 |
+| PII 脱敏(手机/邮箱/身份证/银行卡/凭据) | 已实现 | `shared/src/sanitize.ts` | 可配置开关;按长度优先匹配(ID 卡>银行卡>手机) |
+| 敏感字段掩码 | 已实现 | `shared/src/sanitize.ts`(maskSensitiveFields) | 深度克隆 + password/token/key 类字段替换为 ****** |
+| 稳定序列化 + 短哈希 | 已实现 | `shared/src/sanitize.ts`(stableStringify/shortHash) | 键排序 + SHA-256 前 8 hex |
+| 证据基础分类修复("大概"+数字不触发 inferred) | 已实现 | `engines/witness/src/basis.ts` | 负向前瞻检查 4 字符内有无数字 |
+| 一人称事件叙事归 witnessed | 已实现 | `engines/witness/src/basis.ts`(FIRST_PERSON_EVENT_PATTERN) | 9 种常见叙事形式 |
+| unknown 上限 0.6→0.85 | 已实现 | `engines/witness/src/basis.ts`(basisConvictionCeiling) | 不再惩罚未使用明确目击词语的事实陈述 |
+
+---
+
 ## 汇总
 
 | 状态 | 条数 |
 |---|---|
-| 已实现 | 44 |
+| 已实现 | 57 |
 | 部分 | 4 |
 | 计划 | 8 |

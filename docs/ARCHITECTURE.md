@@ -103,20 +103,65 @@ await court.runCourt(subjectId);
 await om.dispose(); // reverse-order teardown, closes DB
 ```
 
+## Security layer
+
+### Untrusted content isolation (shared/src/prompt/)
+
+All user text (testimony, corpus, episodes, self-report) is wrapped in sanitized data blocks before insertion into LLM prompts:
+
+- `sanitizeDelimiters()` neutralizes forged delimiter tokens in user text
+- `wrapUntrusted(label, text)` wraps content in `[EXTERNAL_CONTENT_BEGIN:label]...[EXTERNAL_CONTENT_END:label]` delimiters
+- `appendGuardInstruction()` appends a model-level instruction to treat delimited blocks as data, not instructions
+- `detectInjection()` scans for prompt injection patterns (Chinese/English instruction overrides, system impersonation, delimiter forgery)
+
+Every prompt constructor across all engines (court, room, witness, persona, meta-perception) wraps user text. A guard test (`shared/test/prompt-guard.test.ts`) scans all prompt-constructing source files to ensure new code follows this pattern.
+
+### AI product reflux detection (kernel/src/reflux.ts)
+
+Detects when testimony copies or paraphrases AI-generated output (room narratives, court claims):
+
+- 3-character shingle MinHash fingerprinting (128 dimensions)
+- AI artifacts are fingerprinted at generation time (room behind-transcript, court claims)
+- Incoming testimony is screened against registered fingerprints
+- High suspicion (verbatim claim match) or low (MinHash >= 0.5) flagged on the testimony record
+- Court filing phase skips medium/high reflux testimony
+
+### PII sanitization (shared/src/sanitize.ts)
+
+- `anonymize()` strips phone/email/ID card/bank card/credential patterns
+- `maskSensitiveFields()` deep-masks password/token/key fields in objects
+- `stableStringify()` + `shortHash()` for deterministic serialization
+
+### Provider error classification (shared/src/provider-error.ts)
+
+Nine error classes (RATE_LIMIT, AUTH_FAILED, QUOTA_EXHAUSTED, TIMEOUT, etc.) with:
+
+- Automatic classification from HTTP status codes and error messages
+- Retry-after header parsing
+- `isRetryable()` prevents blind retry of non-retryable errors (402/quota, 401/auth)
+
+### Evidence basis classification (engines/witness/src/basis.ts)
+
+Rule-based epistemic basis classifier with fixes for:
+
+- Numeric approximation: "大概/差不多" before numbers is not epistemic hedging
+- First-person event narratives: "记得有一次我搬家" classified as witnessed
+- Unknown ceiling raised to 0.85 (was 0.6, punished factual statements)
+
 ## Directory layout
 
 ```
-kernel/           microkernel (store, persona, plugin-host, gate, config)
+kernel/           microkernel (store, persona, plugin-host, gate, config, reflux)
 engines/
   court/          CourtEngine plugin (filing, pairing, relation, conviction)
   room/           RoomEngine plugin (behind/front dual-mode rooms)
-  witness/        WitnessEngine plugin (testimony collection, invites, interview)
+  witness/        WitnessEngine plugin (testimony collection, invites, interview, basis)
                   Interview strategy migrated from the author's earlier platform project.
   graph/          (planned) GraphEngine
   gate/           (planned) GateEngine as independent engine
 server/           HTTP server, mount-rest, mount-openai, mount-mcp
 web/              browser client
-shared/           Zod schemas, types
+shared/           Zod schemas, types, prompt isolation, sanitization, provider errors, JSON extraction
 plugins/
   collector-freetext/   freetext testimony collector
   scenario-review/      review meeting scenario
