@@ -16,7 +16,7 @@
  */
 
 import type { RoomUtterance, UtteranceTier } from '@openmimic/shared';
-import { hasFrontThirdPerson } from '@openmimic/engine-room';
+import { hasFrontThirdPerson, normalizePronoun } from '@openmimic/engine-room';
 
 /* ------------------------------------------------------------------ */
 /* 1. Tier distribution                                                */
@@ -556,10 +556,14 @@ export function halfTruthCheck(
     const witBehind = behindByWit.get(u.witnessId) ?? [];
     if (witBehind.length === 0) continue;
 
+    // Pronoun-normalize for comparison (front line uses 你, behind uses 他/她)
+    const normText = normalizePronoun(u.text);
+    const normBehind = witBehind.map((bt) => normalizePronoun(bt));
+
     // Check for ≥8 char overlap (heavy echo - forbidden for non-half-truth lines)
-    const has8 = witBehind.some((bt) => hasContiguousOverlap(u.text, bt, 8));
+    const has8 = normBehind.some((bt) => hasContiguousOverlap(normText, bt, 8));
     // Check for ≥4 char overlap + ≤25 chars + interrupted ending (half-truth candidate)
-    const has4 = witBehind.some((bt) => hasContiguousOverlap(u.text, bt, 4));
+    const has4 = normBehind.some((bt) => hasContiguousOverlap(normText, bt, 4));
     const isShort = u.text.length <= 25;
     const isInterrupted = hasInterruptedEnding(u.text);
 

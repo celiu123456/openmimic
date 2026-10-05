@@ -308,10 +308,32 @@ function buildSystem(
 
     if (extra.halfTruthSlot) {
       // This witness is chosen to let slip a half-sentence echoing behind-room talk
+      // Extract short phrases from behind memory for the model to use verbatim
+      const behindPhrases = context.memory
+        .filter((m) => m.text.startsWith('(你背后说过:'))
+        .map((m) => m.text.replace(/^\(你背后说过:/, '').replace(/\)$/, ''))
+        .flatMap((t) => {
+          // Extract 4-6 char substrings as candidate phrases
+          const phrases: string[] = [];
+          for (let len = 6; len >= 4; len--) {
+            for (let i = 0; i <= t.length - len; i++) {
+              const p = t.substring(i, i + len);
+              // Skip phrases that are mostly punctuation
+              if (/^[\p{P}\s]+$/u.test(p)) continue;
+              phrases.push(p);
+            }
+          }
+          return phrases;
+        });
+      // Pick a random subset of candidate phrases
+      const shuffledPhrases = shuffleArray(behindPhrases).slice(0, 5);
+
       lines.push(
-        `你忍不住了——用一个不完整的句子(不超过20字)暗示你背后提过的一件事,但话说到一半就自己收住了。`,
-        '要求:句子必须不完整,以"……""算了""不说了""没什么"之类收尾,像是说漏了嘴赶紧刹车的感觉。',
-        '从你背后说过的内容里选一个分量中等的细节(不要选最重的判断),用第二人称("你")说出来。',
+        `你忍不住了——说一句极短的话(10-15字),话说一半就收住。`,
+        '★关键要求:从下面的候选词里选一个,原封不动地放进你的句子里:',
+        `候选词:${shuffledPhrases.map((p) => `"${p}"`).join('、')}`,
+        '格式:"你"+候选词+几个字+"……"或"算了"。整句不超过20字。',
+        '例:如果候选词是"没告诉我",你可以说"你那次没告诉我……算了。"',
         'qids给空数组。',
       );
     } else if (extra.deflectAfterHalfTruth) {
@@ -408,7 +430,7 @@ function buildUser(
     }
   } else {
     if (extra.halfTruthSlot) {
-      parts.push(`${context.subjectName}就坐在面前。你忍不住了,用一句不完整的话暗示一下你背后提过的事,但话到一半就收住。用"你"称呼${context.subjectName}。`);
+      parts.push(`${context.subjectName}就坐在面前。你忍不住了,用极短一句(不超过15字)说一半就收住。用"你"开头,以"……"或"算了"结尾。`);
     } else if (extra.deflectAfterHalfTruth) {
       parts.push(`${context.subjectName}就坐在面前。赶紧岔开话题,说点别的。`);
     } else if (actionHint === 'react') {

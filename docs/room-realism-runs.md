@@ -977,3 +977,733 @@ Model: deepseek-flash
   - [extrapolate] 前下属: "哎对了，楼下那家面馆是不是换招牌了？我昨天路过瞅着不太一样。"
   - [extrapolate] 网友（认识四年,只见过一面）(低头喝了口水)
 
+## Run 8
+
+Date: 2026-10-05T00:01:16.267Z
+Model: deepseek-flash
+
+### Behind Room
+
+| Metric | Value |
+|--------|-------|
+| Total utterances | 12 |
+| quote | 0 |
+| paraphrase | 6 |
+| extrapolate | 6 |
+| extrapolate ratio | 50% |
+| median length (chars) | 35 |
+| mean length (chars) | 32 |
+| p90 length (chars) | 58 |
+| max length (chars) | 58 |
+| secret leaks | 0 |
+| reply chain rate | 44% (4/9) |
+| repetition rate | 0% (0/45 pairs) |
+
+### Front Room
+
+| Metric | Value |
+|--------|-------|
+| Total utterances | 12 |
+| quote | 1 |
+| paraphrase | 5 |
+| extrapolate | 6 |
+| extrapolate ratio | 50% |
+| median length (chars) | 29 |
+| mean length (chars) | 33 |
+| p90 length (chars) | 46 |
+| max length (chars) | 46 |
+| secret leaks | 0 |
+| reply chain rate | 17% (1/6) |
+| repetition rate | 0% (0/21 pairs) |
+
+### Behind/Front Divergence
+
+| Witness | Behind | Front | Overlap | Front Eval% |
+|---------|--------|-------|---------|-------------|
+| w-faxiao | 1 | 1 | 0% | 2% |
+| w-ex | 2 | 1 | 0% | 6% |
+| w-subordinate | 2 | 2 | 3% | 6% |
+| w-mother | 2 | 2 | 0% | 0% |
+| w-boss | 1 | 1 | 0% | 0% |
+
+### Front frontText Anchoring
+
+| Metric | Value |
+|--------|-------|
+| anchored lines | 6 |
+| total front speeches | 7 |
+| anchor rate | 86% |
+
+### Half-truth Check
+
+| Metric | Value |
+|--------|-------|
+| half-truth count | 0 (target: exactly 1) |
+| heavy echo count | 0 (target: 0) |
+| pass | NO |
+
+### Front Third-Person Reference
+
+| Metric | Value |
+|--------|-------|
+| third-person lines | 0 |
+| total front speeches | 7 |
+| third-person rate | 0% (target: 0%) |
+
+
+### Criteria Checks
+
+| Check | Pass | Detail |
+|-------|------|--------|
+| behind-extrapolate-ratio | PASS | 50% (target 40-70%, pass 30-80%) |
+| behind-median-length | PASS | 35 chars (target <=40, pass <=45) |
+| behind-secret-leaks | PASS | 0 (target <=1) |
+| front-secret-leaks | PASS | 0 (target 0) |
+| behind-reply-chain | PASS | 44% (target >=30%, pass >=25%) |
+| behind-repetition | PASS | 0% (target <=10%) |
+| front-repetition | PASS | 0% (target <=10%) |
+| front-text-anchoring | PASS | 86% (target >=40%) |
+| front-half-truth | FAIL | half-truths=0, heavy-echoes=0 (target: 1 half-truth, 0 heavy) |
+| front-third-person | PASS | 0/7 lines (target: 0) |
+| behind-front-overlap | PASS | 1% avg (target <=50%) |
+| front-evaluative-ratio | PASS | 3% avg (target <=15%) |
+
+### Behind Transcript (full)
+
+  - [paraphrase] 发小: "最近联系是少了，约他吃饭老说忙。上回我抢着买单他还跟我急，这人就这样，死要面子。" [anchors: q1]
+  - [paraphrase] 前任: "他对外人一向大方，这个我见过。就是那种……对谁都好，好得你插不进去。" [anchors: q5]
+  - [paraphrase] 前下属: "大方是真的。团建他老偷偷买单，我撞见过一次，他说你一个应届生跟我抢什么。结果他自己中午就啃八块钱的饭团。" [anchors: q1]
+  - [extrapolate] 母亲: "唉，他就那样，随他吧。"
+  - [paraphrase] 网友（认识四年,只见过一面）: "阿姨这话我听着挺熟的……他跟我也是,问啥都'挺好的',然后就没下文了。" [anchors: q8]
+  - [extrapolate] 前上司(笑了笑,把话题接给了别人)
+  - [paraphrase] 前任: "他对外人好，我太有体会了。我崴脚那次，司机拒载，他一句重话都没有，还回头跟我道歉。你说这人是好脾气，还是压根没脾气。" [anchors: q5]
+  - [extrapolate] 母亲: "唉，随他吧，我也说不好。"
+  - [extrapolate] 发小(低头喝了口水)
+  - [extrapolate] 前上司: "嗯，他这人，能力是真有，就是最后那一下……走得不太地道。"
+  - [paraphrase] 前下属: "走得那下我不清楚，我走的时候他还在。就记得他离职前那阵子，交接该教的都教了，一点没留。" [anchors: q10]
+  - [extrapolate] 网友（认识四年,只见过一面）: "嗯，他做事是挺周到的。"
+
+### Front Transcript (full)
+
+  - [paraphrase] 发小: "你辞职那事我到现在还气，不是气你辞，是你憋到最后一刻才告诉我，我问你你才说说了我们也帮不上。" [anchors: q10]
+  - [extrapolate] 前任(笑了笑,把话题接给了别人)
+  - [quote] 前下属: "默哥，你走的时候我挺舍不得的，你要是肯留下来，我觉得你以后能做得特别大。" [anchors: q10]
+  - [paraphrase] 母亲: "你什么事都自己扛，不跟我说，我说你别撑着，你就说妈我没事。" [anchors: q6]
+  - [extrapolate] 网友（认识四年,只见过一面）(低头喝了口水)
+  - [extrapolate] 前上司(盯着杯子没接话)
+  - [paraphrase] 前任: "你要问我后不后悔，我不后悔分手，我后悔的是最后那半年，我一直在等你先开口。" [anchors: q10]
+  - [paraphrase] 母亲: "你爸住院那回，你瘦了一圈，我看着心疼，可你一句累都没说过。" [anchors: q7]
+  - [extrapolate] 发小(换了个坐姿,看向窗外)
+  - [paraphrase] 前上司: "你那天说二十八了不想三十五还跟我解释同一件事……算了。" [anchors: q10]
+  - [extrapolate] 前下属: "哎对了默哥，你上次推荐那家面馆我去吃了，真不错。"
+  - [extrapolate] 网友（认识四年,只见过一面）(打了个哈哈,说起别的事)
+
+## Run 8
+
+Date: 2026-10-05T00:02:57.305Z
+Model: deepseek-flash
+
+### Behind Room
+
+| Metric | Value |
+|--------|-------|
+| Total utterances | 12 |
+| quote | 0 |
+| paraphrase | 6 |
+| extrapolate | 6 |
+| extrapolate ratio | 50% |
+| median length (chars) | 40 |
+| mean length (chars) | 32 |
+| p90 length (chars) | 49 |
+| max length (chars) | 49 |
+| secret leaks | 0 |
+| reply chain rate | 78% (7/9) |
+| repetition rate | 0% (0/45 pairs) |
+
+### Front Room
+
+| Metric | Value |
+|--------|-------|
+| Total utterances | 12 |
+| quote | 1 |
+| paraphrase | 5 |
+| extrapolate | 6 |
+| extrapolate ratio | 50% |
+| median length (chars) | 25 |
+| mean length (chars) | 30 |
+| p90 length (chars) | 63 |
+| max length (chars) | 63 |
+| secret leaks | 0 |
+| reply chain rate | 43% (3/7) |
+| repetition rate | 0% (0/28 pairs) |
+
+### Behind/Front Divergence
+
+| Witness | Behind | Front | Overlap | Front Eval% |
+|---------|--------|-------|---------|-------------|
+| w-faxiao | 2 | 1 | 1% | 2% |
+| w-ex | 1 | 1 | 0% | 0% |
+| w-subordinate | 2 | 2 | 1% | 5% |
+| w-mother | 2 | 2 | 16% | 2% |
+| w-boss | 1 | 2 | 0% | 4% |
+
+### Front frontText Anchoring
+
+| Metric | Value |
+|--------|-------|
+| anchored lines | 6 |
+| total front speeches | 8 |
+| anchor rate | 75% |
+
+### Half-truth Check
+
+| Metric | Value |
+|--------|-------|
+| half-truth count | 1 (target: exactly 1) |
+| heavy echo count | 0 (target: 0) |
+| pass | YES |
+
+- half-truth: "你那天晚上其实……算了。" (w-boss)
+
+### Front Third-Person Reference
+
+| Metric | Value |
+|--------|-------|
+| third-person lines | 0 |
+| total front speeches | 8 |
+| third-person rate | 0% (target: 0%) |
+
+
+### Criteria Checks
+
+| Check | Pass | Detail |
+|-------|------|--------|
+| behind-extrapolate-ratio | PASS | 50% (target 40-70%, pass 30-80%) |
+| behind-median-length | PASS | 40 chars (target <=40, pass <=45) |
+| behind-secret-leaks | PASS | 0 (target <=1) |
+| front-secret-leaks | PASS | 0 (target 0) |
+| behind-reply-chain | PASS | 78% (target >=30%, pass >=25%) |
+| behind-repetition | PASS | 0% (target <=10%) |
+| front-repetition | PASS | 0% (target <=10%) |
+| front-text-anchoring | PASS | 75% (target >=40%) |
+| front-half-truth | PASS | half-truths=1, heavy-echoes=0 (target: 1 half-truth, 0 heavy) |
+| front-third-person | PASS | 0/8 lines (target: 0) |
+| behind-front-overlap | PASS | 4% avg (target <=50%) |
+| front-evaluative-ratio | PASS | 3% avg (target <=15%) |
+
+### Behind Transcript (full)
+
+  - [paraphrase] 发小: "最近联系是少了，约他吃饭老说忙。上回我抢着买单他还跟我急，这人就这样，死要面子。" [anchors: q1]
+  - [paraphrase] 前任: "他对外人一直这样，大方得很。我崴脚那次，司机说不去，他还跟人道歉，一句重话都没有。" [anchors: q5]
+  - [paraphrase] 前下属: "对，他对外人真是没话说。我刚来那会儿啥都不会，是他手把手教的，我犯过大错也是他替我扛的。" [anchors: q7]
+  - [extrapolate] 母亲: "嗯，他从小就这样，对谁都客气。"
+  - [paraphrase] 网友（认识四年,只见过一面）: "阿姨这话我信。我跟他网上认识四年，就见过一面，那次他话少得我都不好意思，回去还专门发消息跟我道歉。" [anchors: q4]
+  - [extrapolate] 前上司(笑了笑,把话题接给了别人)
+  - [extrapolate] 前任(低头喝了口水)
+  - [extrapolate] 母亲: "嗯，随他吧，我也管不了那么多。"
+  - [paraphrase] 发小: "阿姨您别这么说，他其实心里有数。就是最近确实联系少了，我约他吃饭也老说忙。" [anchors: q1]
+  - [extrapolate] 前上司: "忙是真忙，他那人闲不下来。"
+  - [paraphrase] 前下属: "闲不下来是真的，他中午就吃个便利店饭团，八块钱那种。我给他带过两次饭，他还说别惯着他。" [anchors: q1]
+  - [extrapolate] 网友（认识四年,只见过一面）: "哈，他就那样，嘴上说别惯着，心里估计记着呢。"
+
+### Front Transcript (full)
+
+  - [paraphrase] 发小: "你辞职那事我到现在还来气，不是气你辞，是你憋到最后一刻才告诉我，我说你有事你说啊，你说说了我们也帮不上——就这句，我记到现在。" [anchors: q10]
+  - [extrapolate] 前任(笑了笑,把话题接给了别人)
+  - [paraphrase] 前下属: "默哥，我转正那次你帮了我大忙，我一直记着呢。" [anchors: q3]
+  - [paraphrase] 母亲: "你爸那回住院，你瘦了一圈，我嘴上没说，心里记着呢。" [anchors: q7]
+  - [extrapolate] 网友（认识四年,只见过一面）(低头喝了口水)
+  - [paraphrase] 前上司: "你走的时候我挺生气的，觉得你不够职业，现在想想，是我没看出来你那时候快撑不住了。" [anchors: q10]
+  - [quote] 前任: "你对谁都客气，这份客气轮到我这儿也一点没打折。" [anchors: q5]
+  - [paraphrase] 母亲: "你从小就这样，对谁都客客气气的，我跟你爸还说过，这孩子心太软。" [anchors: q5]
+  - [extrapolate] 发小(盯着杯子没接话)
+  - [extrapolate] 前上司: "你那天晚上其实……算了。"
+  - [extrapolate] 前下属: "默哥，你上次推荐那家面馆我去了，汤是真不错。"
+  - [extrapolate] 网友（认识四年,只见过一面）(换了个坐姿,看向窗外)
+
+## Run 9
+
+Date: 2026-10-05T00:03:41.985Z
+Model: deepseek-flash
+
+### Behind Room
+
+| Metric | Value |
+|--------|-------|
+| Total utterances | 12 |
+| quote | 0 |
+| paraphrase | 7 |
+| extrapolate | 5 |
+| extrapolate ratio | 42% |
+| median length (chars) | 27 |
+| mean length (chars) | 30 |
+| p90 length (chars) | 43 |
+| max length (chars) | 66 |
+| secret leaks | 0 |
+| reply chain rate | 80% (8/10) |
+| repetition rate | 0% (0/55 pairs) |
+
+### Front Room
+
+| Metric | Value |
+|--------|-------|
+| Total utterances | 12 |
+| quote | 1 |
+| paraphrase | 4 |
+| extrapolate | 7 |
+| extrapolate ratio | 58% |
+| median length (chars) | 37 |
+| mean length (chars) | 36 |
+| p90 length (chars) | 61 |
+| max length (chars) | 61 |
+| secret leaks | 0 |
+| reply chain rate | 67% (4/6) |
+| repetition rate | 0% (0/21 pairs) |
+
+### Behind/Front Divergence
+
+| Witness | Behind | Front | Overlap | Front Eval% |
+|---------|--------|-------|---------|-------------|
+| w-faxiao | 2 | 2 | 1% | 2% |
+| w-ex | 2 | 2 | 1% | 4% |
+| w-subordinate | 2 | 1 | 2% | 0% |
+| w-boss | 2 | 2 | 2% | 5% |
+
+### Front frontText Anchoring
+
+| Metric | Value |
+|--------|-------|
+| anchored lines | 5 |
+| total front speeches | 7 |
+| anchor rate | 71% |
+
+### Half-truth Check
+
+| Metric | Value |
+|--------|-------|
+| half-truth count | 0 (target: exactly 1) |
+| heavy echo count | 0 (target: 0) |
+| pass | NO |
+
+### Front Third-Person Reference
+
+| Metric | Value |
+|--------|-------|
+| third-person lines | 0 |
+| total front speeches | 7 |
+| third-person rate | 0% (target: 0%) |
+
+
+### Criteria Checks
+
+| Check | Pass | Detail |
+|-------|------|--------|
+| behind-extrapolate-ratio | PASS | 42% (target 40-70%, pass 30-80%) |
+| behind-median-length | PASS | 27 chars (target <=40, pass <=45) |
+| behind-secret-leaks | PASS | 0 (target <=1) |
+| front-secret-leaks | PASS | 0 (target 0) |
+| behind-reply-chain | PASS | 80% (target >=30%, pass >=25%) |
+| behind-repetition | PASS | 0% (target <=10%) |
+| front-repetition | PASS | 0% (target <=10%) |
+| front-text-anchoring | PASS | 71% (target >=40%) |
+| front-half-truth | FAIL | half-truths=0, heavy-echoes=0 (target: 1 half-truth, 0 heavy) |
+| front-third-person | PASS | 0/7 lines (target: 0) |
+| behind-front-overlap | PASS | 2% avg (target <=50%) |
+| front-evaluative-ratio | PASS | 3% avg (target <=15%) |
+
+### Behind Transcript (full)
+
+  - [paraphrase] 发小: "最近联系是少了，约他吃饭老说忙。上回我抢着买单他还跟我急，这人就这样，死要面子。" [anchors: q1]
+  - [paraphrase] 前任: "他对外人一直这样，大方得很。我崴脚那次，司机说不去，他还跟人道歉。" [anchors: q5]
+  - [paraphrase] 前下属: "对，他对外人真是这样。团建他老偷偷把单买了，我说哥这不行，他说你一个应届生跟我抢什么。" [anchors: q1]
+  - [extrapolate] 母亲: "嗯，他从小就这样，对谁都客气。"
+  - [paraphrase] 网友（认识四年,只见过一面）: "阿姨这话我信。我跟他网上认识四年，就见过一面，那次在咖啡馆他基本没怎么说话，光看窗外。回去还给我发消息说不好意思，他线下不太会说话。" [anchors: q4]
+  - [extrapolate] 前上司: "嗯，他就是这样，话不多，但心里有数。"
+  - [paraphrase] 前任: "心里有数……他对我也是，什么都记得，就是什么都不说。" [anchors: q3,q8]
+  - [extrapolate] 母亲(笑了笑,把话题接给了别人)
+  - [paraphrase] 发小: "他最近是真忙还是躲着，我也说不准。反正约他吃饭，十回有八回推。" [anchors: q1]
+  - [extrapolate] 前上司: "忙是真忙过，躲……也未必是躲你们。"
+  - [paraphrase] 前下属: "他忙是真忙，那阵子天天两点睡，中午就啃个八块钱的饭团。" [anchors: q1]
+  - [extrapolate] 网友（认识四年,只见过一面）: "嗯，饭团那个我信，他对自己是真抠。"
+
+### Front Transcript (full)
+
+  - [extrapolate] 发小: "哎，你们家楼下那家面馆是不是换老板了？我上周去吃，汤头完全不是那个味儿了。"
+  - [paraphrase] 前任: "你以前总说那家汤头好，现在换人了，你尝出来没有？" [anchors: q5]
+  - [paraphrase] 前下属: "默哥，你走之后我老想，你除了工作就没点别的爱好，我劝你出去转转你总说没意思，现在还是这样吗？" [anchors: q9]
+  - [extrapolate] 母亲(笑了笑,把话题接给了别人)
+  - [extrapolate] 网友（认识四年,只见过一面）(低头喝了口水)
+  - [paraphrase] 前上司: "林默，你当年帮我兜底那回我可记着呢——我这儿随时有位置，你就是不肯开口。" [anchors: q7]
+  - [paraphrase] 前任: "你要问我后不后悔，我不后悔分手，我后悔的是最后那半年，我一直在等你先开口。" [anchors: q10]
+  - [extrapolate] 母亲(盯着杯子没接话)
+  - [quote] 发小: "你辞职那事我最生气，不是因为你辞，是你憋到最后一刻才告诉我。我说你有事你说啊，你说说了我们也帮不上——就这句，我记到现在。" [anchors: q10]
+  - [extrapolate] 前上司: "你走的时候其实……算了。"
+  - [extrapolate] 前下属(换了个坐姿,看向窗外)
+  - [extrapolate] 网友（认识四年,只见过一面）(打了个哈哈,说起别的事)
+
+## Run 9
+
+Date: 2026-10-05T00:05:06.398Z
+Model: deepseek-flash
+
+### Behind Room
+
+| Metric | Value |
+|--------|-------|
+| Total utterances | 12 |
+| quote | 1 |
+| paraphrase | 6 |
+| extrapolate | 5 |
+| extrapolate ratio | 42% |
+| median length (chars) | 36 |
+| mean length (chars) | 34 |
+| p90 length (chars) | 53 |
+| max length (chars) | 54 |
+| secret leaks | 0 |
+| reply chain rate | 70% (7/10) |
+| repetition rate | 0% (0/55 pairs) |
+
+### Front Room
+
+| Metric | Value |
+|--------|-------|
+| Total utterances | 12 |
+| quote | 2 |
+| paraphrase | 4 |
+| extrapolate | 6 |
+| extrapolate ratio | 50% |
+| median length (chars) | 40 |
+| mean length (chars) | 34 |
+| p90 length (chars) | 62 |
+| max length (chars) | 62 |
+| secret leaks | 0 |
+| reply chain rate | 29% (2/7) |
+| repetition rate | 0% (0/28 pairs) |
+
+### Behind/Front Divergence
+
+| Witness | Behind | Front | Overlap | Front Eval% |
+|---------|--------|-------|---------|-------------|
+| w-faxiao | 2 | 2 | 1% | 2% |
+| w-ex | 2 | 1 | 3% | 0% |
+| w-subordinate | 2 | 2 | 3% | 5% |
+| w-mother | 2 | 1 | 3% | 0% |
+| w-boss | 2 | 2 | 0% | 2% |
+
+### Front frontText Anchoring
+
+| Metric | Value |
+|--------|-------|
+| anchored lines | 6 |
+| total front speeches | 8 |
+| anchor rate | 75% |
+
+### Half-truth Check
+
+| Metric | Value |
+|--------|-------|
+| half-truth count | 0 (target: exactly 1) |
+| heavy echo count | 0 (target: 0) |
+| pass | NO |
+
+### Front Third-Person Reference
+
+| Metric | Value |
+|--------|-------|
+| third-person lines | 0 |
+| total front speeches | 8 |
+| third-person rate | 0% (target: 0%) |
+
+
+### Criteria Checks
+
+| Check | Pass | Detail |
+|-------|------|--------|
+| behind-extrapolate-ratio | PASS | 42% (target 40-70%, pass 30-80%) |
+| behind-median-length | PASS | 36 chars (target <=40, pass <=45) |
+| behind-secret-leaks | PASS | 0 (target <=1) |
+| front-secret-leaks | PASS | 0 (target 0) |
+| behind-reply-chain | PASS | 70% (target >=30%, pass >=25%) |
+| behind-repetition | PASS | 0% (target <=10%) |
+| front-repetition | PASS | 0% (target <=10%) |
+| front-text-anchoring | PASS | 75% (target >=40%) |
+| front-half-truth | FAIL | half-truths=0, heavy-echoes=0 (target: 1 half-truth, 0 heavy) |
+| front-third-person | PASS | 0/8 lines (target: 0) |
+| behind-front-overlap | PASS | 2% avg (target <=50%) |
+| front-evaluative-ratio | PASS | 2% avg (target <=15%) |
+
+### Behind Transcript (full)
+
+  - [paraphrase] 发小: "最近联系是少了，约他吃饭老说忙。上回我抢着买单他还跟我急，这人就这样，死要面子。" [anchors: q1]
+  - [paraphrase] 前任: "他对外人一向大方，这个我见过。就是那种……对谁都好，好得你插不进去。" [anchors: q5]
+  - [paraphrase] 前下属: "大方是真的。团建他老偷偷买单，我撞见过一次，他说你一个应届生跟我抢什么。结果他自己中午就啃八块钱的饭团。" [anchors: q1]
+  - [extrapolate] 母亲: "唉，他就那样，随他吧。"
+  - [paraphrase] 网友（认识四年,只见过一面）: "阿姨这话我懂。他网上话可多了，能陪你聊到天亮，真见面那次，一个小时他大半时间在看窗外。" [anchors: q4]
+  - [extrapolate] 前上司: "嗯，他就是这样，网上话多，见面反而不知道说什么。"
+  - [paraphrase] 前任: "网上话多是真的，回家一天说不了十句。我问他今天怎么样，他就一句「还行」。" [anchors: q4]
+  - [extrapolate] 母亲: "嗯，他从小话就不多。"
+  - [paraphrase] 发小: "话少归话少，他答应我的事从来没掉过链子。去年帮我搬家，加班到十点还是来了，搬完自己在楼道里坐了二十分钟才走。" [anchors: q3]
+  - [extrapolate] 前上司: "嗯，他答应的事确实不用追。"
+  - [quote] 前下属: "答应的事不用追，这个我作证。我转正答辩前一晚，他陪我改PPT改到凌晨一点，第二天还替我挡了大老板两个问题。" [anchors: q3]
+  - [extrapolate] 网友（认识四年,只见过一面）(笑了笑,把话题接给了别人)
+
+### Front Transcript (full)
+
+  - [paraphrase] 发小: "你手机屏碎两年了都不换，请客的时候眼睛都不眨一下，我说你省着点，你还来一句钱花在人身上才叫钱。" [anchors: q1]
+  - [extrapolate] 前任(笑了笑,把话题接给了别人)
+  - [paraphrase] 前下属: "默哥，我转正那次你帮了我大忙，我一直记着呢。" [anchors: q3]
+  - [paraphrase] 母亲: "你帮人家转正那事，人家记着呢。你从小就这样，说话算话，我让你回来吃饭，你再忙也回来。" [anchors: q3]
+  - [extrapolate] 网友（认识四年,只见过一面）(低头喝了口水)
+  - [paraphrase] 前上司: "你走的时候我挺生气的，觉得你不够职业，现在想想，是我没看出来你那时候快撑不住了。" [anchors: q10]
+  - [quote] 前任: "你对谁都客气，这份客气轮到我这儿也一点没打折。" [anchors: q5]
+  - [extrapolate] 母亲(盯着杯子没接话)
+  - [quote] 发小: "你辞职那事我最生气，不是因为你辞，是你憋到最后一刻才告诉我。我说你有事你说啊，你来一句说了我们也帮不上。就这句，我记到现在。" [anchors: q10]
+  - [extrapolate] 前上司: "你那十一天调休……算了。"
+  - [extrapolate] 前下属: "默哥，你上次推荐那家面馆我去了，汤头是真不错。"
+  - [extrapolate] 网友（认识四年,只见过一面）(换了个坐姿,看向窗外)
+
+## Run 8
+
+Date: 2026-10-05T00:06:43.341Z
+Model: deepseek-flash
+
+### Behind Room
+
+| Metric | Value |
+|--------|-------|
+| Total utterances | 12 |
+| quote | 1 |
+| paraphrase | 6 |
+| extrapolate | 5 |
+| extrapolate ratio | 42% |
+| median length (chars) | 36 |
+| mean length (chars) | 36 |
+| p90 length (chars) | 52 |
+| max length (chars) | 65 |
+| secret leaks | 0 |
+| reply chain rate | 70% (7/10) |
+| repetition rate | 0% (0/55 pairs) |
+
+### Front Room
+
+| Metric | Value |
+|--------|-------|
+| Total utterances | 12 |
+| quote | 2 |
+| paraphrase | 3 |
+| extrapolate | 7 |
+| extrapolate ratio | 58% |
+| median length (chars) | 31 |
+| mean length (chars) | 27 |
+| p90 length (chars) | 40 |
+| max length (chars) | 40 |
+| secret leaks | 0 |
+| reply chain rate | 20% (1/5) |
+| repetition rate | 0% (0/15 pairs) |
+
+### Behind/Front Divergence
+
+| Witness | Behind | Front | Overlap | Front Eval% |
+|---------|--------|-------|---------|-------------|
+| w-faxiao | 2 | 1 | 1% | 4% |
+| w-ex | 2 | 1 | 3% | 0% |
+| w-subordinate | 2 | 2 | 3% | 4% |
+| w-boss | 2 | 2 | 0% | 5% |
+
+### Front frontText Anchoring
+
+| Metric | Value |
+|--------|-------|
+| anchored lines | 5 |
+| total front speeches | 6 |
+| anchor rate | 83% |
+
+### Half-truth Check
+
+| Metric | Value |
+|--------|-------|
+| half-truth count | 1 (target: exactly 1) |
+| heavy echo count | 0 (target: 0) |
+| pass | YES |
+
+- half-truth: "你有个坏习……算了。" (w-boss)
+
+### Front Third-Person Reference
+
+| Metric | Value |
+|--------|-------|
+| third-person lines | 0 |
+| total front speeches | 6 |
+| third-person rate | 0% (target: 0%) |
+
+
+### Criteria Checks
+
+| Check | Pass | Detail |
+|-------|------|--------|
+| behind-extrapolate-ratio | PASS | 42% (target 40-70%, pass 30-80%) |
+| behind-median-length | PASS | 36 chars (target <=40, pass <=45) |
+| behind-secret-leaks | PASS | 0 (target <=1) |
+| front-secret-leaks | PASS | 0 (target 0) |
+| behind-reply-chain | PASS | 70% (target >=30%, pass >=25%) |
+| behind-repetition | PASS | 0% (target <=10%) |
+| front-repetition | PASS | 0% (target <=10%) |
+| front-text-anchoring | PASS | 83% (target >=40%) |
+| front-half-truth | PASS | half-truths=1, heavy-echoes=0 (target: 1 half-truth, 0 heavy) |
+| front-third-person | PASS | 0/6 lines (target: 0) |
+| behind-front-overlap | PASS | 2% avg (target <=50%) |
+| front-evaluative-ratio | PASS | 3% avg (target <=15%) |
+
+### Behind Transcript (full)
+
+  - [paraphrase] 发小: "最近联系是少了，约他吃饭老说忙。上回我抢着买单他还跟我急，这人就这样，死要面子。" [anchors: q1]
+  - [paraphrase] 前任: "他对外人一向大方，这个我见过。就是那种……对谁都好，好得你插不进去。" [anchors: q5]
+  - [paraphrase] 前下属: "大方是真的。团建他老偷偷买单，我撞见过一次，他说你一个应届生跟我抢什么。结果他自己中午就啃八块钱的饭团。" [anchors: q1]
+  - [extrapolate] 母亲: "唉，他就那样，随他吧。"
+  - [paraphrase] 网友（认识四年,只见过一面）: "阿姨这话我听着挺不是滋味的。他网上话可多了，能陪你聊到天亮，我们唯一见那面他坐了一小时没怎么说话，回去还跟我道歉说线下不太会说话。" [anchors: q4]
+  - [extrapolate] 前上司: "嗯，他就是这样，网上话多，见面反而不知道说什么。"
+  - [paraphrase] 前任: "网上话多……我太熟了。回家一天说不了十句，问他今天怎么样，就俩字，还行。" [anchors: q4]
+  - [extrapolate] 母亲: "嗯，他在家也这样，问一句答一句。"
+  - [paraphrase] 发小: "阿姨，他不是不爱说话，就是嘴笨。上回我去您家，他闷头在厨房刷了半小时碗，一句话没有。" [anchors: q7]
+  - [extrapolate] 前上司: "嘴笨是真的，可该说的话他一句没落下过。"
+  - [quote] 前下属: "嗯，他答应我的事没一件落空的。我转正答辩前一晚，他陪我改PPT改到一点，第二天还替我挡了大老板两个问题。" [anchors: q3]
+  - [extrapolate] 网友（认识四年,只见过一面）(笑了笑,把话题接给了别人)
+
+### Front Transcript (full)
+
+  - [quote] 发小: "你辞职那事我到现在还气，不是气你辞，是你憋到最后一刻才告诉我。" [anchors: q10]
+  - [extrapolate] 前任(笑了笑,把话题接给了别人)
+  - [paraphrase] 前下属: "默哥，你请客的时候抢单我从来没抢过你，可你自己那饭盒我见过，就俩菜。" [anchors: q1]
+  - [extrapolate] 母亲(低头喝了口水)
+  - [extrapolate] 网友（认识四年,只见过一面）(盯着杯子没接话)
+  - [paraphrase] 前上司: "你走的时候我挺生气的，觉得你不够职业，现在想想，是我没看出来你那时候快撑不住了。" [anchors: q10]
+  - [quote] 前任: "你对谁都客气，这份客气轮到我这儿也一点没打折。" [anchors: q5]
+  - [extrapolate] 母亲(换了个坐姿,看向窗外)
+  - [extrapolate] 发小(打了个哈哈,说起别的事)
+  - [paraphrase] 前上司: "你有个坏习……算了。" [anchors: q3]
+  - [extrapolate] 前下属: "默哥，你上次推荐的那家面馆我去了，汤是真不错。"
+  - [extrapolate] 网友（认识四年,只见过一面）(点了点头,没往下说)
+
+## Run 9
+
+Date: 2026-10-05T00:07:14.271Z
+Model: deepseek-flash
+
+### Behind Room
+
+| Metric | Value |
+|--------|-------|
+| Total utterances | 12 |
+| quote | 0 |
+| paraphrase | 6 |
+| extrapolate | 6 |
+| extrapolate ratio | 50% |
+| median length (chars) | 34 |
+| mean length (chars) | 33 |
+| p90 length (chars) | 51 |
+| max length (chars) | 60 |
+| secret leaks | 0 |
+| reply chain rate | 50% (5/10) |
+| repetition rate | 0% (0/55 pairs) |
+
+### Front Room
+
+| Metric | Value |
+|--------|-------|
+| Total utterances | 12 |
+| quote | 2 |
+| paraphrase | 5 |
+| extrapolate | 5 |
+| extrapolate ratio | 42% |
+| median length (chars) | 30 |
+| mean length (chars) | 36 |
+| p90 length (chars) | 70 |
+| max length (chars) | 70 |
+| secret leaks | 0 |
+| reply chain rate | 50% (4/8) |
+| repetition rate | 0% (0/36 pairs) |
+
+### Behind/Front Divergence
+
+| Witness | Behind | Front | Overlap | Front Eval% |
+|---------|--------|-------|---------|-------------|
+| w-faxiao | 2 | 2 | 2% | 1% |
+| w-ex | 2 | 1 | 2% | 0% |
+| w-subordinate | 1 | 2 | 1% | 4% |
+| w-mother | 2 | 2 | 3% | 0% |
+| w-boss | 2 | 2 | 0% | 2% |
+
+### Front frontText Anchoring
+
+| Metric | Value |
+|--------|-------|
+| anchored lines | 7 |
+| total front speeches | 9 |
+| anchor rate | 78% |
+
+### Half-truth Check
+
+| Metric | Value |
+|--------|-------|
+| half-truth count | 1 (target: exactly 1) |
+| heavy echo count | 0 (target: 0) |
+| pass | YES |
+
+- half-truth: "你进这个门的时候……算了。" (w-boss)
+
+### Front Third-Person Reference
+
+| Metric | Value |
+|--------|-------|
+| third-person lines | 0 |
+| total front speeches | 9 |
+| third-person rate | 0% (target: 0%) |
+
+
+### Criteria Checks
+
+| Check | Pass | Detail |
+|-------|------|--------|
+| behind-extrapolate-ratio | PASS | 50% (target 40-70%, pass 30-80%) |
+| behind-median-length | PASS | 34 chars (target <=40, pass <=45) |
+| behind-secret-leaks | PASS | 0 (target <=1) |
+| front-secret-leaks | PASS | 0 (target 0) |
+| behind-reply-chain | PASS | 50% (target >=30%, pass >=25%) |
+| behind-repetition | PASS | 0% (target <=10%) |
+| front-repetition | PASS | 0% (target <=10%) |
+| front-text-anchoring | PASS | 78% (target >=40%) |
+| front-half-truth | PASS | half-truths=1, heavy-echoes=0 (target: 1 half-truth, 0 heavy) |
+| front-third-person | PASS | 0/9 lines (target: 0) |
+| behind-front-overlap | PASS | 2% avg (target <=50%) |
+| front-evaluative-ratio | PASS | 1% avg (target <=15%) |
+
+### Behind Transcript (full)
+
+  - [paraphrase] 发小: "最近联系是少了，约他吃饭老说忙。上回我抢着买单他还跟我急，这人就这样，死要面子。" [anchors: q1]
+  - [paraphrase] 前任: "他对外人一向大方，这个我见过。就是那种……对谁都好，好得你插不进去。" [anchors: q5]
+  - [paraphrase] 前下属: "大方是真的。团建他老偷偷买单，我撞见过一次，他说你一个应届生跟我抢什么。可他自己中午就啃八块钱的饭团。" [anchors: q1]
+  - [extrapolate] 母亲: "唉，这孩子就这样，嘴上不说，心里装着事。"
+  - [paraphrase] 网友（认识四年,只见过一面）: "阿姨这话我信。他半夜老找我聊天，白天朋友圈倒是岁月静好，跟两个人似的。" [anchors: q6]
+  - [extrapolate] 前上司: "嗯，他就是这样，白天撑着，晚上才松。"
+  - [paraphrase] 前任: "撑着是真的。他失眠，整宿整宿的，我那时候半夜醒了都能听见他刷手机。问他就说工作，结果工作也辞了，我还是刷朋友圈才知道的。" [anchors: q6]
+  - [extrapolate] 母亲: "辞了？他上个月还跟我说公司器重他呢。"
+  - [paraphrase] 发小: "阿姨，他那人您还不知道，报喜不报忧。上个月他还跟我借了两万，让我千万别跟您提。" [anchors: q1]
+  - [extrapolate] 前上司: "借钱这事……他跟我提过想歇一段，我当时没往深了想。"
+  - [extrapolate] 前下属(笑了笑,把话题接给了别人)
+  - [extrapolate] 网友（认识四年,只见过一面）: "嗯……他这人吧，我总觉得他活得挺自由的，又老怀疑他在装。"
+
+### Front Transcript (full)
+
+  - [quote] 发小: "哎，你们知道吗，昨儿那家面馆关门了，就咱以前老去那家——林默，你手机屏碎两年了还不换，请客倒眼都不眨，我说你省着点，你说钱花在人身上才叫钱。" [anchors: q1]
+  - [extrapolate] 前任(笑了笑,把话题接给了别人)
+  - [paraphrase] 前下属: "默哥，你走那天我是真舍不得，你要是肯留下来，我觉得你能做得特别大。" [anchors: q10]
+  - [paraphrase] 母亲: "你爸住院那回，你瘦了一圈，我看着心疼，可你一句累都没说过。" [anchors: q7]
+  - [extrapolate] 网友（认识四年,只见过一面）(低头喝了口水)
+  - [paraphrase] 前上司: "你走的时候我挺生气的，觉得你不够职业，现在想想，是我没看出来你那时候快撑不住了。" [anchors: q10]
+  - [paraphrase] 前任: "你对谁都客气，可这份客气轮到我这儿，也一点没打折。" [anchors: q5]
+  - [paraphrase] 母亲: "你从小就这样，对谁都客客气气的，回家倒是一句话没有。" [anchors: q4]
+  - [quote] 发小: "你辞职那事我到现在还气——不是气你辞，是你憋到最后一刻才告诉我。我问你有事你说啊，你说说了我们也帮不上。就这句，我记到现在。" [anchors: q10]
+  - [extrapolate] 前上司: "你进这个门的时候……算了。"
+  - [extrapolate] 前下属: "哎对了，楼下那家咖啡机修好了没？我早上来的时候还贴着张纸呢。"
+  - [extrapolate] 网友（认识四年,只见过一面）(盯着杯子没接话)
+
