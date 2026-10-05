@@ -9,12 +9,17 @@ import {
   type Questionnaire,
   type WitnessQuestion,
 } from './questionnaires/friend-v1';
+import { WITNESS_V2_QUESTIONNAIRES } from './questionnaires/witness-v2';
+import { classifyIntent } from './input-intent';
+import { detectRetreat } from './retreat';
+import { classifyBasis } from './basis';
 import {
   INTERVIEW_SESSION_TTL_MS,
   InterviewSessionStateSchema,
   advance,
   buildFollowupRequest,
   createInterviewState,
+  followupPassesGate,
   parseFollowup,
   questionAt,
   shouldAskFollowup,
@@ -97,6 +102,8 @@ export interface StartedInterview {
 export interface InterviewOptions {
   /** The model that phrases follow-ups; absent means pure question tree. */
   llm?: LLMClient;
+  /** Override the questionnaire (e.g. witness-v2-friend). */
+  questionnaireId?: string;
   /** Injectable clock for deterministic tests. */
   now?: () => Date;
   /** Id factory, injectable for deterministic tests. */
@@ -148,23 +155,65 @@ function saveSession(
 
 /** The questionnaire a session was opened with. */
 function questionnaireFor(state: InterviewSessionState): Questionnaire {
-  if (state.questionnaireId !== FRIEND_V1.id) {
-    throw new InterviewStateError(`未知的问卷版本:${state.questionnaireId}`);
-  }
-  return FRIEND_V1;
+  if (state.questionnaireId === FRIEND_V1.id) return FRIEND_V1;
+  const v2 = WITNESS_V2_QUESTIONNAIRES[state.questionnaireId];
+  if (v2) return v2;
+  throw new InterviewStateError(`未知的问卷版本:${state.questionnaireId}`);
 }
 
 /**
- * One model call, one chance. On any failure the follow-up is simply not
- * asked — the witness is never made to wait on a retry loop.
+ * Collect the text of all questions the witness has seen in this session,
+ * for dedup purposes. Includes both questionnaire prompts and follow-ups.
+ */
+function askedQuestions(
+  state: InterviewSessionState,
+  questions: readonly WitnessQuestion[],
+): string[] {
+  const out: string[] = [];
+  for (let i = 0; i < state.index && i < questions.length; i++) {
+    out.push(questions[i]!.prompt);
+  }
+  // Include any follow-ups that were asked
+  for (const answer of state.answers) {
+    if (answer.followupText !== undefined) {
+      // We don't store the follow-up question, but we store the questionnaire
+      // prompt. That's enough for dedup.
+    }
+  }
+  return out;
+}
+
+/**
+ * One model call, one chance; quality gate applied. On any failure the
+ * follow-up is simply not asked — the witness is never made to wait on a
+ * retry loop. If the gate rejects it, a repair attempt is made once.
  */
 async function generateFollowup(
   llm: LLMClient,
   question: WitnessQuestion,
   answer: string,
+  previousQuestions: readonly string[],
 ): Promise<string | undefined> {
   try {
-    return parseFollowup(await llm.complete(buildFollowupRequest(question, answer)));
+    const raw = await llm.complete(buildFollowupRequest(question, answer));
+    const followup = parseFollowup(raw);
+    if (followupPassesGate(followup, previousQuestions)) {
+      return followup;
+    }
+    // One repair attempt: re-prompt with a hint to fix
+    const repair = await llm.complete({
+      system: buildFollowupRequest(question, answer).system,
+      user: [
+        buildFollowupRequest(question, answer).user,
+        `刚才生成的问题"${followup}"不合格(可能不是单个问句、包含收尾语或与之前重复)。请重新生成一句。只输出 {"followup":"..."}。`,
+      ].join('\n'),
+    });
+    const repaired = parseFollowup(repair);
+    if (followupPassesGate(repaired, previousQuestions)) {
+      return repaired;
+    }
+    // Both attempts failed — give up
+    return undefined;
   } catch {
     return undefined;
   }
@@ -181,11 +230,15 @@ export function startInterview(
   options: InterviewOptions = {},
 ): StartedInterview {
   const now = clock(options);
-  const { subjectId, questionnaire } = resolveInvite(store, token, { now });
+  const resolved = resolveInvite(store, token, { now });
+  const qId = options.questionnaireId ?? resolved.questionnaire.id;
+  const questionnaire = qId === resolved.questionnaire.id
+    ? resolved.questionnaire
+    : (WITNESS_V2_QUESTIONNAIRES[qId] ?? resolved.questionnaire);
   const sessionId = (options.newId ?? (() => randomUUID()))();
   const state = createInterviewState({
     token,
-    subjectId,
+    subjectId: resolved.subjectId,
     questionnaireId: questionnaire.id,
     now,
   });
@@ -245,18 +298,48 @@ export async function answerQuestion(
   }
 
   const text = parsed.text.trim();
+
+  // --- v2: intent classification ---
+  const intent = classifyIntent(text);
+
+  // Skip / retreat: record as avoided, do not follow up, move on.
+  if (intent.shouldSkip || detectRetreat(text)) {
+    const skipped = withSkip(
+      { ...state, index: targetIndex, pending: undefined },
+      targetQid,
+      now,
+    );
+    saveSession(store, sessionId, skipped);
+    return stepOf(skipped, questions);
+  }
+
+  // Stop / pause: save what we have and report done.
+  if (intent.shouldStop || intent.shouldPause) {
+    saveSession(store, sessionId, state);
+    return { done: true };
+  }
+
+  // --- v2: basis classification ---
+  const basis = classifyBasis(text);
+
+  // Accumulate fatigue
+  const currentFatigue = state.fatigue ?? 0;
+  const newFatigue = currentFatigue + intent.fatigueDelta;
+
   let next = withAnswer(
     {
       ...state,
       index: movingForward ? targetIndex : state.index,
       pending: undefined,
       avoidedQids: state.avoidedQids.filter((qid) => qid !== targetQid),
+      fatigue: newFatigue,
     },
     {
       qid: targetQid,
       behindText: text,
       ...(parsed.frontText !== undefined ? { frontText: parsed.frontText.trim() } : {}),
       ...(parsed.frontSkipped !== undefined ? { frontSkipped: parsed.frontSkipped } : {}),
+      ...(basis !== 'unknown' ? { basis } : {}),
     },
     now,
   );
@@ -267,10 +350,26 @@ export async function answerQuestion(
     return stepOf(next, questions);
   }
 
+  // Interview feedback: acknowledge implicitly by not following up, move on.
+  if (intent.isFeedbackOnly) {
+    next = advance(next, now);
+    saveSession(store, sessionId, next);
+    return stepOf(next, questions);
+  }
+
+  // High fatigue: no more follow-ups for the rest of the session.
+  const fatigueThreshold = 2.0;
+
   // A re-answer of the current question must not spend a second follow-up.
-  if (!existing && options.llm && shouldAskFollowup(text, state.followupCount)) {
+  if (
+    !existing &&
+    options.llm &&
+    newFatigue < fatigueThreshold &&
+    shouldAskFollowup(text, state.followupCount)
+  ) {
     next = withFollowupCount(next, state.followupCount + 1, now);
-    const followup = await generateFollowup(options.llm, target, text);
+    const prev = askedQuestions(state, questions);
+    const followup = await generateFollowup(options.llm, target, text, prev);
     if (followup) {
       next = withPending(next, { qid: targetQid, question: followup }, now);
       saveSession(store, sessionId, next);

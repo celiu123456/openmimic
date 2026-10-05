@@ -26,6 +26,7 @@ import {
   questionAt,
   skipFront,
   skipQuestion,
+  toggleDoNotRaise,
   updateBehind,
   updateFollowup,
   updateFront,
@@ -464,6 +465,14 @@ onMounted(() => {
       />
       <MicButton v-if="asrReady" @text="appendBehind" @unavailable="asrReady = false" />
     </div>
+    <label v-if="isFrontRevealed(currentAnswer)" class="do-not-raise">
+      <input
+        type="checkbox"
+        :checked="currentAnswer.doNotRaiseToSubject"
+        @change="draft = toggleDoNotRaise(draft, current.qid)"
+      />
+      <span>这条不要让 TA 看到</span>
+    </label>
 
     <section v-if="isFrontRevealed(currentAnswer)" class="front">
       <span class="label">{{ questionnaire?.frontPrompt }}</span>

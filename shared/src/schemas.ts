@@ -64,6 +64,8 @@ export const WitnessSchema = z.object({
   knownFromYear: z.number().int().optional(),
   /** Year the acquaintance ended; null means still ongoing. */
   knownToYear: z.number().int().nullable().optional(),
+  /** How often the witness is in contact with the subject. */
+  contactFrequency: z.string().optional(),
   /** When true, the witness's relation label is hidden in rooms. */
   anonymousInRoom: z.boolean().optional(),
 });
@@ -84,6 +86,10 @@ export const InviteSchema = z.object({
 });
 export type Invite = z.infer<typeof InviteSchema>;
 
+/** Epistemic basis of a testimony answer. */
+export const EvidenceBasisSchema = z.enum(['witnessed', 'heard', 'inferred', 'unknown']);
+export type EvidenceBasis = z.infer<typeof EvidenceBasisSchema>;
+
 /** One answer inside a testimony. */
 export const TestimonyAnswerSchema = z.object({
   qid: z.string().min(1),
@@ -99,6 +105,24 @@ export const TestimonyAnswerSchema = z.object({
    * and only the first was volunteered unprompted.
    */
   followupText: z.string().optional(),
+  /**
+   * Epistemic basis: how does the witness know this?
+   *
+   * - witnessed: first-hand observation ("I saw it happen")
+   * - heard: second-hand ("someone told me")
+   * - inferred: the witness is guessing ("I think", "probably")
+   * - unknown: the rules couldn't determine the basis
+   *
+   * Set by rule-based heuristics during the interview; 'unknown' values
+   * may be refined by the court during filing.
+   */
+  basis: EvidenceBasisSchema.optional(),
+  /**
+   * When true, this answer must not appear in any view the subject can see
+   * (rooms, reports, meta-perception results). It still participates in
+   * persona synthesis (court, claims).
+   */
+  doNotRaiseToSubject: z.boolean().optional(),
 });
 export type TestimonyAnswer = z.infer<typeof TestimonyAnswerSchema>;
 
@@ -198,6 +222,8 @@ export const EpisodeSchema = z.object({
   audience: z.string().optional(),
   /** Time hint, e.g. "上个月", "离职前两三周". */
   timeHint: z.string().optional(),
+  /** Epistemic basis inherited from the source answer. */
+  basis: EvidenceBasisSchema.optional(),
 });
 export type Episode = z.infer<typeof EpisodeSchema>;
 

@@ -92,6 +92,8 @@ export interface SubmitPayload {
     frontText?: string;
     /** What the interviewer's follow-up drew out, kept apart from behindText. */
     followupText?: string;
+    /** When true, this answer must not appear in any subject-visible view. */
+    doNotRaiseToSubject?: boolean;
   }>;
   freeText?: string;
   /** Question ids the witness explicitly skipped (silence signal). */

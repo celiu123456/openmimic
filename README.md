@@ -162,7 +162,7 @@ resp = client.chat.completions.create(
 ### 已完成
 
 - 内核:证言账本(append-only + triggers)、授权门(synthesis_only 遮蔽)、插件装配 v1(inject/provide 依赖注入、topo sort、unload、Registry 扩展点、YAML config tree)、人格组装 v2(async, audience-grouped claims + episodes + divergences + corpus, 6000 char budget)
-- WitnessEngine:问卷采集、邀请链接、AI 追问访谈
+- WitnessEngine:问卷采集、邀请链接、AI 追问访谈;v2 访谈策略(三关系变体问卷、意图分类、退缩检测、证据基础标注、质量门、反机械追问策略)迁自作者此前的平台项目
 - CourtEngine v2:filing with episodes + embedding/keyword pairing + relation judgment + confrontation + divergence map + conviction computation(纯函数)
 - RoomEngine:背后/当面双模式 + 危机词拒绝 + 诊断词重写/降级 + 跨证人泄密保护(高代价 no-talk list + 部分泄露检测 + guided rewrite + 25% 舞台上限)
 - 对外挂载:OpenAI 兼容端点、MCP Server(stdio)、纯库 import(`@openmimic/core` createOpenMimic)

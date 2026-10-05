@@ -31,8 +31,8 @@ const sampleDraft = (): InterviewDraft => ({
   currentIndex: 2,
   consentLevel: 'quotable',
   answers: {
-    q1: { behindText: '她总是提前买单。', frontText: '', frontSkipped: true },
-    q2: { behindText: '生气就不说话。', frontText: '我会直接问她。', frontSkipped: false },
+    q1: { behindText: '她总是提前买单。', frontText: '', frontSkipped: true, doNotRaiseToSubject: false },
+    q2: { behindText: '生气就不说话。', frontText: '我会直接问她。', frontSkipped: false, doNotRaiseToSubject: false },
   },
 });
 
@@ -67,7 +67,7 @@ describe('answers local draft', () => {
     );
     const draft = loadDraft(store, 'tok');
     expect(draft?.relationChoice).toBe('');
-    expect(draft?.answers.q1).toEqual({ behindText: 'ok', frontText: '', frontSkipped: false });
+    expect(draft?.answers.q1).toEqual({ behindText: 'ok', frontText: '', frontSkipped: false, doNotRaiseToSubject: false });
     expect(draft?.consentLevel).toBe('synthesis_only');
   });
 

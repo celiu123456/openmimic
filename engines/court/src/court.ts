@@ -96,6 +96,9 @@ function buildFilingSystem(displayName: string): string {
     '"evidenceTestimonyIds":["证言id"],"episodeTexts":["事例原文"]}]}',
     '每个论断必须至少引用一条证言 id。episode.text 必须是证言原文的逐字子串。',
     '请确保 episodes 和 claims 数组都非空(只要证言中有具体事件和可对质的描述)。',
+    '',
+    '★ 事实来源守卫:事实只能来自证人的原话,不能来自你在问题中给的举例或假设。',
+    '★ 三层分开:证人对自己的评价不得立为关于被描述者的论断;证人的感受归证人,被描述者的行为归被描述者,两人的互动归关系。',
   ].join('\n');
 }
 
@@ -215,6 +218,12 @@ export interface ConvictionInput {
   wasPaired: boolean;
   /** Whether the claim has status 'contested'. */
   isContested: boolean;
+  /**
+   * Weakest epistemic basis among the claim's supporting evidence.
+   * 'heard' and 'inferred' impose a conviction ceiling.
+   * Optional for backward compatibility with existing calls.
+   */
+  weakestBasis?: 'witnessed' | 'heard' | 'inferred' | 'unknown';
 }
 
 /**
@@ -242,6 +251,13 @@ export function computeConviction(input: ConvictionInput): number {
   // Never paired: cap at CONVICTION_UNCHALLENGED_CAP
   if (!input.wasPaired) {
     score = Math.min(score, CONVICTION_UNCHALLENGED_CAP);
+  }
+
+  // Basis-based ceiling: heard and inferred evidence can't reach full conviction.
+  if (input.weakestBasis === 'heard') {
+    score = Math.min(score, 0.7);
+  } else if (input.weakestBasis === 'inferred') {
+    score = Math.min(score, 0.5);
   }
 
   return round2(clamp01(score));

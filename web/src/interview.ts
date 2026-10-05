@@ -76,6 +76,13 @@ export function skipFront(draft: InterviewDraft, qid: string): InterviewDraft {
   }));
 }
 
+export function toggleDoNotRaise(draft: InterviewDraft, qid: string): InterviewDraft {
+  return withAnswer(draft, qid, (answer) => ({
+    ...answer,
+    doNotRaiseToSubject: !answer.doNotRaiseToSubject,
+  }));
+}
+
 export function questionAt(draft: InterviewDraft, questionnaire: Questionnaire): number {
   const count = questionnaire.questions.length;
   if (count === 0) return 0;
@@ -150,6 +157,9 @@ export function buildSubmission(
       const followup = draft.followups[question.qid]?.trim();
       if (followup !== undefined && followup.length > 0) {
         entry.followupText = followup;
+      }
+      if (answer.doNotRaiseToSubject) {
+        entry.doNotRaiseToSubject = true;
       }
       return entry;
     });

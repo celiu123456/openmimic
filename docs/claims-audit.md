@@ -60,7 +60,7 @@
 
 | 引擎 | 状态 | 代码依据 | 备注 |
 |---|---|---|---|
-| WitnessEngine | 已实现 | `engines/witness/src/plugin.ts` · `engines/witness/test/` | 采集、邀请、问卷、AI 追问访谈,注册为 collector 类型插件 |
+| WitnessEngine | 已实现 | `engines/witness/src/plugin.ts` · `engines/witness/test/` | 采集、邀请、问卷、AI 追问访谈,注册为 collector 类型插件;v2 访谈策略(三关系变体问卷、9 意图分类、退缩检测、证据基础标注、质量门含去重/单问题/防提前结束、反机械追问)迁自作者此前的平台项目 |
 | CourtEngine | 已实现 | `engines/court/src/court.ts` · `engines/court/src/conflict.ts` · `engines/court/src/plugin.ts` · `engines/court/test/court.test.ts` | v2 管线:filing(提取论断+事例,per-item lenient parsing) → pairing(LLMClaimPairFinder/EmbeddingClaimPairFinder/KeywordClaimPairFinder 三级回落) → relation judgment(要求同一行为维度) → confrontation → conviction computation;divergence map 保留视角差异;仍为多步 LLM 调用而非独立智能体进程 |
 | GraphEngine | 计划 | `engines/graph/` 只有 .gitkeep | 无代码;README 声称"人格是图的实时派生物……改一条证言自动重算"无实现 |
 | RoomEngine | 已实现 | `engines/room/src/room.ts` · `engines/room/src/plugin.ts` · `engines/room/test/room.test.ts` | 背后/当面双模式,round-robin 调度,consent overlap 防护,crisis/diagnosis 词表,no-talk list(LLM 生成高代价秘密清单 + 规则兜底;清单限两类:明确嘱托保密/推翻重大现状认知;双次生成取并集上限 8 条;规则兜底不受上限挤出),两级泄密检测(关键词快扫 + LLM 语义判断,含部分泄露检测),guided rewrite(阻断后用安全素材引导重写最多两次,失败才降为舞台提示),25% 舞台提示上限(接近时优先排低负担证人)。**局限**:防护依赖模型判定,不是保证;清单每次生成可能不同;部分泄露的判定边界(如"换城市"vs"换节奏")取决于模型理解力 |

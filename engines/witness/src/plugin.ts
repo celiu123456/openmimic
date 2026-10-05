@@ -22,6 +22,12 @@ import type { InterviewStep } from './interview-state';
 import type { LLMClient } from './llm';
 import { FRIEND_V1, type Questionnaire } from './questionnaires/friend-v1';
 import {
+  WITNESS_V2_FRIEND,
+  WITNESS_V2_FAMILY,
+  WITNESS_V2_COLLEAGUE,
+  WITNESS_V2_QUESTIONNAIRES,
+} from './questionnaires/witness-v2';
+import {
   submitTestimony,
   type SubmitTestimonyInput,
   type SubmitTestimonyOptions,

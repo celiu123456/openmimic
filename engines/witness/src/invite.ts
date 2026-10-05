@@ -3,6 +3,11 @@ import type { Invite } from '@openmimic/shared';
 import type { Store } from '@openmimic/kernel';
 import { InviteInvalidError } from './errors';
 import { FRIEND_V1, type Questionnaire } from './questionnaires/friend-v1';
+import {
+  WITNESS_V2_QUESTIONNAIRES,
+  WITNESS_V2_FRIEND,
+  pickV2Questionnaire,
+} from './questionnaires/witness-v2';
 
 /** Invites live for two weeks unless the caller asks otherwise. */
 export const DEFAULT_INVITE_TTL_MS = 14 * 24 * 60 * 60 * 1000;

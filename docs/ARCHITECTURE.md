@@ -111,6 +111,7 @@ engines/
   court/          CourtEngine plugin (filing, pairing, relation, conviction)
   room/           RoomEngine plugin (behind/front dual-mode rooms)
   witness/        WitnessEngine plugin (testimony collection, invites, interview)
+                  Interview strategy migrated from the author's earlier platform project.
   graph/          (planned) GraphEngine
   gate/           (planned) GateEngine as independent engine
 server/           HTTP server, mount-rest, mount-openai, mount-mcp

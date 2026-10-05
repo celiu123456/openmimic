@@ -16,6 +16,8 @@ export interface AnswerDraft {
   frontText: string;
   /** True only after an explicit "当面我不会说" press — never inferred. */
   frontSkipped: boolean;
+  /** When true, this answer must not be surfaced to the subject in any form. */
+  doNotRaiseToSubject: boolean;
 }
 
 export interface InterviewDraft {
@@ -37,7 +39,7 @@ export interface InterviewDraft {
 }
 
 export function emptyAnswer(): AnswerDraft {
-  return { behindText: '', frontText: '', frontSkipped: false };
+  return { behindText: '', frontText: '', frontSkipped: false, doNotRaiseToSubject: false };
 }
 
 export function emptyDraft(): InterviewDraft {
@@ -74,6 +76,7 @@ function normalizeDraft(value: unknown): InterviewDraft {
         behindText: typeof answer.behindText === 'string' ? answer.behindText : '',
         frontText: typeof answer.frontText === 'string' ? answer.frontText : '',
         frontSkipped: answer.frontSkipped === true,
+        doNotRaiseToSubject: answer.doNotRaiseToSubject === true,
       };
     }
   }

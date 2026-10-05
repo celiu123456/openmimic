@@ -90,10 +90,8 @@ describe('interview session state machine', () => {
 
     expect(step).toEqual({ followup: '哪件事让你这么觉得？' });
     expect(llm.calls).toHaveLength(1);
-    // The system prompt states the discipline: one example, no chaining, no
-    // grading, no diagnosis.
+    // The v2 system prompt: casual style, no chaining, no grading, no labels.
     expect(llm.calls[0]?.system).toContain('不要连环问');
-    expect(llm.calls[0]?.system).toContain('不评价对方的回答好坏');
     expect(llm.calls[0]?.system).toContain('不贴标签');
     expect(llm.calls[0]?.user).toContain(BARE);
 
@@ -137,22 +135,41 @@ describe('interview session state machine', () => {
     expect(llm.calls).toHaveLength(0);
   });
 
-  it('stops asking after the follow-up budget is spent', async () => {
-    const llm = new FakeLLM(Array.from({ length: 10 }, () => FOLLOWUP_LINE));
+  it('limits bare-evaluation follow-ups to one, and stops after the budget', async () => {
+    const llm = new FakeLLM(Array.from({ length: 20 }, () => FOLLOWUP_LINE));
     const { sessionId } = startInterview(store, token, options);
 
-    for (let round = 0; round < MAX_FOLLOWUPS_PER_SESSION; round += 1) {
-      const step = await answerQuestion(store, sessionId, { text: BARE }, { ...options, llm });
-      expect('followup' in step).toBe(true);
-      const next = answerFollowup(store, sessionId, { skip: true }, options);
-      expect(isQuestion(next)).toBe(true);
+    // v2 policy: a bare evaluation (no clue) gets at most 1 follow-up across
+    // the entire interview. The first bare answer triggers a follow-up...
+    const step1 = await answerQuestion(store, sessionId, { text: BARE }, { ...options, llm });
+    expect('followup' in step1).toBe(true);
+    answerFollowup(store, sessionId, { skip: true }, options);
+    expect(llm.calls).toHaveLength(1);
+
+    // ...but the second bare answer does NOT get a follow-up (bare-eval cap).
+    const step2 = await answerQuestion(store, sessionId, { text: BARE }, { ...options, llm });
+    expect(isQuestion(step2)).toBe(true);
+    expect('followup' in step2).toBe(false);
+    expect(llm.calls).toHaveLength(1);
+
+    // An answer with a clue still gets a follow-up (budget not yet exhausted).
+    const CLUE = '记得有一次他帮了我';
+    const step3 = await answerQuestion(store, sessionId, { text: CLUE }, { ...options, llm });
+    expect('followup' in step3).toBe(true);
+    answerFollowup(store, sessionId, { skip: true }, options);
+
+    // After MAX_FOLLOWUPS_PER_SESSION calls, the budget is exhausted.
+    let calls = llm.calls.length;
+    for (let i = calls; i < MAX_FOLLOWUPS_PER_SESSION; i++) {
+      await answerQuestion(store, sessionId, { text: CLUE }, { ...options, llm });
+      answerFollowup(store, sessionId, { skip: true }, options);
     }
     expect(llm.calls).toHaveLength(MAX_FOLLOWUPS_PER_SESSION);
 
-    // The sixth potential follow-up must not reach the model at all.
-    const sixth = await answerQuestion(store, sessionId, { text: BARE }, { ...options, llm });
-    expect(isQuestion(sixth)).toBe(true);
-    expect('followup' in sixth).toBe(false);
+    // Beyond the budget, even a clue-bearing answer gets no follow-up.
+    const beyond = await answerQuestion(store, sessionId, { text: CLUE }, { ...options, llm });
+    expect(isQuestion(beyond)).toBe(true);
+    expect('followup' in beyond).toBe(false);
     expect(llm.calls).toHaveLength(MAX_FOLLOWUPS_PER_SESSION);
   });
 
