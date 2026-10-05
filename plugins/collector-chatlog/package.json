@@ -1,0 +1,15 @@
+{
+  "name": "@openmimic/collector-chatlog",
+  "version": "0.0.1",
+  "private": true,
+  "description": "Chat log importer: parse WeChat/generic text/CSV/JSON chat exports, extract the subject's own words into the corpus.",
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "dependencies": {
+    "@openmimic/kernel": "*",
+    "@openmimic/shared": "*",
+    "@openmimic/server": "*"
+  }
+}
