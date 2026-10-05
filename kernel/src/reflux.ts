@@ -179,6 +179,17 @@ export function screenReflux(
 
   const incoming = computeFingerprint('__screen__', '', text);
 
+  // Always compute best minhash similarity (needed for all return paths)
+  let bestSimilarity: number | undefined;
+  let bestArtifactId: string | undefined;
+  for (const candidate of candidates) {
+    const sim = minhashSimilarity(incoming.minhashSig, candidate.minhashSig);
+    if (bestSimilarity === undefined || sim > bestSimilarity) {
+      bestSimilarity = sim;
+      bestArtifactId = candidate.artifactId;
+    }
+  }
+
   // Pass 1: exact synthetic claim hash match
   for (const candidate of candidates) {
     const tainted = new Set(candidate.syntheticClaimHashes);
@@ -187,27 +198,20 @@ export function screenReflux(
         suspicion: 'high',
         matchedArtifactId: candidate.artifactId,
         signal: 'synthetic_claim',
+        similarity: bestSimilarity,
       };
     }
   }
 
-  // Pass 2: MinHash similarity
-  let best: { artifactId: string; similarity: number } | null = null;
-  for (const candidate of candidates) {
-    const similarity = minhashSimilarity(incoming.minhashSig, candidate.minhashSig);
-    if (!best || similarity > best.similarity) {
-      best = { artifactId: candidate.artifactId, similarity };
-    }
-  }
-
-  if (best && best.similarity >= REFLUX_THRESHOLD) {
+  // Pass 2: MinHash similarity threshold
+  if (bestSimilarity !== undefined && bestSimilarity >= REFLUX_THRESHOLD) {
     return {
       suspicion: 'low',
-      matchedArtifactId: best.artifactId,
+      matchedArtifactId: bestArtifactId,
       signal: 'minhash',
-      similarity: best.similarity,
+      similarity: bestSimilarity,
     };
   }
 
-  return { suspicion: 'none' };
+  return { suspicion: 'none', similarity: bestSimilarity };
 }

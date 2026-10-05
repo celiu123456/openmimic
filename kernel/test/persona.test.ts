@@ -384,6 +384,11 @@ describe('assemblePersonaContext v2', () => {
     expect(systemPrompt).toContain('守时');
     expect(systemPrompt).toContain('不主动断言任何一方的说法');
     expect(meta.divergenceCount).toBe(1);
+    // Position summaries must NOT appear (may contain private details)
+    expect(systemPrompt).not.toContain('从不迟到');
+    expect(systemPrompt).not.toContain('经常迟到');
+    // Witness names appear instead
+    expect(systemPrompt).toContain('说法不一');
   });
 
   it('round-robin episodes by witness when no query is given', async () => {
@@ -678,8 +683,14 @@ describe('assemblePersonaContext v2', () => {
     addClaim(store, 'c1', '林默沉默。', ['t1'], 0.8);
 
     const { systemPrompt } = await assemblePersonaContext(SUBJECT, store);
-    expect(systemPrompt).toContain('被问到的事不在上面的素材里,就按本人口吻说记不清或不接,不要补细节');
-    expect(systemPrompt).toContain('素材里有的事,可以用自己的口吻简短地说');
+    // No-fabrication rules (moved to end of discipline for model sensitivity)
+    expect(systemPrompt).toContain('被问到的事不在上面的素材里,就按本人口吻说记不清或不接');
+    expect(systemPrompt).toContain('只说素材里写明的部分——不补原因、结果、时间、数量和别处的细节');
+    expect(systemPrompt).toContain('不同人讲的事不要拼在一起');
+    // Confidentiality rule
+    expect(systemPrompt).toContain('被嘱咐保密的事');
+    expect(systemPrompt).toContain('这事不方便说');
+    // Observer guard must not be present
     expect(systemPrompt).not.toContain('AI观测者硬边界');
     expect(systemPrompt).not.toContain('我观察到');
   });
@@ -697,5 +708,139 @@ describe('assemblePersonaContext v2', () => {
     expect(meta.sectionBudgets!.corpus).toBeDefined();
     expect(meta.sectionBudgets!.selfReport).toBeDefined();
     expect(meta.sectionBudgets!.style).toBeDefined();
+  });
+
+  it('private content is excluded from persona prompt', async () => {
+    seedSubject(store);
+    addWitness(store, 'w-faxiao', '发小');
+    addWitness(store, 'w-mama', '母亲');
+    // Testimony with private marker ("千万别跟他妈提" contains "千万别")
+    const behindText =
+      '他花钱大方。上个月他半夜给我打电话,借了两万,说手头周转一下。还嘱咐我千万别跟他妈提。';
+    addTestimony(store, 't1', 'w-faxiao', behindText);
+    addTestimony(store, 't2', 'w-mama', '他跟我说什么都说。他最近工作挺忙的。');
+    // Private claim (mentions borrowing money)
+    addClaim(store, 'c-private', '林默半夜借了两万。', ['t1'], 0.9, {
+      witnessIds: ['w-faxiao'],
+    });
+    // Normal claim (should survive)
+    addClaim(store, 'c-normal', '林默花钱大方。', ['t1'], 0.8, {
+      witnessIds: ['w-faxiao'],
+    });
+    // Episode containing private info
+    store.putEpisode({
+      id: 'ep-private',
+      subjectId: SUBJECT,
+      witnessId: 'w-faxiao',
+      testimonyId: 't1',
+      qid: 'q1',
+      text: '上个月他半夜给我打电话,借了两万,说手头周转一下',
+      elicited: false,
+    });
+    // Normal episode
+    store.putEpisode({
+      id: 'ep-normal',
+      subjectId: SUBJECT,
+      witnessId: 'w-faxiao',
+      testimonyId: 't1',
+      qid: 'q1',
+      text: '他花钱大方',
+      elicited: false,
+    });
+    // Divergence with private content in position summary
+    store.putDivergence({
+      id: 'div-priv',
+      subjectId: SUBJECT,
+      courtSessionId: 'court-1',
+      topic: '经济状况',
+      type: 'factual',
+      positions: [
+        { witnessId: 'w-faxiao', claimId: 'c-private', summary: '已辞职,半夜借过两万' },
+        { witnessId: 'w-mama', claimId: 'c-normal', summary: '经济没问题' },
+      ],
+      resolution: 'unresolved',
+    });
+
+    // Corpus item echoing confidential context (subject's own words)
+    store.putCorpusItem({
+      id: 'corpus-priv',
+      subjectId: SUBJECT,
+      text: '你可别跟我妈说。',
+      source: 'pasted',
+      createdAt: new Date().toISOString(),
+    });
+    // Normal corpus item (should survive)
+    store.putCorpusItem({
+      id: 'corpus-safe',
+      subjectId: SUBJECT,
+      text: '太累了,想歇一段时间。',
+      source: 'pasted',
+      createdAt: new Date().toISOString(),
+    });
+
+    const { systemPrompt } = await assemblePersonaContext(SUBJECT, store);
+
+    // Private content MUST NOT appear anywhere in the prompt
+    expect(systemPrompt).not.toContain('两万');
+    expect(systemPrompt).not.toContain('别跟他妈');
+    expect(systemPrompt).not.toContain('千万别');
+    // The private divergence should be filtered out entirely
+    // (its position summary contains "两万" which is a private key phrase)
+    expect(systemPrompt).not.toContain('已辞职');
+    // Private corpus item must also be filtered
+    expect(systemPrompt).not.toContain('你可别跟我妈说');
+    // Normal claim should survive
+    expect(systemPrompt).toContain('花钱大方');
+    // Normal episode should survive
+    expect(systemPrompt).toContain('花钱大方');
+    // Normal corpus item should survive
+    expect(systemPrompt).toContain('太累了');
+  });
+
+  it('same-topic divergences are merged', async () => {
+    seedSubject(store);
+    addWitness(store, 'w1', '发小');
+    addWitness(store, 'w2', '母亲');
+    addWitness(store, 'w3', '前女友');
+    addTestimony(store, 't1', 'w1', '他花钱很大方。');
+    addTestimony(store, 't2', 'w2', '他花钱很节省。');
+    addTestimony(store, 't3', 'w3', '他花钱精打细算。');
+    addClaim(store, 'c1', '林默花钱大方。', ['t1'], 0.8);
+    addClaim(store, 'c2', '林默花钱节省。', ['t2'], 0.8);
+    addClaim(store, 'c3', '林默精打细算。', ['t3'], 0.8);
+
+    // Two divergences with the same topic
+    store.putDivergence({
+      id: 'div-1',
+      subjectId: SUBJECT,
+      courtSessionId: 'court-1',
+      topic: '消费态度',
+      type: 'factual',
+      positions: [
+        { witnessId: 'w1', claimId: 'c1', summary: '大方' },
+        { witnessId: 'w2', claimId: 'c2', summary: '节省' },
+      ],
+      resolution: 'unresolved',
+    });
+    store.putDivergence({
+      id: 'div-2',
+      subjectId: SUBJECT,
+      courtSessionId: 'court-1',
+      topic: '消费态度',
+      type: 'factual',
+      positions: [
+        { witnessId: 'w1', claimId: 'c1', summary: '大方' },
+        { witnessId: 'w3', claimId: 'c3', summary: '精打细算' },
+      ],
+      resolution: 'unresolved',
+    });
+
+    const { systemPrompt, meta } = await assemblePersonaContext(SUBJECT, store);
+
+    // After merging, "消费态度" should appear exactly once in the prompt
+    const topicMatches = systemPrompt.match(/消费态度/g) ?? [];
+    expect(topicMatches.length).toBe(1);
+    // Merged divergence should show all three witnesses
+    expect(meta.divergenceCount).toBe(1);
   });
 });

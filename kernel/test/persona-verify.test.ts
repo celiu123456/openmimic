@@ -1,0 +1,158 @@
+/**
+ * Output-side persona verification tests.
+ *
+ * Uses a fake LLM that returns canned responses to verify the
+ * pre-screen → verify → rewrite → re-verify → fallback pipeline.
+ */
+import { describe, expect, it } from 'vitest';
+import { verifyPersonaResponse } from '@openmimic/kernel';
+
+/* ------------------------------------------------------------------ */
+/* Helpers                                                             */
+/* ------------------------------------------------------------------ */
+
+function fakeLLM(responses: string[]) {
+  let i = 0;
+  return {
+    complete: async () => responses[i++] ?? '{"unfounded": []}',
+  };
+}
+
+const SAMPLE_SYSTEM_PROMPT = `你正在扮演林默。
+## 他在不同人面前
+- 林默在压力大的时候习惯自己扛。（置信 0.80）
+## 别人讲过的事
+- 发小: 他帮周野搬过家,加班到十点还是来了,搬完在楼道里坐着缓了二十分钟。
+## 行为纪律
+- 说话像真人...`;
+
+/* ------------------------------------------------------------------ */
+/* Tests                                                               */
+/* ------------------------------------------------------------------ */
+
+describe('verifyPersonaResponse', () => {
+  it('pre-screens short/vague responses without LLM call', async () => {
+    const result = await verifyPersonaResponse({
+      systemPrompt: SAMPLE_SYSTEM_PROMPT,
+      userMessage: '最近怎么样？',
+      response: '还行吧。',
+      llm: fakeLLM([]),
+      displayName: '林默',
+    });
+    expect(result.verified).toBe(false);
+    expect(result.passed).toBe(true);
+    expect(result.verifyCallCount).toBe(0);
+    expect(result.finalResponse).toBe('还行吧。');
+  });
+
+  it('verifies responses with factual content and passes when grounded', async () => {
+    const result = await verifyPersonaResponse({
+      systemPrompt: SAMPLE_SYSTEM_PROMPT,
+      userMessage: '听说你帮周野搬过家？',
+      response: '嗯,搬过。加班到十点还是去了。',
+      llm: fakeLLM(['{"unfounded": []}']),
+      displayName: '林默',
+    });
+    expect(result.verified).toBe(true);
+    expect(result.passed).toBe(true);
+    expect(result.verifyCallCount).toBe(1);
+  });
+
+  it('detects unfounded content and rewrites', async () => {
+    const result = await verifyPersonaResponse({
+      systemPrompt: SAMPLE_SYSTEM_PROMPT,
+      userMessage: '听说你帮周野搬过家？',
+      response: '嗯,搬过。他腰不好,重的我来。',
+      llm: fakeLLM([
+        '{"unfounded": ["他腰不好,重的我来"]}',
+        '嗯,搬过。',
+        '{"unfounded": []}',
+      ]),
+      displayName: '林默',
+    });
+    expect(result.verified).toBe(true);
+    expect(result.passed).toBe(false);
+    expect(result.unfoundedFragments).toEqual(['他腰不好,重的我来']);
+    expect(result.finalResponse).toBe('嗯,搬过。');
+    expect(result.verifyCallCount).toBe(3); // verify + rewrite + re-verify
+  });
+
+  it('falls back when rewrite still has unfounded content', async () => {
+    const result = await verifyPersonaResponse({
+      systemPrompt: SAMPLE_SYSTEM_PROMPT,
+      userMessage: '你大学在哪上的？',
+      response: '在北京,学的计算机。',
+      llm: fakeLLM([
+        '{"unfounded": ["在北京,学的计算机"]}',
+        '好像是在北京吧。',
+        '{"unfounded": ["在北京"]}',
+      ]),
+      displayName: '林默',
+    });
+    expect(result.verified).toBe(true);
+    expect(result.passed).toBe(false);
+    expect(result.finalResponse).toBe('记不太清了。');
+    expect(result.verifyCallCount).toBe(3);
+  });
+
+  it('pre-screens dodge responses without LLM call', async () => {
+    const result = await verifyPersonaResponse({
+      systemPrompt: SAMPLE_SYSTEM_PROMPT,
+      userMessage: '你大学在哪？',
+      response: '记不太清了。',
+      llm: fakeLLM([]),
+      displayName: '林默',
+    });
+    expect(result.verified).toBe(false);
+    expect(result.passed).toBe(true);
+    expect(result.verifyCallCount).toBe(0);
+  });
+
+  it('respects PERSONA_VERIFY=0 env var', async () => {
+    const orig = process.env.PERSONA_VERIFY;
+    process.env.PERSONA_VERIFY = '0';
+    try {
+      const result = await verifyPersonaResponse({
+        systemPrompt: SAMPLE_SYSTEM_PROMPT,
+        userMessage: '听说你帮周野搬过家？',
+        response: '嗯,搬过。他腰不好,重的我来。',
+        llm: fakeLLM(['should not be called']),
+        displayName: '林默',
+      });
+      expect(result.verified).toBe(false);
+      expect(result.passed).toBe(true);
+      expect(result.verifyCallCount).toBe(0);
+      expect(result.finalResponse).toBe('嗯,搬过。他腰不好,重的我来。');
+    } finally {
+      if (orig !== undefined) process.env.PERSONA_VERIFY = orig;
+      else delete process.env.PERSONA_VERIFY;
+    }
+  });
+
+  it('pre-screens "嗯" without LLM call', async () => {
+    const result = await verifyPersonaResponse({
+      systemPrompt: SAMPLE_SYSTEM_PROMPT,
+      userMessage: '你还好吗？',
+      response: '嗯。',
+      llm: fakeLLM([]),
+      displayName: '林默',
+    });
+    expect(result.verified).toBe(false);
+    expect(result.passed).toBe(true);
+    expect(result.verifyCallCount).toBe(0);
+  });
+
+  it('handles malformed LLM JSON gracefully', async () => {
+    const result = await verifyPersonaResponse({
+      systemPrompt: SAMPLE_SYSTEM_PROMPT,
+      userMessage: '你帮过谁搬家？',
+      response: '帮过周野,那天加班到十点。',
+      llm: fakeLLM(['this is not json at all']),
+      displayName: '林默',
+    });
+    // Malformed JSON → parsed as empty unfounded → passes
+    expect(result.verified).toBe(true);
+    expect(result.passed).toBe(true);
+    expect(result.verifyCallCount).toBe(1);
+  });
+});

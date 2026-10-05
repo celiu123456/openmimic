@@ -2,20 +2,25 @@
 /**
  * Phase-2 regression run for deferred-wiring batch (2026-10-06).
  *
- * Runs four steps sequentially:
+ * Runs four steps sequentially (or dialogue-only with --dialogue-only):
  *   A. Court v2 for 林默 — claim/divergence/pre-judgment stats
  *   B. Behind room + openDoor — leak/tier/disclosure audit
  *   C. 6 rounds persona dialogue via OpenAI-compatible endpoint (in-process)
- *      with per-answer evidence verification
+ *      with per-answer output-side verification (verifyPersonaResponse)
  *   D. Reflux fingerprint test — submit room line as testimony, verify detection
+ *
+ * Flags:
+ *   --dialogue-only  Skip court/room/reflux, reuse seedDemo data, only run
+ *                    dialogue phase with per-round evidence marking.
+ *   --suffix <s>     Output file suffix (default: 'b')
+ *   --append         Append results as new section (preserve existing file)
  *
  * Output: docs/regression-run-20261006b.md (suffix configurable via --suffix)
  *
  * Usage:
- *   LLM_BUDGET_TOKENS=250000 npx tsx scripts/regression-run.ts
+ *   LLM_BUDGET_TOKENS=80000 npx tsx scripts/regression-run.ts --dialogue-only --append
  */
 import { writeFileSync, readFileSync } from 'node:fs';
-import { randomUUID } from 'node:crypto';
 import { resolve } from 'node:path';
 import {
   Store,
@@ -23,8 +28,7 @@ import {
   assemblePersonaContext,
   computeFingerprint,
   screenReflux,
-  deriveDisclosure,
-  classifyContentSubject,
+  verifyPersonaResponse,
 } from '@openmimic/kernel';
 import {
   OpenAICompatClient,
@@ -38,7 +42,6 @@ import {
 import {
   seedDemo,
   DEMO_SUBJECT_ID,
-  DEMO_WITNESSES,
 } from '../fixtures/limo';
 import type { RoomUtterance } from '@openmimic/shared';
 import {
@@ -67,6 +70,9 @@ const md: string[] = [];
 function log(s: string) { console.log(s); md.push(s); }
 function section(title: string) { log(''); log(`## ${title}`); log(''); }
 
+const dialogueOnly = process.argv.includes('--dialogue-only');
+const appendMode = process.argv.includes('--append');
+
 async function main() {
   const baseUrl = process.env.LLM_BASE_URL;
   const apiKey = process.env.LLM_API_KEY;
@@ -92,9 +98,25 @@ async function main() {
     process.exit(1);
   }
 
+  const dialogueOnly = process.argv.includes('--dialogue-only');
+  const appendMode = process.argv.includes('--append');
+
   // Seed 林默
   seedDemo(store);
   const subjectId = DEMO_SUBJECT_ID;
+
+  const witnesses = store.listWitnessesBySubject(subjectId);
+  const witnessRel = new Map(witnesses.map(w => [w.id, w.relation]));
+
+  /* eslint-disable @typescript-eslint/no-explicit-any */
+  let report: any;
+  let room: any;
+  let frontTranscript: RoomUtterance[] = [];
+  let roomStats: RoomStats | undefined;
+  let sampleUtterance: RoomUtterance | undefined;
+  /* eslint-enable @typescript-eslint/no-explicit-any */
+
+  if (!dialogueOnly) {
 
   // ================================================================
   // Phase 2A: Court
@@ -103,7 +125,7 @@ async function main() {
 
   console.log('Running court v2...');
   const courtSession = await runCourt(subjectId, store, chat);
-  const report = courtSession.report!;
+  report = courtSession.report!;
 
   log(`Total claims: ${report.totalClaims}`);
   log(`Surviving: ${report.surviving}`);
@@ -117,9 +139,6 @@ async function main() {
   // Breakdown
   const claims = store.listClaimsBySubject(subjectId);
   const divergences = store.listDivergencesBySubject(subjectId);
-  const episodes = store.listEpisodesBySubject(subjectId);
-  const witnesses = store.listWitnessesBySubject(subjectId);
-  const witnessRel = new Map(witnesses.map(w => [w.id, w.relation]));
 
   log('');
   log('### Divergence Type Breakdown');
@@ -193,8 +212,7 @@ async function main() {
   section('Phase 2B: Behind Room + Open Door');
 
   console.log('Running behind room...');
-  let roomStats: RoomStats | undefined;
-  const room = await runBehindRoom(subjectId, store, chat, {
+  room = await runBehindRoom(subjectId, store, chat, {
     onStats: (s) => { roomStats = s; },
   });
 
@@ -202,7 +220,7 @@ async function main() {
 
   console.log('Opening door...');
   const doorRoom = await openDoor(room.id, store, chat);
-  const frontTranscript = doorRoom.frontTranscript ?? [];
+  frontTranscript = doorRoom.frontTranscript ?? [];
   log(`Front utterances: ${frontTranscript.length}`);
 
   // Tier audit
@@ -277,8 +295,8 @@ async function main() {
   log('| # | Speaker | Text | Tier | Leak? | Notes |');
   log('|---|---------|------|------|-------|-------|');
   const allUtt = [
-    ...room.behindTranscript.map(u => ({ ...u, mode: 'behind' as const })),
-    ...frontTranscript.map(u => ({ ...u, mode: 'front' as const })),
+    ...room.behindTranscript.map((u: RoomUtterance) => ({ ...u, mode: 'behind' as const })),
+    ...frontTranscript.map((u: RoomUtterance) => ({ ...u, mode: 'front' as const })),
   ];
   for (let i = 0; i < allUtt.length; i++) {
     const u = allUtt[i]!;
@@ -316,6 +334,12 @@ async function main() {
   }
   log(`Total claims in persona: ${meta.includedClaimIds.length}`);
   log(`Prompt length: ${systemPrompt.length} chars`);
+
+  sampleUtterance = room.behindTranscript.find(
+    (u: RoomUtterance) => u.kind !== 'stage' && u.text.length > 20,
+  );
+
+  } // end if (!dialogueOnly) — court + room phases
 
   // ================================================================
   // Phase 2C: Persona Dialogue (6 rounds, in-process)
@@ -356,6 +380,24 @@ async function main() {
   log(`Self-report: ${personaMeta.selfReportIncluded}`);
   log(`Divergences: ${personaMeta.divergenceCount}`);
   log(`Truncated: ${personaMeta.truncated}`);
+
+  // --- Private content audit ---
+  log('');
+  log('### Private Content Audit');
+  log('');
+  const privateKeywords = ['两万', '别跟他妈', '千万别', '借了', '借钱', '辞职'];
+  let privateLeakCount = 0;
+  for (const kw of privateKeywords) {
+    if (personaPromptFull.includes(kw)) {
+      log(`LEAK: persona prompt contains private keyword "${kw}"`);
+      privateLeakCount++;
+    }
+  }
+  if (privateLeakCount === 0) {
+    log('PASS: no private keywords found in persona prompt');
+  } else {
+    log(`FAIL: ${privateLeakCount} private keyword(s) leaked into persona prompt`);
+  }
   if (personaMeta.sectionBudgets) {
     log('');
     log('### Section Budget Allocation');
@@ -395,15 +437,46 @@ async function main() {
       // Strip stage brackets
       const stageMatches = reply.match(STAGE_BRACKET_RE);
       reply = reply.replace(STAGE_BRACKET_RE, '').replace(/\s{2,}/g, ' ').trim();
-      conversationMessages.push({ role: 'assistant', content: reply });
-      dialogueSuccess++;
 
       log(`**Round ${i + 1}**`);
       log(`User: ${userMsg}`);
-      log(`Persona: ${reply}`);
+      log(`Persona (raw): ${reply}`);
       if (stageMatches) {
         log(`Stage brackets stripped: ${stageMatches.join(', ')}`);
       }
+
+      // --- Output-side verification ---
+      const verifyResult = await verifyPersonaResponse({
+        systemPrompt: persTurn,
+        userMessage: userMsg,
+        response: reply,
+        llm: {
+          complete: async (opts) => chat.complete({
+            system: opts.system,
+            user: opts.user,
+            purpose: opts.purpose,
+            maxTokens: opts.maxTokens,
+          }),
+        },
+        displayName: '林默',
+      });
+      if (verifyResult.verified) {
+        log(`Output-side verification: ${verifyResult.passed ? 'PASS' : 'FAIL'} (${verifyResult.verifyCallCount} LLM calls)`);
+        if (verifyResult.unfoundedFragments.length > 0) {
+          log(`  Unfounded fragments: ${verifyResult.unfoundedFragments.join('; ')}`);
+        }
+        if (verifyResult.finalResponse !== reply) {
+          log(`  Rewritten response: ${verifyResult.finalResponse}`);
+          reply = verifyResult.finalResponse;
+        }
+      } else {
+        log(`Output-side verification: SKIPPED (pre-screen pass)`);
+      }
+
+      conversationMessages.push({ role: 'assistant', content: reply });
+      dialogueSuccess++;
+
+      log(`Persona (final): ${reply}`);
 
       // Evidence verification: check reply content against the evidence in the persona prompt
       const checks: string[] = [];
@@ -437,11 +510,9 @@ async function main() {
       }
       // Round 6: out-of-evidence - should dodge, not fabricate
       if (i === 5) {
-        // The demo data does not contain university info; reply should express uncertainty
-        if (/记不清|不记得|忘了|不太确定|这个.*说不好|不太想说/.test(reply)) {
+        if (/记不.*清|不记得|忘了|不太确定|这个.*说不好|不太想说|不方便说/.test(reply)) {
           checks.push('PASS: dodged out-of-evidence question');
         } else if (reply.length > 5) {
-          // Check if it seems to fabricate specific details
           if (/大学|专业|城市|学校/.test(reply) && reply.length > 30) {
             checks.push('WARN: may have fabricated university details (not in evidence)');
           } else {
@@ -451,12 +522,25 @@ async function main() {
       }
       // Round 1-3: check that reply is grounded in persona evidence
       if (i < 3 && personaPromptFull.length > 0) {
-        const replyChars = [...new Set(reply.replace(/[，。！？、\s]/g, ''))];
-        // Very basic check: reply should be short (persona-like) not a lecture
         if (reply.length > 300) {
           checks.push('WARN: reply is long (>300 chars), may not sound human');
         }
       }
+
+      // --- Per-answer evidence verdict (有据/无据/部分无据) ---
+      if (verifyResult.verified && !verifyResult.passed) {
+        if (verifyResult.finalResponse === '记不太清了。') {
+          checks.push('判定: 无据（原回答被替换为保守回答）');
+        } else {
+          checks.push(`判定: 部分无据（无据片段: ${verifyResult.unfoundedFragments.join('; ')}）`);
+        }
+      } else if (verifyResult.verified && verifyResult.passed) {
+        checks.push('判定: 有据');
+      } else {
+        // Pre-screen pass: short/vague reply, inherently safe
+        checks.push('判定: 有据（低信息量回答,免检）');
+      }
+
       if (checks.length > 0) {
         log(`Evidence checks:`);
         for (const c of checks) log(`  - ${c}`);
@@ -472,12 +556,8 @@ async function main() {
   // ================================================================
   // Phase 2D: Reflux Fingerprint Test
   // ================================================================
+  if (!dialogueOnly) {
   section('Phase 2D: Reflux Fingerprint Test');
-
-  // Pick a room line to test reflux
-  const sampleUtterance = room.behindTranscript.find(
-    u => u.kind !== 'stage' && u.text.length > 20,
-  );
 
   if (!sampleUtterance) {
     log('SKIP: no suitable behind-room utterance found for reflux test');
@@ -492,7 +572,7 @@ async function main() {
     const roomFingerprint = computeFingerprint(
       `room:${room.id}`,
       subjectId,
-      room.behindTranscript.filter(u => u.kind !== 'stage').map(u => u.text).join('\n'),
+      room.behindTranscript.filter((u: RoomUtterance) => u.kind !== 'stage').map((u: RoomUtterance) => u.text).join('\n'),
     );
     store.putFingerprint(roomFingerprint);
 
@@ -551,7 +631,8 @@ async function main() {
     } else {
       log(`WARNING: false positive on fresh text`);
     }
-  }
+  } // end reflux section
+  } // end if (!dialogueOnly) — reflux + room phases
 
   // ================================================================
   // Summary
@@ -585,30 +666,34 @@ async function main() {
   if (personaMeta.charCount <= PERSONA_PROMPT_BUDGET) verdicts.push(`E-persona-budget: PASS (${personaMeta.charCount}/${PERSONA_PROMPT_BUDGET} chars)`);
   else verdicts.push(`E-persona-budget: FAIL (${personaMeta.charCount} > ${PERSONA_PROMPT_BUDGET} budget)`);
 
-  // A: court
-  if (report.surviving > 0) verdicts.push('A-court: PASS');
-  else verdicts.push('A-court: FAIL (no surviving claims)');
-  if ((report.preJudgedPairs ?? 0) > 0) verdicts.push('A-pre-judge: PASS (classifyPair active)');
-  else verdicts.push('A-pre-judge: INFO (no pre-judged pairs — may need evaluative claims)');
+  if (!dialogueOnly) {
+    // A: court
+    if (report.surviving > 0) verdicts.push('A-court: PASS');
+    else verdicts.push('A-court: FAIL (no surviving claims)');
+    if ((report.preJudgedPairs ?? 0) > 0) verdicts.push('A-pre-judge: PASS (classifyPair active)');
+    else verdicts.push('A-pre-judge: INFO (no pre-judged pairs — may need evaluative claims)');
 
-  // B: room
-  if (room.behindTranscript.length > 0) verdicts.push('B-behind: PASS');
-  else verdicts.push('B-behind: FAIL (empty transcript)');
-  if (frontTranscript.length > 0) verdicts.push('B-front: PASS');
-  else verdicts.push('B-front: FAIL (empty front transcript)');
+    // B: room
+    if (room.behindTranscript.length > 0) verdicts.push('B-behind: PASS');
+    else verdicts.push('B-behind: FAIL (empty transcript)');
+    if (frontTranscript.length > 0) verdicts.push('B-front: PASS');
+    else verdicts.push('B-front: FAIL (empty front transcript)');
+  }
 
   // C: dialogue
   if (dialogueSuccess === dialoguePrompts.length) verdicts.push(`C-dialogue: PASS (${dialogueSuccess}/${dialoguePrompts.length})`);
   else verdicts.push(`C-dialogue: PARTIAL (${dialogueSuccess}/${dialoguePrompts.length})`);
 
-  // D: reflux
-  if (sampleUtterance) {
-    const fps = store.listFingerprints(subjectId);
-    const check = screenReflux(sampleUtterance.text, fps);
-    if (check.suspicion !== 'none') verdicts.push('D-reflux: PASS');
-    else verdicts.push('D-reflux: FAIL (room line not detected)');
-  } else {
-    verdicts.push('D-reflux: SKIP');
+  if (!dialogueOnly) {
+    // D: reflux
+    if (sampleUtterance) {
+      const fps = store.listFingerprints(subjectId);
+      const check = screenReflux(sampleUtterance.text, fps);
+      if (check.suspicion !== 'none') verdicts.push('D-reflux: PASS');
+      else verdicts.push('D-reflux: FAIL (room line not detected)');
+    } else {
+      verdicts.push('D-reflux: SKIP');
+    }
   }
 
   for (const v of verdicts) log(`- ${v}`);
@@ -616,7 +701,14 @@ async function main() {
   // Write output
   const suffix = process.argv.includes('--suffix') ? process.argv[process.argv.indexOf('--suffix') + 1] : 'b';
   const outPath = resolve(process.cwd(), `docs/regression-run-20261006${suffix}.md`);
-  writeFileSync(outPath, md.join('\n') + '\n', 'utf-8');
+  if (appendMode) {
+    let existing = '';
+    try { existing = readFileSync(outPath, 'utf-8'); } catch { /* file may not exist */ }
+    const separator = '\n\n---\n\n';
+    writeFileSync(outPath, existing + separator + md.join('\n') + '\n', 'utf-8');
+  } else {
+    writeFileSync(outPath, md.join('\n') + '\n', 'utf-8');
+  }
   console.log(`\nResults written to ${outPath}`);
   console.log('\n' + formatUsageSummary(usage));
 
@@ -635,7 +727,13 @@ main().catch((err) => {
     md.push(`Error: ${err instanceof Error ? err.message : String(err)}`);
     md.push('');
     md.push(formatUsageSummary());
-    writeFileSync(outPath, md.join('\n') + '\n', 'utf-8');
+    if (process.argv.includes('--append')) {
+      let existing = '';
+      try { existing = readFileSync(outPath, 'utf-8'); } catch { /* ok */ }
+      writeFileSync(outPath, existing + '\n\n---\n\n' + md.join('\n') + '\n', 'utf-8');
+    } else {
+      writeFileSync(outPath, md.join('\n') + '\n', 'utf-8');
+    }
     console.error(`Partial results written to ${outPath}`);
   } catch { /* best effort */ }
   if (err instanceof BudgetExceededError || err instanceof InsufficientBalanceError) {
