@@ -289,12 +289,29 @@ export interface StabilityCurvePoint {
   witnessIdSets: string[][];
 }
 
+/** v2 curve point: each subset run twice, report intra-subset stability. */
+export interface StabilityCurvePointV2 {
+  n: number;
+  subsets: Array<{
+    witnessIds: string[];
+    claimCounts: [number, number];
+    durationMs: [number, number];
+    overlapBigram: number;
+    overlapLlm?: number;
+  }>;
+  /** Mean intra-subset overlap across all subsets at this n. */
+  meanOverlapBigram: number;
+  meanOverlapLlm?: number;
+}
+
 export interface StabilityResult {
   subjectId: string;
   modelName: string;
   promptSha: string;
   repeat: StabilityRepeatResult;
   curve: StabilityCurvePoint[];
+  /** v2 curve: each subset run twice, measuring intra-subset stability. */
+  curveV2?: StabilityCurvePointV2[];
 }
 
 export interface StabilityOptions {
@@ -311,6 +328,10 @@ export interface StabilityOptions {
   progressFile?: string;
   /** LLM client for LLM-judge claim matching (optional; if set, both methods are reported). */
   matchLlm?: LLMClient;
+  /** Enable v2 curve: each subset run twice to measure intra-subset stability. */
+  curveV2?: boolean;
+  /** Number of subsets per n for v2 curve (default 2). */
+  curveV2Subsets?: number;
 }
 
 /* ------------------------------------------------------------------ */
@@ -553,12 +574,109 @@ export async function runStability(
     }
   }
 
+  /* ---- Witness count curve v2: intra-subset stability ---- */
+  const curveV2: StabilityCurvePointV2[] = [];
+
+  if (options.curveV2) {
+    const curveV2Subsets = options.curveV2Subsets ?? 2;
+    console.error(`[Stability] Running v2 curve (${curveV2Subsets} subsets, each run 2x)...`);
+
+    for (let n = 2; n <= witnesses.length; n++) {
+      console.error(`[Stability] CurveV2 n=${n}...`);
+      const subsetsList = randomSubsets(witnesses, n, curveV2Subsets);
+      const subsetResults: StabilityCurvePointV2['subsets'] = [];
+
+      for (let si = 0; si < subsetsList.length; si++) {
+        const subset = subsetsList[si];
+        const subsetIds = new Set(subset.map((w) => w.id));
+        const witnessIds = subset.map((w) => w.id);
+        console.error(`[Stability]   Subset ${si + 1}/${subsetsList.length} (n=${n}): ${witnessIds.join(',')}`);
+
+        const runClaims: Claim[][] = [];
+        const runClaimCounts: [number, number] = [0, 0];
+        const runDurations: [number, number] = [0, 0];
+
+        for (let run = 0; run < 2; run++) {
+          const tempStore = new StoreClass();
+          const subject = store.getSubject(subjectId);
+          if (subject) tempStore.putSubject(subject);
+          for (const w of subset) tempStore.putWitness(w);
+          for (const t of allTestimonies) {
+            if (subsetIds.has(t.witnessId)) tempStore.addTestimony(t);
+          }
+
+          try {
+            const courtStart = Date.now();
+            await adapterRunCourt(subjectId, tempStore, courtLlm);
+            const courtDurationMs = Date.now() - courtStart;
+
+            const claims = tempStore.listClaimsBySubject(subjectId);
+            const survivingCount = claims.filter((c) => c.status === 'surviving').length;
+            console.error(`[Stability]     Run ${run + 1}/2: ${survivingCount} surviving in ${(courtDurationMs / 1000).toFixed(1)}s`);
+
+            if (survivingCount === 0) {
+              throw new Error(`CurveV2 n=${n} subset ${si + 1} run ${run + 1} produced 0 surviving claims. Aborting.`);
+            }
+
+            runClaims.push(claims);
+            runClaimCounts[run] = survivingCount;
+            runDurations[run] = courtDurationMs;
+          } finally {
+            tempStore.close();
+          }
+        }
+
+        // Compute intra-subset overlap (2 runs of the same subset)
+        const bigramAB = matchClaims(runClaims[0], runClaims[1], similarity);
+        const bigramBA = matchClaims(runClaims[1], runClaims[0], similarity);
+        const overlapBigram = (bigramAB + bigramBA) / 2;
+
+        let overlapLlm: number | undefined;
+        if (options.matchLlm) {
+          const llmAB = await matchClaimsLlm(runClaims[0], runClaims[1], options.matchLlm);
+          const llmBA = await matchClaimsLlm(runClaims[1], runClaims[0], options.matchLlm);
+          overlapLlm = (llmAB + llmBA) / 2;
+        }
+
+        subsetResults.push({
+          witnessIds,
+          claimCounts: runClaimCounts,
+          durationMs: runDurations,
+          overlapBigram,
+          ...(overlapLlm !== undefined ? { overlapLlm } : {}),
+        });
+      }
+
+      const meanOverlapBigram = subsetResults.reduce((s, sr) => s + sr.overlapBigram, 0) / subsetResults.length;
+      const meanOverlapLlm = subsetResults.every((sr) => sr.overlapLlm !== undefined)
+        ? subsetResults.reduce((s, sr) => s + (sr.overlapLlm ?? 0), 0) / subsetResults.length
+        : undefined;
+
+      curveV2.push({
+        n,
+        subsets: subsetResults,
+        meanOverlapBigram,
+        ...(meanOverlapLlm !== undefined ? { meanOverlapLlm } : {}),
+      });
+
+      // Checkpoint
+      if (options.progressFile) {
+        saveStabilityCheckpoint(options.progressFile, {
+          repeatClaimTexts: repeatClaimSets.map(claimsToTexts),
+          curve,
+          repeatCourtStats: courtStatsArr,
+        });
+      }
+    }
+  }
+
   const result: StabilityResult = {
     subjectId,
     modelName: options.modelName,
     promptSha,
     repeat,
     curve,
+    ...(curveV2.length > 0 ? { curveV2 } : {}),
   };
 
   // Write run log
@@ -587,6 +705,7 @@ export async function runStability(
         overlapStddev: p.overlap.stddev,
         witnessIdSets: p.witnessIdSets,
       })),
+      ...(curveV2.length > 0 ? { curveV2 } : {}),
     },
     details: [],
   };
