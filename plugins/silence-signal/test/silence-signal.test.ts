@@ -67,15 +67,15 @@ describe('analyzeAvoidedQids', () => {
 
   it('detects a question skipped by >= half AND >= 3 witnesses', () => {
     const testimonies = [
-      { witnessId: 'w1', avoidedQids: ['q1'] },
-      { witnessId: 'w2', avoidedQids: ['q1'] },
-      { witnessId: 'w3', avoidedQids: ['q1'] },
-      { witnessId: 'w4', avoidedQids: [] },
-      { witnessId: 'w5', avoidedQids: [] },
+      { witnessId: 'w1', avoidedQids: ['q_deep'], answers: [{ qid: 'q_intro' }] },
+      { witnessId: 'w2', avoidedQids: ['q_deep'], answers: [{ qid: 'q_intro' }] },
+      { witnessId: 'w3', avoidedQids: ['q_deep'], answers: [{ qid: 'q_intro' }] },
+      { witnessId: 'w4', avoidedQids: [], answers: [{ qid: 'q_intro' }] },
+      { witnessId: 'w5', avoidedQids: [], answers: [{ qid: 'q_intro' }] },
     ];
     const result = analyzeAvoidedQids(testimonies);
     expect(result.length).toBe(1);
-    expect(result[0]!.qid).toBe('q1');
+    expect(result[0]!.qid).toBe('q_deep');
     expect(result[0]!.skipperIds).toHaveLength(3);
     expect(result[0]!.skipRatio).toBe(0.6);
     expect(result[0]!.totalWitnesses).toBe(5);
@@ -109,15 +109,15 @@ describe('analyzeAvoidedQids', () => {
 
   it('detects multiple avoided questions', () => {
     const testimonies = [
-      { witnessId: 'w1', avoidedQids: ['q1', 'q2'] },
-      { witnessId: 'w2', avoidedQids: ['q1', 'q2'] },
-      { witnessId: 'w3', avoidedQids: ['q1', 'q2'] },
-      { witnessId: 'w4', avoidedQids: [] },
+      { witnessId: 'w1', avoidedQids: ['q1_deep', 'q2_deep'], answers: [{ qid: 'q1_intro' }, { qid: 'q2_intro' }] },
+      { witnessId: 'w2', avoidedQids: ['q1_deep', 'q2_deep'], answers: [{ qid: 'q1_intro' }] },
+      { witnessId: 'w3', avoidedQids: ['q1_deep', 'q2_deep'], answers: [{ qid: 'q2_intro' }] },
+      { witnessId: 'w4', avoidedQids: [], answers: [{ qid: 'q1_intro' }] },
     ];
     const result = analyzeAvoidedQids(testimonies);
     expect(result.length).toBe(2);
     const qids = result.map((r) => r.qid).sort();
-    expect(qids).toEqual(['q1', 'q2']);
+    expect(qids).toEqual(['q1_deep', 'q2_deep']);
   });
 
   it('handles testimonies without avoidedQids field', () => {
@@ -133,17 +133,17 @@ describe('analyzeAvoidedQids', () => {
 
   it('sorts by skipRatio descending', () => {
     const testimonies = [
-      { witnessId: 'w1', avoidedQids: ['q1', 'q2'] },
-      { witnessId: 'w2', avoidedQids: ['q1', 'q2'] },
-      { witnessId: 'w3', avoidedQids: ['q1', 'q2'] },
-      { witnessId: 'w4', avoidedQids: ['q2'] },
-      { witnessId: 'w5', avoidedQids: [] },
-      { witnessId: 'w6', avoidedQids: [] },
+      { witnessId: 'w1', avoidedQids: ['q_a', 'q_b'], answers: [{ qid: 'q_intro' }] },
+      { witnessId: 'w2', avoidedQids: ['q_a', 'q_b'], answers: [{ qid: 'q_intro' }] },
+      { witnessId: 'w3', avoidedQids: ['q_a', 'q_b'], answers: [{ qid: 'q_intro' }] },
+      { witnessId: 'w4', avoidedQids: ['q_b'], answers: [{ qid: 'q_intro' }] },
+      { witnessId: 'w5', avoidedQids: [], answers: [{ qid: 'q_intro' }] },
+      { witnessId: 'w6', avoidedQids: [], answers: [{ qid: 'q_intro' }] },
     ];
-    // q1: 3/6 = 0.5, q2: 4/6 = 0.67
+    // q_a: 3/6 = 0.5, q_b: 4/6 = 0.67
     const result = analyzeAvoidedQids(testimonies);
-    expect(result[0]!.qid).toBe('q2');
-    expect(result[1]!.qid).toBe('q1');
+    expect(result[0]!.qid).toBe('q_b');
+    expect(result[1]!.qid).toBe('q_a');
   });
 });
 

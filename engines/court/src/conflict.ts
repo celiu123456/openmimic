@@ -284,4 +284,157 @@ export class LLMClaimPairFinder implements ClaimPairFinder {
   }
 }
 
+/* ------------------------------------------------------------------ */
+/* Deterministic pair pre-judgment (classifyPair)                      */
+/* ------------------------------------------------------------------ */
+
+/**
+ * Deterministic relation classification applied *before* the LLM
+ * relation judgment call. If a deterministic rule matches, the court
+ * can skip the LLM call entirely for that pair.
+ *
+ * Migrated from the old platform's `classifyPair` in
+ * `memory-contradiction-detector.service.ts`. Adapted to work with
+ * OpenMimic's Claim type (no personality entity, no DI).
+ *
+ * Relations (matching the old platform's taxonomy):
+ * - `perspective_differs`:  same subject, different observers → keep both
+ * - `retelling_diverges`:   same event retold by different witnesses with
+ *                           divergent details → keep both, flag divergence
+ * - `supersedes`:           later claim replaces an earlier one (time evolution)
+ * - `refines`:              one claim is a compatible detail extension of the other
+ * - `contradicts`:          mutually exclusive at the same time → true conflict
+ * - `null`:                 no deterministic rule matched → fall through to LLM
+ */
+export type PairPreJudgment =
+  | 'perspective_differs'
+  | 'retelling_diverges'
+  | 'supersedes'
+  | 'refines'
+  | 'contradicts';
+
+export interface PairPreJudgmentResult {
+  relation: PairPreJudgment;
+  confidence: number;
+  rule: string;
+}
+
+/**
+ * Check if two claims come from observers with different relationships
+ * (perspective differs). Different witnesses seeing the same person
+ * differently is expected, not a conflict.
+ */
+function isPerspectiveDifference(a: Claim, b: Claim): boolean {
+  // Different witnesses (already guaranteed by pair finders, but be safe)
+  const wA = a.witnessIds?.[0];
+  const wB = b.witnessIds?.[0];
+  if (!wA || !wB || wA === wB) return false;
+
+  // Both must have domain = 'evaluative' or context with different audiences
+  if (a.domain === 'evaluative' && b.domain === 'evaluative') return true;
+
+  // Different audience contexts → perspective difference
+  const audA = a.context?.audience;
+  const audB = b.context?.audience;
+  if (audA && audB && audA !== audB) return true;
+
+  return false;
+}
+
+/**
+ * Detect mutual exclusion at the keyword level.
+ *
+ * Looks for explicit negation patterns: one claim asserts X, the other
+ * asserts not-X. Very conservative — only triggers on clear antonym
+ * pairs (e.g. "喜欢运动" vs "不喜欢运动").
+ */
+function hasMutualExclusion(textA: string, textB: string): boolean {
+  // Check if one is the negation of the other (Chinese negation patterns)
+  const negations = ['不', '没有', '从不', '绝不', '毫不', '并不', '不再'];
+  for (const neg of negations) {
+    // If B contains neg+phrase that appears in A without neg
+    if (textA.includes(neg) !== textB.includes(neg)) {
+      // Check if removing the negation makes them overlap
+      const stripped = textA.includes(neg)
+        ? textA.replace(neg, '')
+        : textB.replace(neg, '');
+      const other = textA.includes(neg) ? textB : textA;
+      const strippedTokens = tokenize(stripped);
+      const otherTokens = tokenize(other);
+      let overlap = 0;
+      for (const t of strippedTokens) {
+        if (otherTokens.has(t)) overlap++;
+      }
+      // High overlap after stripping negation → mutual exclusion
+      if (overlap >= 3 && overlap >= strippedTokens.size * 0.4) return true;
+    }
+  }
+  return false;
+}
+
+/**
+ * Detect if one claim is a strict detail extension (refinement) of the other.
+ *
+ * Claim A refines Claim B when A's token set is a proper superset of B's
+ * content tokens (A says everything B says, plus more).
+ */
+function isRefinement(textA: string, textB: string): boolean {
+  const tokensA = tokenize(textA);
+  const tokensB = tokenize(textB);
+  if (tokensA.size <= tokensB.size) return false;
+
+  let containedCount = 0;
+  for (const t of tokensB) {
+    if (tokensA.has(t)) containedCount++;
+  }
+  // B must be substantially contained in A
+  return tokensB.size >= 2 && containedCount >= tokensB.size * 0.8;
+}
+
+/**
+ * Try to classify a claim pair deterministically before the LLM.
+ *
+ * Returns null when no deterministic rule matches (caller should
+ * proceed to LLM relation judgment).
+ *
+ * Time-based rules (`supersedes`, `retelling_diverges`) require the
+ * claims to have `context.period` set; without temporal information,
+ * they cannot fire.
+ */
+export function classifyPair(a: Claim, b: Claim): PairPreJudgmentResult | null {
+  // Rule 1: perspective differs (different evaluative viewpoints)
+  if (isPerspectiveDifference(a, b)) {
+    return { relation: 'perspective_differs', confidence: 0.82, rule: 'evaluative_different_observers' };
+  }
+
+  const textA = a.text;
+  const textB = b.text;
+
+  // Rule 2: mutual exclusion check
+  const exclusive = hasMutualExclusion(textA, textB);
+
+  // Time-based rules need period info
+  const periodA = a.context?.period;
+  const periodB = b.context?.period;
+  const hasBothPeriods = !!periodA && !!periodB;
+
+  if (exclusive && hasBothPeriods && periodA === periodB) {
+    // Same time + mutual exclusion → true contradiction
+    return { relation: 'contradicts', confidence: 0.80, rule: 'same_period_mutual_exclusion' };
+  }
+
+  if (exclusive && hasBothPeriods && periodA !== periodB) {
+    // Different time + mutual exclusion → time evolution (supersedes)
+    return { relation: 'supersedes', confidence: 0.76, rule: 'time_evolution_mutual_exclusion' };
+  }
+
+  // Rule 3: refinement (one is a detail extension of the other)
+  if (isRefinement(textA, textB) || isRefinement(textB, textA)) {
+    return { relation: 'refines', confidence: 0.68, rule: 'compatible_detail_extension' };
+  }
+
+  // No deterministic rule matched → fall through to LLM
+  return null;
+}
+
 // tryParseJson was replaced by tryExtractJson from @openmimic/shared

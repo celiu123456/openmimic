@@ -269,6 +269,112 @@ export function classifyUtterance(input: ClassifyInput): ClassifyResult {
 }
 
 /* ------------------------------------------------------------------ */
+/* Knowledge boundary filtering                                        */
+/* ------------------------------------------------------------------ */
+
+/**
+ * Filter claims/episodes that fall within a witness's known time range.
+ *
+ * A witness with `knownToYear` set (acquaintance ended) cannot speak
+ * about events after that year. Claims/episodes with a `period` hint
+ * that clearly refers to a year after the cutoff are excluded from
+ * that witness's room context.
+ *
+ * Items without a parseable year in their period field pass through
+ * (fail-open: we don't suppress content just because we can't date it).
+ */
+export function filterByKnowledgeBoundary<
+  T extends { context?: { period?: string } | null },
+>(items: readonly T[], knownToYear: number | null | undefined): T[] {
+  if (knownToYear == null) return [...items];
+
+  return items.filter((item) => {
+    const period = item.context?.period;
+    if (!period) return true; // no period info → pass through
+
+    // Extract the latest year mentioned in the period string
+    const yearMatches = period.match(/\b(19|20)\d{2}\b/g);
+    if (!yearMatches || yearMatches.length === 0) return true;
+
+    const latestYear = Math.max(...yearMatches.map(Number));
+    return latestYear <= knownToYear;
+  });
+}
+
+/* ------------------------------------------------------------------ */
+/* Expression tier derivation (pre-generation policy)                  */
+/* ------------------------------------------------------------------ */
+
+/**
+ * Input for pre-generation expression tier derivation.
+ *
+ * Migrated from the old platform's `deriveExpressionTier` in
+ * `memory-access-policy.ts`. The OpenMimic version is deliberately
+ * simpler because OpenMimic does not carry the Midway DI or the
+ * per-memory lineage/canonScope/similarity fields; it operates on
+ * claims and witness metadata instead.
+ *
+ * Rule: only downgrade, never upgrade. Unknown / absent fields
+ * result in the most restrictive tier that does not lose information.
+ */
+export interface ExpressionTierInput {
+  /** The claim's current status. */
+  claimStatus: 'surviving' | 'contested' | 'retired';
+  /** Witness consent level for the evidence behind the claim. */
+  consentLevel: ConsentLevel;
+  /**
+   * True when the subject has denied or reframed this claim.
+   * Maps to the old platform's `adoption === 'negated'`.
+   */
+  subjectDenied?: boolean;
+  /**
+   * True when the claim should not be quoted or paraphrased
+   * in rooms where the subject is present (front rooms).
+   */
+  doNotRaiseToSubject?: boolean;
+  /** True when this line will appear in a subject-visible room. */
+  subjectVisible?: boolean;
+}
+
+/**
+ * Derive the highest tier allowed for a claim *before* generation.
+ *
+ * This constrains what the room generator may do with the claim.
+ * The post-generation classifier (`classifyUtterance`) then verifies
+ * the actual output never exceeds this cap.
+ *
+ * Tier order (only downgrade): quote > paraphrase > extrapolate
+ *
+ * - contested / retired / subject-denied → extrapolate only
+ * - synthesis_only consent → paraphrase ceiling
+ * - doNotRaiseToSubject + subject-visible room → extrapolate
+ * - otherwise → quote (the post-generation classifier may still
+ *   downgrade based on actual verbatim overlap)
+ */
+export function deriveExpressionTier(input: ExpressionTierInput): UtteranceTier {
+  // Contested, retired, or subject-denied → extrapolate only (tone background).
+  if (input.claimStatus === 'contested' || input.claimStatus === 'retired') {
+    return 'extrapolate';
+  }
+  if (input.subjectDenied) {
+    return 'extrapolate';
+  }
+
+  // Subject-visible room + doNotRaiseToSubject → may not quote or paraphrase.
+  if (input.doNotRaiseToSubject && input.subjectVisible) {
+    return 'extrapolate';
+  }
+
+  // synthesis_only witnesses can never be quoted (ceiling = paraphrase).
+  if (input.consentLevel === 'synthesis_only') {
+    return 'paraphrase';
+  }
+
+  // Default: post-generation classifier determines actual tier.
+  return 'quote';
+}
+
+/* ------------------------------------------------------------------ */
 /* Tier statistics                                                     */
 /* ------------------------------------------------------------------ */
 

@@ -218,6 +218,16 @@ export const ClaimSchema = z.object({
   episodeIds: z.array(z.string().min(1)).optional(),
   /** True when this claim was re-raised after a contest, not its first time through court. */
   reraised: z.boolean().optional(),
+  /**
+   * Wording history. Each entry records a previous version of the claim
+   * text (e.g. after a re-raise rewording). Newest first.
+   * Optional — absent for claims that have never been reworded.
+   */
+  versions: z.array(z.object({
+    text: z.string().min(1),
+    at: z.string().min(1),
+    reason: z.string().optional(),
+  })).optional(),
 });
 export type Claim = z.infer<typeof ClaimSchema>;
 

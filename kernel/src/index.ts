@@ -1,4 +1,5 @@
 export * from './config';
+export * from './disclosure';
 export * from './embedding';
 export * from './errors';
 export * from './events';

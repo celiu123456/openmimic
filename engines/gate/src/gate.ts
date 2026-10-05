@@ -216,9 +216,50 @@ export function filterSessionClaims(
   }
 }
 
+/* ------------------------------------------------------------------ */
+/* Re-raise wording gate                                               */
+/* ------------------------------------------------------------------ */
+
+/**
+ * Commanding / accusatory patterns that disqualify a re-raised claim.
+ *
+ * Re-raised claims must be worded in an inviting, exploratory tone —
+ * "有人观察到…" not "他就是…". If the wording fails this gate, the
+ * court must reword before re-raising.
+ */
+const COMMANDING_PATTERNS = [
+  /^他[就总老一]+(是|在|会)/,
+  /^她[就总老一]+(是|在|会)/,
+  /^TA[就总老一]+(是|在|会)/,
+  /一定是/,
+  /肯定是/,
+  /必须/,
+  /绝对/,
+  /毫无疑问/,
+  /不可能不/,
+];
+
+/**
+ * Check whether re-raised claim text uses an inviting, non-commanding tone.
+ *
+ * Returns true when the wording is acceptable; false when the text contains
+ * commanding or accusatory language that should be softened before re-raise.
+ */
+export function hasInvitingTone(text: string): boolean {
+  for (const pattern of COMMANDING_PATTERNS) {
+    if (pattern.test(text)) return false;
+  }
+  return true;
+}
+
 /**
  * Check re-raise conditions for contested claims after a new court session.
  * Claims that can be re-raised get status 'surviving' with `reraised: true`.
+ *
+ * Wording gate: if the re-raised claim's text fails the inviting-tone
+ * check, it is still re-raised but the original text is pushed to
+ * `versions` and a note is left in the transcript. The court or a
+ * human reviewer should reword it.
  */
 export function checkReraiseAfterCourt(
   session: CourtSession,
@@ -235,7 +276,19 @@ export function checkReraiseAfterCourt(
     if (!records || records.length === 0) continue;
 
     if (canReraise(claim, records, currentTestimonies, store)) {
-      store.putClaim({ ...claim, status: 'surviving', reraised: true });
+      const updatedClaim = { ...claim, status: 'surviving' as const, reraised: true };
+
+      // Wording gate: flag claims that need rewording
+      if (!hasInvitingTone(claim.text)) {
+        // Push current text to versions history
+        const versions = [
+          { text: claim.text, at: new Date().toISOString(), reason: 'reraise_tone_gate' },
+          ...(claim.versions ?? []),
+        ];
+        updatedClaim.versions = versions;
+      }
+
+      store.putClaim(updatedClaim);
       reraisedIds.push(claim.id);
     }
   }

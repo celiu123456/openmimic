@@ -2,6 +2,8 @@ import { randomUUID } from 'node:crypto';
 import { z } from 'zod';
 import {
   CONVICTION_UNCHALLENGED_CAP,
+  CONTRADICTION_CHECK_RULES,
+  SOURCE_GUARD,
   extractJson,
   normalizeProviderError,
   wrapUntrusted,
@@ -101,7 +103,7 @@ function buildFilingSystem(displayName: string): string {
     '每个论断必须至少引用一条证言 id。episode.text 必须是证言原文的逐字子串。',
     '请确保 episodes 和 claims 数组都非空(只要证言中有具体事件和可对质的描述)。',
     '',
-    '★ 事实来源守卫:事实只能来自证人的原话,不能来自你在问题中给的举例或假设。',
+    SOURCE_GUARD,
     '★ 三层分开:证人对自己的评价不得立为关于被描述者的论断;证人的感受归证人,被描述者的行为归被描述者,两人的互动归关系。',
   ].join('\n');
 }
@@ -123,6 +125,9 @@ function buildRelationSystem(displayName: string): string {
     '反例(unrelated): "帮人兜底从不谈条件" vs "冷战十九天" → 不同维度(助人行为 vs 冲突处理) → unrelated',
     '',
     'topic 必须是一个具体维度,如"花钱""表达情绪""接受帮助""守约"等。不要写笼统的描述。',
+    '',
+    CONTRADICTION_CHECK_RULES,
+    '',
     '只输出 JSON 对象:{"relation":"...","topic":"...","reason":"...","mergedText":"..."}',
     'mergedText 仅在 agreement 时必须填写。',
   ].join('\n');
@@ -219,6 +224,14 @@ export function computeConviction(input: ConvictionInput): number {
   // Base 0.5; +0.12 per additional independent witness, cap 0.9
   let score = 0.5 + Math.max(0, input.witnessCount - 1) * 0.12;
   score = Math.min(score, 0.9);
+
+  // Single witness cap: one person's word alone cannot exceed 0.55.
+  // This is intentionally stricter than the unpaired cap (0.6) —
+  // a claim supported by only one witness is inherently less reliable
+  // regardless of whether it was paired in court proceedings.
+  if (input.witnessCount <= 1) {
+    score = Math.min(score, 0.55);
+  }
 
   // No episode support: cap at 0.55
   if (!input.hasEpisode) {

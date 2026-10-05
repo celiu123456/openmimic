@@ -193,3 +193,52 @@ room opened
   → behind mode: witnesses discuss subject
   → openDoor: subject enters, tone shifts
 ```
+
+## Expression and disclosure discipline
+
+### Implemented
+
+- **Three-tier expression** (`engines/room/src/tier.ts`): `deriveExpressionTier` determines
+  the maximum tier a claim may reach before generation (quote / paraphrase / extrapolate).
+  Contested, retired, or subject-denied claims cap at extrapolate. `synthesis_only` witnesses
+  cap at paraphrase. Subject-visible rooms with `doNotRaiseToSubject` cap at extrapolate.
+  Post-generation classification (`classifyUtterance`) then verifies actual output.
+- **Four-level disclosure** (`kernel/src/disclosure.ts`): speakable → reference_only →
+  presence_only → excluded. `holdUntilRaised` is orthogonal: the persona must not raise a
+  topic proactively when set. `deriveDisclosure` is a pure function.
+- **Knowledge boundary** (`engines/room/src/tier.ts`): `filterByKnowledgeBoundary` removes
+  claims whose period postdates a witness's `knownToYear`.
+- **Conflict pre-judgment** (`engines/court/src/conflict.ts`): `classifyPair` applies
+  deterministic rules (perspective_differs, supersedes, refines, contradicts) before the LLM
+  relation judgment call, saving tokens when the relation is obvious.
+- **Re-raise wording gate** (`engines/gate/src/gate.ts`): `hasInvitingTone` rejects
+  commanding/accusatory wording on re-raised claims. Failed claims get their text pushed to
+  `Claim.versions` for audit trail.
+- **Single witness weight cap** (`engines/court/src/court.ts`): `computeConviction` caps
+  single-witness claims at 0.55, stricter than the unpaired cap (0.6).
+- **Prompt guard rules** (`shared/src/prompt/guards.ts`): SOURCE_GUARD,
+  CONTRADICTION_CHECK_RULES, OBSERVER_GUARD — constant guardrail strings injected into
+  court and observer prompts.
+- **Silence signal raise→retreat** (`plugins/silence-signal/src/index.ts`): `analyzeAvoidedQids`
+  now requires at least one skipper to have also answered a sibling qid (raise→retreat paired
+  evidence), not just passively skipped.
+
+### Deferred
+
+- **Disclosure wiring into persona assembly**: `deriveDisclosure` exists as a pure function but
+  is not yet called during `assemblePersonaContext`. Requires a per-claim metadata pass that
+  maps gate state + witness metadata → disclosure level → filter/annotate claims in the prompt.
+- **Expression tier enforcement in room generation**: `deriveExpressionTier` is available but
+  the room generator does not yet call it. Room generation should cap each claim's tier before
+  prompting the model, then verify with `classifyUtterance` post-generation.
+- **Knowledge boundary wiring into room**: `filterByKnowledgeBoundary` exists but room
+  generation does not yet call it per-witness. Each witness's claim/episode context should be
+  filtered by their `knownToYear` before prompt assembly.
+- **classifyPair pre-judgment wiring into court**: `classifyPair` exists but the court's
+  relation judgment loop does not yet call it before the LLM. The court should check
+  `classifyPair` first and skip the LLM call when a deterministic result is returned.
+- **Observer guard wiring**: `OBSERVER_GUARD` is defined but not yet injected into any
+  prompt (no observer mode exists in OpenMimic yet; the old platform used it for IM
+  relationship observation, which is out of scope for v1).
+- **Full Claim.versions lifecycle**: `versions` field is defined on the schema and populated
+  by the re-raise gate, but no UI or API exposes the wording history yet.
