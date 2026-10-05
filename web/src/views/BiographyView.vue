@@ -17,6 +17,7 @@ interface Section {
   removed: boolean;
   removalNote: string | null;
   qualityScore: number | null;
+  qualityPass: boolean | null;
 }
 
 interface BiographyData {
