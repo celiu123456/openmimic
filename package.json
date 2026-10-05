@@ -28,7 +28,8 @@
     "eval:calibrate": "tsx eval/src/cli-calibrate.ts",
     "eval:lowo": "tsx eval/src/cli-lowo.ts",
     "eval:stability": "tsx eval/src/cli-stability.ts",
-    "eval:round2": "tsx eval/src/cli-round2.ts"
+    "eval:round2": "tsx eval/src/cli-round2.ts",
+    "eval:round3": "tsx eval/src/cli-round3.ts"
   },
   "devDependencies": {
     "@types/node": "^24.19.1",

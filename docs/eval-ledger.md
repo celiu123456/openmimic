@@ -415,3 +415,82 @@
 5. **泄密防护**: 4 runs x 0 leaks, Room 引擎的 no-talk + verify 机制有效。
 6. **稳定度**: 预算耗尽未完成, 沿用 Round 1 第 5 节的读数 (重合率 46.9%)。
 7. **限制**: 被试仍为林默 (手写虚构), N 很小 (LOWO 16 对, 对照臂 14-15 对), 所有读数均为方向性, 不构成显著性结论。
+
+---
+
+## Round 3 — 代码就绪,等真人数据
+
+> **状态**: 未运行。按项目主人决定,停止在虚构演示数据上花真模型调用,等真人数据后再跑。
+> **日期**: 2026-10-06
+> **分支**: `feat/eval-r3`
+
+### 13. 标定门禁 v3 (86 对,含 12 事实反转)
+
+| 字段 | 值 |
+|------|------|
+| 状态 | 未运行: 按项目主人决定,等真人数据后再跑 |
+| 标定对总数 | 86 (24 easy + 62 hard) |
+| 新增 | 12 条事实反转 hard 对 (cal-h-rev01 ~ cal-h-rev12),取自林默证词 |
+| 门禁阈值 | 准确率 > 80%, 有效对 >= 20, 位置偏置 <= 30% (整体 + hard 子集) |
+| 代码 | `eval/src/calibrate.ts`, `eval/calibration/pairs.zh.json` |
+
+### 14. 语义稳定度 K=3 + 批量语义匹配
+
+| 字段 | 值 |
+|------|------|
+| 状态 | 未运行: 按项目主人决定,等真人数据后再跑 |
+| 参数 | K=3 重复法庭, 批量 LLM 语义匹配 (bigram 预筛 + 单次 LLM 调用判全组) |
+| 改进 | `matchClaimsBatch()` 替代逐对 LLM 调用, 减少调用次数约 N 倍 |
+| 代码 | `eval/src/stability.ts` (matchClaimsBatch, BATCH_CLAIM_MATCH_SYSTEM) |
+
+### 15. 证人数量曲线 v2 (n=2..6)
+
+| 字段 | 值 |
+|------|------|
+| 状态 | 未运行: 按项目主人决定,等真人数据后再跑 |
+| 参数 | n=2..6, 每点 2 子集, 每子集跑 2 次, 计算子集内 bigram + LLM 重合率 |
+| 指标 | `StabilityCurvePointV2`: per-subset witnessIds, claimCounts, durationMs, overlapBigram, overlapLlm |
+
+### 16. 消融 4 臂 (含自述臂)
+
+| 字段 | 值 |
+|------|------|
+| 状态 | 未运行: 按项目主人决定,等真人数据后再跑 |
+| 新增臂 | **full persona vs self-report-only persona**: 仅用 subject.selfReport 组装的人格 vs 完整多证人人格 |
+| 参数 | maxQuestionsPerWitness=4, 预期 >= 24 valid pairs (6 witnesses x 4 questions) |
+| 4 臂 | vs-baseline, vs-claims-stripped, vs-episodes-stripped, vs-self-report |
+| 代码 | `eval/src/ablation.ts` (selfReportArm option, selfReportPrompt, judgeVsSelfReport) |
+
+### 17. Twin-2K-500 适配器 (A1)
+
+| 字段 | 值 |
+|------|------|
+| 状态 | 代码就绪 + 离线虚构样本测试通过; 未用真数据运行 |
+| 数据集 | Toubia et al. (2025), arXiv 2505.17479, CC BY 4.0, HuggingFace LLM-Digital-Twin/Twin-2K-500 |
+| 规模 | 2058 参与者, 500+ 问题, wave-split 设计 (waves 1-3 训练, wave 4 评估) |
+| 适配方式 | personaText → Subject.selfReport (截断 6K chars), wave 4 多选题 → held-out 评估 |
+| 指标 | 准确率 (预测答案 vs 真实答案), 参考基线: GPT-4o ~44% |
+| 已知不兼容 | OpenMimic 为中文多证人设计, Twin-2K-500 为英文自述问卷; 直接比较需格式适配 |
+| 代码 | `eval/src/twin2k-adapter.ts` (twin2kToSubject, predictTwin2KAnswer, runTwin2K, fabricatedTwin2KParticipants) |
+| 测试 | `eval/test/eval.test.ts` section 16: FakeLLM 离线测试 5 项 (类型/截断/结构/预测/精度/许可证) |
+
+### 18. Round 3 CLI
+
+| 字段 | 值 |
+|------|------|
+| 入口 | `npm run eval:round3` → `eval/src/cli-round3.ts` |
+| 流程 | 标定 (86 对) → 稳定度 K=3 → 消融 4 臂 |
+| 预算 | `LLM_BUDGET_TOKENS=900000` |
+| 输出 | `/tmp/eval-round3-results.json` |
+
+### Round 3 结论
+
+未运行。代码就绪,离线测试通过。等真人数据后再跑。
+
+新增代码清单:
+- `eval/src/stability.ts`: matchClaimsBatch() 批量语义匹配
+- `eval/src/ablation.ts`: selfReportArm 选项 + 自述臂逻辑
+- `eval/src/twin2k-adapter.ts`: Twin-2K-500 全适配器
+- `eval/src/cli-round3.ts`: Round 3 CLI 入口
+- `eval/calibration/pairs.zh.json`: +12 事实反转 hard 对 (86 总)
+- `eval/test/eval.test.ts`: +4 个测试节 (batch matching / calibration count / self-report arm / Twin-2K-500)
