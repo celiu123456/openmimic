@@ -15,7 +15,7 @@ import {
 import { UnknownRoomError, computeFingerprint, type Store } from '@openmimic/kernel';
 import { RoomRefusedError } from './errors';
 import type { LLMClient, LLMCompletionRequest } from './llm';
-import { classifyUtterance, type WitnessTestimony } from './tier';
+import { classifyUtterance, deriveExpressionTier, filterByKnowledgeBoundary, type WitnessTestimony } from './tier';
 import { findCrisisWord, findDiagnosisWord } from './wordlist';
 
 /* ------------------------------------------------------------------ */
@@ -1727,7 +1727,7 @@ async function runSchedule(
       draft.witnessTestimonies.map((t) => ({ testimonyId: t.testimonyId, qid })),
     );
 
-    const { tier, anchors } = classifyUtterance({
+    const classified = classifyUtterance({
       text: line.text,
       kind: line.kind,
       witnessId: draft.witness.id,
@@ -1737,6 +1737,21 @@ async function runSchedule(
       // Front mode: allow pronoun-normalised comparison (他→你) for tier
       pronounNormalize: mode === 'front',
     });
+
+    // Expression tier enforcement: cap the classified tier to the maximum
+    // allowed for this witness's consent level and room mode.
+    const maxTier = deriveExpressionTier({
+      claimStatus: 'surviving',
+      consentLevel: draft.witness.consentLevel,
+      subjectVisible: mode === 'front',
+    });
+    const TIER_RANK = { quote: 2, paraphrase: 1, extrapolate: 0 } as const;
+    const tier = TIER_RANK[classified.tier] > TIER_RANK[maxTier]
+      ? maxTier
+      : classified.tier;
+    const anchors = tier === 'extrapolate' && classified.tier !== 'extrapolate'
+      ? [] // downgraded to extrapolate → anchors no longer meaningful
+      : classified.anchors;
 
     utterances.push({
       witnessId: draft.witness.id,
@@ -1790,18 +1805,30 @@ export async function runBehindRoom(
   const testimonies = store.listBySubject(subjectId);
 
   // First pass: build raw drafts (unsanitised, for extracting private content)
+  // Knowledge boundary: each witness only sees memory entries within their known time range.
   const rawDrafts = store
     .listWitnessesBySubject(subjectId)
     .map((witness) => {
       const witTestimonies = testimonies.filter((t) => t.witnessId === witness.id);
+      let memoryEntries = witTestimonies
+        .flatMap((testimony) =>
+          testimony.answers
+            .filter((answer) => answer.behindText.length > 0)
+            .map((answer) => ({ qid: answer.qid, text: answer.behindText })),
+        );
+      // Apply knowledge boundary: filter out entries mentioning years beyond knownToYear
+      if (witness.knownToYear != null) {
+        memoryEntries = filterByKnowledgeBoundary(
+          memoryEntries.map((m) => ({
+            ...m,
+            context: { period: m.text },
+          })),
+          witness.knownToYear,
+        ).map(({ qid, text }) => ({ qid, text }));
+      }
       return {
         witness,
-        memory: witTestimonies
-          .flatMap((testimony) =>
-            testimony.answers
-              .filter((answer) => answer.behindText.length > 0)
-              .map((answer) => ({ qid: answer.qid, text: answer.behindText })),
-          ),
+        memory: memoryEntries,
         witnessTestimonies: witTestimonies.map((t) => ({
           testimonyId: t.id,
           witnessId: t.witnessId,

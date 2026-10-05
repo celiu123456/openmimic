@@ -993,7 +993,7 @@ describe('structured JSON repair in court', () => {
   it('classifyPair pre-judges deterministic pairs and records stats', async () => {
     const store = new Store();
     try {
-      store.putSubject({ id: 's1', displayName: 'TestSubject', createdAt: new Date().toISOString() });
+      store.putSubject({ id: 's1', displayName: 'TestSubject' });
       store.putWitness({ id: 'w1', subjectId: 's1', relation: 'friend', consentLevel: 'quotable' });
       store.putWitness({ id: 'w2', subjectId: 's1', relation: 'colleague', consentLevel: 'quotable' });
       store.addTestimony({
@@ -1032,9 +1032,10 @@ describe('structured JSON repair in court', () => {
       expect(llm.calls.length).toBe(2);
 
       // Stats should be recorded
-      if (session.report.preJudgedPairs !== undefined) {
-        expect(session.report.preJudgedPairs + (session.report.llmJudgedPairs ?? 0))
-          .toBeLessThanOrEqual(session.report.preJudgedPairs + (session.report.llmJudgedPairs ?? 0));
+      const report = session.report!;
+      if (report.preJudgedPairs !== undefined) {
+        expect(report.preJudgedPairs + (report.llmJudgedPairs ?? 0))
+          .toBeLessThanOrEqual(report.preJudgedPairs + (report.llmJudgedPairs ?? 0));
       }
     } finally {
       store.close();
