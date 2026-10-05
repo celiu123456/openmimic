@@ -223,22 +223,28 @@ room opened
   now requires at least one skipper to have also answered a sibling qid (raise→retreat paired
   evidence), not just passively skipped.
 
-### Deferred
+### Wired (2026-10-06)
 
-- **Disclosure wiring into persona assembly**: `deriveDisclosure` exists as a pure function but
-  is not yet called during `assemblePersonaContext`. Requires a per-claim metadata pass that
-  maps gate state + witness metadata → disclosure level → filter/annotate claims in the prompt.
-- **Expression tier enforcement in room generation**: `deriveExpressionTier` is available but
-  the room generator does not yet call it. Room generation should cap each claim's tier before
-  prompting the model, then verify with `classifyUtterance` post-generation.
-- **Knowledge boundary wiring into room**: `filterByKnowledgeBoundary` exists but room
-  generation does not yet call it per-witness. Each witness's claim/episode context should be
-  filtered by their `knownToYear` before prompt assembly.
-- **classifyPair pre-judgment wiring into court**: `classifyPair` exists but the court's
-  relation judgment loop does not yet call it before the LLM. The court should check
-  `classifyPair` first and skip the LLM call when a deterministic result is returned.
-- **Observer guard wiring**: `OBSERVER_GUARD` is defined but not yet injected into any
-  prompt (no observer mode exists in OpenMimic yet; the old platform used it for IM
-  relationship observation, which is out of scope for v1).
-- **Full Claim.versions lifecycle**: `versions` field is defined on the schema and populated
-  by the re-raise gate, but no UI or API exposes the wording history yet.
+All previously deferred items are now wired:
+
+- **Disclosure wiring into persona assembly**: `deriveDisclosure` called per-claim during
+  `assemblePersonaContext`. Excluded claims filtered; reference_only / presence_only annotated
+  in the prompt facet list. `holdUntilRaised` tagged `[不主动提起]`.
+- **Expression tier enforcement in room generation**: `deriveExpressionTier` caps tier
+  post-classification in `runSchedule`. synthesis_only witnesses capped at paraphrase; front
+  rooms enforce doNotRaiseToSubject.
+- **Knowledge boundary wiring into room**: `filterByKnowledgeBoundary` applied per-witness
+  during draft assembly, filtering memory entries mentioning years beyond `knownToYear`.
+- **classifyPair pre-judgment wiring into court**: `classifyPair` called before LLM relation
+  judgment; deterministic results skip the LLM call. `preJudgedPairs`/`llmJudgedPairs` stats
+  recorded in CourtReport.
+- **Observer guard wiring**: `OBSERVER_GUARD` injected into court filing prompt and
+  `PERSONA_DISCIPLINE` (persona assembly behavioral guardrails).
+- **Full Claim.versions lifecycle**: CourtReportView displays wording history as a collapsible
+  trail on each claim (surviving and contested).
+- **Structured JSON repair loop**: All LLM JSON call sites (court filing/relation/confrontation,
+  biography, meta-perception) migrated to `generateStructuredJson` from `shared/src/llm-json.ts`.
+- **Biography plugin consolidation**: Duplicate confidentiality markers, sentence splitter, and
+  private sentence extractor replaced by imports from room engine. LLM calls use
+  `generateStructuredJson`. Quality gate: `qualityPass` (boolean) alongside deprecated
+  `qualityScore` (number).
