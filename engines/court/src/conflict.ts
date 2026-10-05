@@ -320,20 +320,34 @@ export interface PairPreJudgmentResult {
 }
 
 /**
- * Check if two claims come from observers with different relationships
- * (perspective differs). Different witnesses seeing the same person
- * differently is expected, not a conflict.
+ * Check if two claims represent a self-report vs witness observation
+ * perspective difference. The original platform rule applies when one
+ * side is the subject's own self-report and the other is a witness
+ * observation — not for two witnesses making independent evaluations.
+ *
+ * Two witnesses from different angles should still go to LLM, which
+ * applies the stricter standard: "same behavioral dimension, different
+ * observation direction counts; different dimensions are unrelated."
+ *
+ * @param subjectWitnessId - The witness id that represents the
+ *   subject's self-report, if one exists. Without this, the rule
+ *   cannot fire (OpenMimic's court does not mix self-report into
+ *   testimony by default).
  */
-function isPerspectiveDifference(a: Claim, b: Claim): boolean {
+function isPerspectiveDifference(a: Claim, b: Claim, subjectWitnessId?: string): boolean {
   // Different witnesses (already guaranteed by pair finders, but be safe)
   const wA = a.witnessIds?.[0];
   const wB = b.witnessIds?.[0];
   if (!wA || !wB || wA === wB) return false;
 
-  // Both must have domain = 'evaluative' or context with different audiences
-  if (a.domain === 'evaluative' && b.domain === 'evaluative') return true;
+  // Rule: one side must be the subject's own self-report witness
+  if (subjectWitnessId) {
+    const oneIsSelf = wA === subjectWitnessId || wB === subjectWitnessId;
+    if (oneIsSelf && a.domain === 'evaluative' && b.domain === 'evaluative') return true;
+  }
 
-  // Different audience contexts → perspective difference
+  // Different audience contexts → still a perspective difference
+  // (e.g. one claim about behavior at work, other about behavior at home)
   const audA = a.context?.audience;
   const audB = b.context?.audience;
   if (audA && audB && audA !== audB) return true;
@@ -391,20 +405,40 @@ function isRefinement(textA: string, textB: string): boolean {
   return tokensB.size >= 2 && containedCount >= tokensB.size * 0.8;
 }
 
+export interface ClassifyPairOptions {
+  /**
+   * Witness id that represents the subject's own self-report.
+   * Required for the perspective-differs rule to fire.
+   * When absent the rule is skipped (OpenMimic court does not mix
+   * self-report into testimony by default).
+   */
+  subjectWitnessId?: string;
+}
+
 /**
  * Try to classify a claim pair deterministically before the LLM.
  *
  * Returns null when no deterministic rule matches (caller should
  * proceed to LLM relation judgment).
  *
+ * **Conservative policy**: every rule must have clear, mechanically
+ * verifiable evidence. When in doubt the function returns null so the
+ * LLM can apply the full "same behavioral dimension, different
+ * observation direction" standard.
+ *
  * Time-based rules (`supersedes`, `retelling_diverges`) require the
- * claims to have `context.period` set; without temporal information,
- * they cannot fire.
+ * claims to have `context.period` set with comparable temporal
+ * information; without it, they cannot fire.
  */
-export function classifyPair(a: Claim, b: Claim): PairPreJudgmentResult | null {
-  // Rule 1: perspective differs (different evaluative viewpoints)
-  if (isPerspectiveDifference(a, b)) {
-    return { relation: 'perspective_differs', confidence: 0.82, rule: 'evaluative_different_observers' };
+export function classifyPair(
+  a: Claim,
+  b: Claim,
+  opts?: ClassifyPairOptions,
+): PairPreJudgmentResult | null {
+  // Rule 1: perspective differs — ONLY when one side is self-report
+  // Two witnesses making independent evaluations go to LLM.
+  if (isPerspectiveDifference(a, b, opts?.subjectWitnessId)) {
+    return { relation: 'perspective_differs', confidence: 0.82, rule: 'self_vs_witness_evaluative' };
   }
 
   const textA = a.text;
@@ -413,10 +447,13 @@ export function classifyPair(a: Claim, b: Claim): PairPreJudgmentResult | null {
   // Rule 2: mutual exclusion check
   const exclusive = hasMutualExclusion(textA, textB);
 
-  // Time-based rules need period info
+  // Time-based rules need period info AND the periods must be
+  // syntactically comparable (both contain year-like patterns).
   const periodA = a.context?.period;
   const periodB = b.context?.period;
-  const hasBothPeriods = !!periodA && !!periodB;
+  const yearPattern = /\d{4}/;
+  const hasBothPeriods = !!periodA && !!periodB
+    && yearPattern.test(periodA) && yearPattern.test(periodB);
 
   if (exclusive && hasBothPeriods && periodA === periodB) {
     // Same time + mutual exclusion → true contradiction
@@ -428,8 +465,14 @@ export function classifyPair(a: Claim, b: Claim): PairPreJudgmentResult | null {
     return { relation: 'supersedes', confidence: 0.76, rule: 'time_evolution_mutual_exclusion' };
   }
 
-  // Rule 3: refinement (one is a detail extension of the other)
-  if (isRefinement(textA, textB) || isRefinement(textB, textA)) {
+  // Rule 3: refinement — one claim's text must be a strict superset of
+  // the other's content tokens. The requirement is deliberately tight:
+  // 80% containment of the shorter claim's tokens in the longer one,
+  // AND the shorter must have at least 3 tokens (avoid trivial matches).
+  if (
+    (isRefinement(textA, textB) && tokenize(textB).size >= 3) ||
+    (isRefinement(textB, textA) && tokenize(textA).size >= 3)
+  ) {
     return { relation: 'refines', confidence: 0.68, rule: 'compatible_detail_extension' };
   }
 

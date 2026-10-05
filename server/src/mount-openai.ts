@@ -22,6 +22,17 @@ import type { ChatUpstream } from './server';
 
 const PERSONA_MODEL_PREFIX = 'persona/';
 
+/**
+ * Strip stage direction brackets from persona replies.
+ * Matches Chinese and English parenthetical stage directions like
+ * (停顿了一下), (沉默), (叹气), (sighs), etc.
+ */
+const STAGE_BRACKET_RE = /[（(][^)）]{1,20}[)）]/g;
+
+function stripStageBrackets(text: string): string {
+  return text.replace(STAGE_BRACKET_RE, '').replace(/\s{2,}/g, ' ').trim();
+}
+
 const ChatMessageSchema = z
   .object({
     role: z.string().min(1),
@@ -207,22 +218,25 @@ export const mountOpenaiPlugin: Plugin<MountOpenAIConfig> = {
             body: openAiError('upstream_error', '上游返回了无法解析的响应', 'server_error'),
           };
         }
-        // Reflux fingerprint for non-streamed persona replies
+        // Post-process: strip stage brackets and fingerprint
         try {
           const choices = (payload as Record<string, unknown>)?.choices;
           if (Array.isArray(choices)) {
-            const content = (choices[0] as Record<string, unknown>)?.message;
-            const text = typeof (content as Record<string, unknown>)?.content === 'string'
-              ? (content as Record<string, unknown>).content as string
-              : '';
-            if (text.trim()) {
-              store.putFingerprint(
-                computeFingerprint(`persona:${subjectId}:${Date.now()}`, subjectId, text),
-              );
+            const msg = (choices[0] as Record<string, unknown>)?.message as Record<string, unknown> | undefined;
+            if (msg && typeof msg.content === 'string') {
+              // Strip stage direction brackets from persona output
+              const cleaned = stripStageBrackets(msg.content);
+              msg.content = cleaned;
+              // Reflux fingerprint
+              if (cleaned.trim()) {
+                store.putFingerprint(
+                  computeFingerprint(`persona:${subjectId}:${Date.now()}`, subjectId, cleaned),
+                );
+              }
             }
           }
         } catch {
-          // Fingerprinting is best-effort; never block the response
+          // Post-processing is best-effort; never block the response
         }
         return { status: 200, body: payload };
       }

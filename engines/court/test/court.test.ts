@@ -990,7 +990,7 @@ describe('structured JSON repair in court', () => {
     }
   });
 
-  it('classifyPair pre-judges deterministic pairs and records stats', async () => {
+  it('classifyPair no longer pre-judges two witness evaluative claims (goes to LLM)', async () => {
     const store = new Store();
     try {
       store.putSubject({ id: 's1', displayName: 'TestSubject' });
@@ -1005,38 +1005,45 @@ describe('structured JSON repair in court', () => {
         answers: [{ qid: 'q1', behindText: 'She is strict at work.' }],
       });
 
-      // Filing responses: both evaluative domain → classifyPair should fire perspective_differs
+      // Filing responses: both evaluative domain, about spending habits (same dimension).
+      // After the fix, two witnesses' evaluative claims are NOT pre-judged — they go to LLM.
       const FILING_W1 = JSON.stringify({
-        episodes: [{ qid: 'q1', text: 'generous with friends' }],
+        episodes: [{ qid: 'q1', text: 'generous with friends spending money freely' }],
         claims: [{
-          text: 'She is generous.', kind: 'observation', domain: 'evaluative',
+          text: 'She spends money freely and treats friends generously.',
+          kind: 'observation', domain: 'evaluative',
           evidenceTestimonyIds: ['t1'],
         }],
       });
       const FILING_W2 = JSON.stringify({
-        episodes: [{ qid: 'q1', text: 'strict at work' }],
+        episodes: [{ qid: 'q1', text: 'careful with money and rarely spends on others' }],
         claims: [{
-          text: 'She is strict.', kind: 'observation', domain: 'evaluative',
+          text: 'She is careful with money and rarely spends on others.',
+          kind: 'observation', domain: 'evaluative',
           evidenceTestimonyIds: ['t2'],
         }],
       });
 
-      const llm = new FakeLLM([FILING_W1, FILING_W2]);
+      // Now we also need a relation judgment response
+      const RELATION = JSON.stringify({
+        relation: 'perspective_difference',
+        topic: 'personality',
+        reason: 'different behavioral dimensions — one about generosity, other about strictness',
+      });
+
+      const llm = new FakeLLM([FILING_W1, FILING_W2, RELATION]);
 
       const session = await runCourt('s1', store, llm, {
         pairFinder: new EmbeddingClaimPairFinder(new FakeEmbedding()),
       });
 
-      // If pre-judgment fired, LLM was NOT called for relation judgment
-      // (only 2 filing calls, no relation calls)
-      expect(llm.calls.length).toBe(2);
+      // With the fix, 3 calls: 2 filing + 1 relation judgment (not pre-judged)
+      expect(llm.calls.length).toBe(3);
+      expect(llm.calls[2]!.purpose).toBe('court-relation');
 
-      // Stats should be recorded
+      // Stats: llmJudgedPairs should be >= 1
       const report = session.report!;
-      if (report.preJudgedPairs !== undefined) {
-        expect(report.preJudgedPairs + (report.llmJudgedPairs ?? 0))
-          .toBeLessThanOrEqual(report.preJudgedPairs + (report.llmJudgedPairs ?? 0));
-      }
+      expect(report.llmJudgedPairs).toBeGreaterThanOrEqual(1);
     } finally {
       store.close();
     }
