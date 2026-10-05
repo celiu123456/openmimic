@@ -3,6 +3,8 @@ import { z } from 'zod';
 import {
   CONSENT_OVERLAP_LENGTH,
   containsConsentOverlap,
+  wrapUntrusted,
+  appendGuardInstruction,
   type Room,
   type RoomUtterance,
   type Testimony,
@@ -398,7 +400,7 @@ function buildUser(
   const memory =
     context.memory.length === 0
       ? '(你没有什么可讲的)'
-      : context.memory.map((entry) => `- [${entry.qid}] ${entry.text}`).join('\n');
+      : context.memory.map((entry) => `- [${entry.qid}] ${wrapUntrusted(`memory:${entry.qid}`, entry.text)}`).join('\n');
 
   const parts = [
     `话题:${topicSeed}`,
@@ -798,7 +800,7 @@ export async function generateNoTalkList(
   const witnessSummaries = drafts.map((d) => {
     const text = d.memory.map((m) => m.text).join(' ');
     const summary = text.length > 300 ? text.substring(0, 300) + '……' : text;
-    return `【${d.witness.relation}(${d.witness.id})】${summary}`;
+    return `【${d.witness.relation}(${d.witness.id})】${wrapUntrusted(`witness:${d.witness.id}`, summary)}`;
   }).join('\n\n');
 
   const system = [
@@ -996,10 +998,10 @@ export async function llmVerifyLeak(
 ): Promise<boolean> {
   const system = '你是一个隐私判定器。只回答"是"或"否",不要其他文字。';
   const contextLine = blindWitnessContext
-    ? `\n${blindWitnessRelation}目前了解到的全部情况:"${blindWitnessContext.slice(0, 200)}"`
+    ? `\n${blindWitnessRelation}目前了解到的全部情况:${wrapUntrusted('blind_witness_context', blindWitnessContext.slice(0, 200))}`
     : '';
   const user = [
-    `在场的"${blindWitnessRelation}"目前相信的版本是:"${blindClaim}"。${contextLine}`,
+    `在场的"${blindWitnessRelation}"目前相信的版本是:${wrapUntrusted('blind_claim', blindClaim)}。${contextLine}`,
     `以下这句话如果在聊天室里被说出来,${blindWitnessRelation}会不会因此得知或起疑事实并非如此——也就是发现"${topic}"?`,
     `台词:"${utteranceText}"`,
     '即使没有说出全部事实,只要这句话会让其**起疑或推断出**事实的一部分(例如说出要换城市、要走、不干了、身体出了问题),也算"是"。',

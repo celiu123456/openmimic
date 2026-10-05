@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { wrapUntrusted, appendGuardInstruction } from '@openmimic/shared';
 import type { WitnessQuestion } from './questionnaires/friend-v1';
 import type { LLMCompletionRequest } from './llm';
 import type { EvidenceBasis } from './basis';
@@ -132,13 +133,13 @@ export function buildFollowupUserPrompt(
   question: WitnessQuestion,
   answer: string,
 ): string {
-  return [
+  return appendGuardInstruction([
     `刚才的问题是:${question.prompt}`,
-    `证人回答:${answer.trim()}`,
+    `证人回答:${wrapUntrusted('witness_answer', answer.trim())}`,
     '如果证人提到了某件事但没展开,就顺着那件事轻问一句。',
     '如果只是一句评价且没有线索,就用兜底问句。',
     '只输出 {"followup":"..."}。',
-  ].join('\n');
+  ].join('\n'));
 }
 
 /** Compose the completion request for one follow-up. */

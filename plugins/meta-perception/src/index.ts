@@ -18,6 +18,7 @@ import type { Store } from '@openmimic/kernel';
 import type { Router } from '@openmimic/server';
 import type { LLMClient, LLMCompletionRequest } from '@openmimic/engine-court';
 import { extractJson } from '@openmimic/engine-court';
+import { wrapUntrusted, appendGuardInstruction } from '@openmimic/shared';
 
 /* ------------------------------------------------------------------ */
 /* Schemas                                                             */
@@ -96,7 +97,9 @@ const SCORE_SYSTEM = [
 ].join('\n');
 
 function buildScoreUser(predicted: string, actual: string): string {
-  return `预测: ${predicted}\n实际: ${actual}`;
+  return appendGuardInstruction(
+    `预测: ${wrapUntrusted('prediction', predicted)}\n实际: ${wrapUntrusted('actual_testimony', actual)}`,
+  );
 }
 
 const MatchResultSchema = z.object({

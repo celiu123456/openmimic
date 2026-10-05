@@ -1,4 +1,5 @@
 import type { Claim, CorpusItem, Divergence, Episode, StyleSample } from '@openmimic/shared';
+import { wrapUntrusted, appendGuardInstruction } from '@openmimic/shared';
 import type { EmbeddingClient } from './embedding';
 import { cosine } from './embedding';
 import type { Store } from './store';
@@ -179,7 +180,7 @@ function renderEpisodes(
     .map((ep) => {
       const relation = witnessMap.get(ep.witnessId) ?? '证人';
       const situationTag = ep.situation ? `(${ep.situation})` : '';
-      return `- ${relation}${situationTag}:「${ep.text}」`;
+      return `- ${relation}${situationTag}:「${wrapUntrusted(`episode:${ep.id}`, ep.text)}」`;
     })
     .join('\n');
 }
@@ -197,7 +198,7 @@ function renderDivergences(divergences: Divergence[], witnessMap: Map<string, st
 }
 
 function renderCorpus(items: CorpusItem[]): string {
-  return items.map((item) => `- 「${item.text}」`).join('\n');
+  return items.map((item) => `- 「${wrapUntrusted(`corpus:${item.id}`, item.text)}」`).join('\n');
 }
 
 /* ------------------------------------------------------------------ */
@@ -334,7 +335,11 @@ function assembleSections(
     );
   }
   parts.push(PERSONA_DISCIPLINE);
-  return parts.join('\n\n');
+  const hasUntrusted = (includeEpisodes && sections.episodes.length > 0) ||
+    (includeCorpus && sections.corpus.length > 0) ||
+    (includeSelfReport && sections.selfReport.length > 0);
+  const joined = parts.join('\n\n');
+  return hasUntrusted ? appendGuardInstruction(joined) : joined;
 }
 
 /**
@@ -395,8 +400,9 @@ export async function assemblePersonaContext(
   // Corpus items
   const corpusItems = store.listCorpusItemsBySubject(subjectId);
 
-  // Self report
-  const selfReport = subject?.selfReport ?? '';
+  // Self report (untrusted: written by the subject)
+  const rawSelfReport = subject?.selfReport ?? '';
+  const selfReport = rawSelfReport ? wrapUntrusted('self_report', rawSelfReport) : '';
 
   // Build sections content
   const claimsText = renderWitnessGroupedClaims(eligible, witnessMap, opts.interlocutor);

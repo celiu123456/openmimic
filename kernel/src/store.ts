@@ -68,6 +68,9 @@ interface TestimonyRow {
   free_text: string | null;
   correction_of: string | null;
   avoided_qids: string | null;
+  origin: string | null;
+  suspected_injection: string | null;
+  reflux_suspicion: string | null;
 }
 
 interface ClaimRow {
@@ -415,6 +418,16 @@ export class Store {
     if (!witnessColumns.includes('anonymous_in_room')) {
       this.db.exec('ALTER TABLE witnesses ADD COLUMN anonymous_in_room INTEGER');
     }
+    // Security batch: injection detection and reflux suspicion on testimonies
+    if (!columns.includes('origin')) {
+      this.db.exec("ALTER TABLE testimonies ADD COLUMN origin TEXT DEFAULT 'human'");
+    }
+    if (!columns.includes('suspected_injection')) {
+      this.db.exec('ALTER TABLE testimonies ADD COLUMN suspected_injection TEXT');
+    }
+    if (!columns.includes('reflux_suspicion')) {
+      this.db.exec('ALTER TABLE testimonies ADD COLUMN reflux_suspicion TEXT');
+    }
   }
 
   /* ---------------------------------------------------------------- */
@@ -695,6 +708,7 @@ export class Store {
     const testimony = TestimonySchema.parse({
       ...input,
       createdAt: input.createdAt ?? new Date().toISOString(),
+      origin: input.origin ?? 'human',
     });
 
     if (testimony.correctionOf !== undefined && !this.getTestimony(testimony.correctionOf)) {
@@ -704,12 +718,10 @@ export class Store {
     }
 
     this.db
-      .prepare<
-        [string, string, string, string, string, string | null, string | null, string | null]
-      >(
+      .prepare(
         `INSERT INTO testimonies
-           (id, witness_id, subject_id, created_at, answers, free_text, correction_of, avoided_qids)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+           (id, witness_id, subject_id, created_at, answers, free_text, correction_of, avoided_qids, origin, suspected_injection, reflux_suspicion)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       )
       .run(
         testimony.id,
@@ -720,6 +732,9 @@ export class Store {
         testimony.freeText ?? null,
         testimony.correctionOf ?? null,
         testimony.avoidedQids ? JSON.stringify(testimony.avoidedQids) : null,
+        testimony.origin ?? 'human',
+        testimony.suspectedInjection ?? null,
+        testimony.refluxSuspicion ?? null,
       );
 
     this.events.emit('testimony.added', testimony);
@@ -1152,6 +1167,9 @@ export class Store {
       freeText: row.free_text ?? undefined,
       correctionOf: row.correction_of ?? undefined,
       avoidedQids: row.avoided_qids ? (JSON.parse(row.avoided_qids) as unknown) : undefined,
+      origin: (row.origin as 'human' | 'ai') ?? undefined,
+      suspectedInjection: row.suspected_injection ?? undefined,
+      refluxSuspicion: row.reflux_suspicion ?? undefined,
     });
   }
 

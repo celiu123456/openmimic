@@ -2,6 +2,8 @@ import { randomUUID } from 'node:crypto';
 import { z } from 'zod';
 import {
   CONVICTION_UNCHALLENGED_CAP,
+  wrapUntrusted,
+  appendGuardInstruction,
   type Claim,
   type ClaimStatus,
   type CourtEvent,
@@ -350,33 +352,33 @@ function buildFilingUser(witness: Witness, testimonies: readonly Testimony[], di
   for (const testimony of testimonies) {
     lines.push(`- 证言 id: ${testimony.id}`);
     testimony.answers.forEach((answer, index) => {
-      lines.push(`  [${index + 1}] (qid=${answer.qid}) ${answer.behindText}`);
+      lines.push(`  [${index + 1}] (qid=${answer.qid}) ${wrapUntrusted(`testimony:${testimony.id}:${answer.qid}`, answer.behindText)}`);
       if (answer.followupText) {
-        lines.push(`  [${index + 1}-追问] (qid=${answer.qid}) ${answer.followupText}`);
+        lines.push(`  [${index + 1}-追问] (qid=${answer.qid}) ${wrapUntrusted(`followup:${testimony.id}:${answer.qid}`, answer.followupText)}`);
       }
     });
-    if (testimony.freeText) lines.push(`  自由陈述: ${testimony.freeText}`);
+    if (testimony.freeText) lines.push(`  自由陈述: ${wrapUntrusted(`freetext:${testimony.id}`, testimony.freeText)}`);
   }
-  return lines.join('\n');
+  return appendGuardInstruction(lines.join('\n'));
 }
 
 function buildRelationUser(claimA: Claim, claimB: Claim, witnessRelationMap: Map<string, string>): string {
   const relA = witnessRelationMap.get(claimA.witnessIds?.[0] ?? '') ?? '?';
   const relB = witnessRelationMap.get(claimB.witnessIds?.[0] ?? '') ?? '?';
-  return [
-    `论断A (${relA}): ${claimA.text}`,
-    `论断B (${relB}): ${claimB.text}`,
-  ].join('\n');
+  return appendGuardInstruction([
+    `论断A (${relA}): ${wrapUntrusted(`claim:${claimA.id}`, claimA.text)}`,
+    `论断B (${relB}): ${wrapUntrusted(`claim:${claimB.id}`, claimB.text)}`,
+  ].join('\n'));
 }
 
 function buildConfrontationUser(claimA: Claim, claimB: Claim, witnessRelationMap: Map<string, string>): string {
   const relA = witnessRelationMap.get(claimA.witnessIds?.[0] ?? '') ?? '?';
   const relB = witnessRelationMap.get(claimB.witnessIds?.[0] ?? '') ?? '?';
-  return [
-    `论断A (${relA}): ${claimA.text}`,
-    `论断B (${relB}): ${claimB.text}`,
+  return appendGuardInstruction([
+    `论断A (${relA}): ${wrapUntrusted(`claim:${claimA.id}`, claimA.text)}`,
+    `论断B (${relB}): ${wrapUntrusted(`claim:${claimB.id}`, claimB.text)}`,
     '请判定这两条事实性冲突的结果。',
-  ].join('\n');
+  ].join('\n'));
 }
 
 /* ------------------------------------------------------------------ */

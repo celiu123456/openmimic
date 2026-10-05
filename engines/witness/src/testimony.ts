@@ -3,6 +3,7 @@ import { z } from 'zod';
 import {
   ConsentLevelSchema,
   TestimonyAnswerSchema,
+  detectInjection,
   type Testimony,
   type Witness,
 } from '@openmimic/shared';
@@ -80,6 +81,11 @@ export function submitTestimony(
   };
   store.putWitness(witness);
 
+  // Scan all text for injection patterns (flag, don't reject)
+  const allTexts = parsed.answers.map((a) => a.behindText);
+  if (parsed.freeText) allTexts.push(parsed.freeText);
+  const injectionMatch = allTexts.map(detectInjection).find(Boolean);
+
   const testimony: Testimony = {
     id: testimonyId,
     witnessId,
@@ -88,6 +94,8 @@ export function submitTestimony(
     answers: parsed.answers.map((answer) => ({ ...answer })),
     ...(parsed.freeText !== undefined ? { freeText: parsed.freeText } : {}),
     ...(parsed.avoidedQids !== undefined ? { avoidedQids: [...parsed.avoidedQids] } : {}),
+    origin: 'human',
+    ...(injectionMatch ? { suspectedInjection: injectionMatch } : {}),
   };
   store.addTestimony(testimony);
 

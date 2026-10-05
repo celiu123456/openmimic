@@ -1,4 +1,5 @@
 import type { Claim, Testimony } from '@openmimic/shared';
+import { wrapUntrusted, appendGuardInstruction } from '@openmimic/shared';
 import { cosine, type EmbeddingClient } from '@openmimic/kernel';
 import type { LLMClient } from './llm';
 
@@ -233,10 +234,10 @@ export class LLMClaimPairFinder implements ClaimPairFinder {
     for (let i = 0; i < claims.length; i++) {
       const c = claims[i]!;
       const witnessLabel = c.witnessIds?.[0] ?? '?';
-      lines.push(`${i}: [证人 ${witnessLabel}] ${c.text}`);
+      lines.push(`${i}: [证人 ${witnessLabel}] ${wrapUntrusted(`claim:${c.id}`, c.text)}`);
     }
 
-    const userPrompt = lines.join('\n');
+    const userPrompt = appendGuardInstruction(lines.join('\n'));
 
     try {
       const response = await this.llm.complete({

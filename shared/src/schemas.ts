@@ -132,6 +132,14 @@ export type TestimonyAnswer = z.infer<typeof TestimonyAnswerSchema>;
  * Corrections are expressed by appending a new testimony whose `correctionOf`
  * points at the earlier entry; existing entries are never mutated or removed.
  */
+/** Origin of a text entity: human-written testimony vs AI-generated artifact. */
+export const OriginSchema = z.enum(['human', 'ai']);
+export type Origin = z.infer<typeof OriginSchema>;
+
+/** Reflux suspicion level: how similar new testimony is to prior AI output. */
+export const RefluxSuspicionSchema = z.enum(['none', 'low', 'medium', 'high']);
+export type RefluxSuspicion = z.infer<typeof RefluxSuspicionSchema>;
+
 export const TestimonySchema = z.object({
   id: z.string().min(1),
   witnessId: z.string().min(1),
@@ -149,6 +157,21 @@ export const TestimonySchema = z.object({
    * survives the append-only ledger alongside the words that *were* given.
    */
   avoidedQids: z.array(z.string().min(1)).optional(),
+  /**
+   * Origin: testimony is always 'human'. Set for completeness; room/court/biography
+   * outputs are 'ai'. This field is read-only metadata.
+   */
+  origin: OriginSchema.optional(),
+  /**
+   * Matched injection pattern text, if any. The testimony is NOT rejected;
+   * it is flagged for the subject's report page. Court and room treat it as data.
+   */
+  suspectedInjection: z.string().optional(),
+  /**
+   * How similar this testimony is to prior AI-generated output for this subject.
+   * Read-only metadata set at submission time. Court skips medium/high fragments.
+   */
+  refluxSuspicion: RefluxSuspicionSchema.optional(),
 });
 export type Testimony = z.infer<typeof TestimonySchema>;
 
