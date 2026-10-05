@@ -406,6 +406,36 @@
 | #8 裁判必须引用信号 ID | 合规: 零信号判定直接作废 |
 | #9 报告负面 | 合规: 本节明确标注 UNCALIBRATED, 不产出读数 |
 
+---
+
+## Process Evaluation (过程评测)
+
+> **未运行: 等真人数据**。以下三项过程评测已实现代码框架、场景定义和 FakeLLM 结构测试,
+> 但尚未接入真实模型运行。等项目主人提供真人语料后方可产出读数。
+
+### P-1. Evidence Coverage (证据覆盖, 三元素版)
+
+- **代码**: `eval/src/process-eval/evidence-coverage.ts`
+- **三元素**: 支撑证据 (episode) / 反面证据 (divergence, qualifier, 其他证人) / 情境上下文 (period, audience, situation)
+- **测试**: 6 个 FakeLLM 结构测试, 全部通过
+- **状态**: **未运行: 等真人数据**
+
+### P-2. Contradiction Responsiveness (矛盾回应)
+
+- **代码**: `eval/src/process-eval/contradiction-scenarios.ts`
+- **场景**: 12 个冲突场景 (4 事实冲突 + 4 视角差异 + 4 时间演变)
+- **行为分类**: 8 种行为类型 (new_claim_created / old_claim_limited / old_claim_contested / old_claim_retired / divergence_created / conviction_decreased / supersedes_relation / no_change)
+- **测试**: 13 个 FakeLLM 结构测试 (场景完整性 + 行为分类器 + 报告聚合), 全部通过
+- **状态**: **未运行: 等真人数据**
+
+### P-3. Memory Repair (记忆修复)
+
+- **代码**: `eval/src/process-eval/memory-repair-scenarios.ts`
+- **场景**: 6 个 "旧状态被新证据取代" 场景 (职业/居住/爱好/健康/宠物/出行)
+- **分类**: 正确取代 (supersedes 或 retired) / 平行共存 (两条 surviving 无关系)
+- **测试**: 10 个 FakeLLM 结构测试 (场景完整性 + 修复分类器 + 报告聚合), 全部通过
+- **状态**: **未运行: 等真人数据**
+
 ### Round 2 结论
 
 1. **管线可用性**: 标定 100% 通过, 裁判 prompt 在 74 对 (含 24 对对抗) 上完全准确, 0 偏置。
