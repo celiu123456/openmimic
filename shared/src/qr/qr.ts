@@ -673,35 +673,28 @@ function deepCopy(matrix: Int8Array[]): Int8Array[] {
 function placeFormatBits(matrix: Int8Array[], maskPattern: number): void {
   const size = matrix.length;
   const info = computeFormatInfo(maskPattern);
-  const bit = (i: number): number => (info >> i) & 1;
 
-  // Horizontal strip along row 8 (bit 0..14, left to right)
-  // Left block: cols 0-5 (bits 0-5), skip col 6 (timing), col 7 (bit 6), col 8 (bit 7)
-  // Right block: cols size-8..size-1 (bits 8-14, but mapped via size-8+offset)
-  const hCols = [
-    0, 1, 2, 3, 4, 5,                                     // bits 0-5
-    7, 8,                                                   // bits 6-7 (skip col 6 = timing)
-    size - 8, size - 7, size - 6, size - 5,
-    size - 4, size - 3, size - 2,                          // bits 8-14
-  ];
-  for (let i = 0; i < 15; i++) {
-    matrix[8]![hCols[i]!] = bit(i);
+  // ISO 18004:2015 §7.9.1, Table C.2 — two copies of the 15-bit format info.
+  // Copy 1 wraps around the top-left finder (row 8 + col 8).
+  // Copy 2 spans the top-right (row 8 right end) and bottom-left (col 8 bottom).
+  for (let i = 0; i < 8; i++) {
+    const lo = (info >> i) & 1;        // bit i   (from LSB)
+    const hi = (info >> (14 - i)) & 1; // bit 14-i (from MSB)
+
+    // Offset by 1 past the timing pattern at row/col 6
+    const skip = i < 6 ? 0 : 1;
+
+    // Copy 1: around top-left finder
+    matrix[i + skip]![8] = lo;         // vertical  (col 8, rows 0-5 then 7-8)
+    matrix[8]![i + skip] = hi;         // horizontal (row 8, cols 0-5 then 7-8)
+
+    // Copy 2: top-right + bottom-left
+    matrix[8]![size - 1 - i] = lo;     // horizontal (row 8, cols size-1 down to size-8)
+    matrix[size - 1 - i]![8] = hi;     // vertical   (col 8, rows size-1 down to size-8)
   }
 
-  // Vertical strip along col 8 (bit 0..14, bottom to top)
-  // Bottom block: rows size-1 down to size-7 (bits 0-6)
-  // Top block: row 8 (bit 7), row 7 (bit 8), skip row 6 (timing),
-  //            rows 5 down to 0 (bits 9-14)
-  const vRows = [
-    size - 1, size - 2, size - 3, size - 4,
-    size - 5, size - 6, size - 7,  // bits 0-6
-    8,                               // bit 7
-    7,                               // bit 8 (skip row 6 = timing)
-    5, 4, 3, 2, 1, 0,               // bits 9-14
-  ];
-  for (let i = 0; i < 15; i++) {
-    matrix[vRows[i]!]![8] = bit(i);
-  }
+  // Dark module — always dark (ISO 18004:2015 §7.9.1)
+  matrix[size - 8]![8] = 1;
 }
 
 /** Write version information into the matrix (versions >= 7). */
@@ -721,11 +714,24 @@ function placeVersionInfo(matrix: Int8Array[], version: number): void {
   }
 }
 
+export interface GenerateQROptions {
+  /**
+   * Force a specific mask pattern (0..7) instead of evaluating all eight and
+   * picking the lowest-penalty one.  Intended for testing / cross-validation;
+   * production callers should leave it `undefined`.
+   */
+  forceMask?: number;
+}
+
 /**
  * Generate a complete QR code matrix for the given data.
- * Returns the matrix as a 2D array of 0/1 values.
+ * Returns the matrix as a 2D array of 0/1 values plus the chosen version and
+ * mask index.
  */
-export function generateQR(text: string): { matrix: number[][]; version: number; size: number } {
+export function generateQR(
+  text: string,
+  options?: GenerateQROptions,
+): { matrix: number[][]; version: number; size: number; mask: number } {
   const data = new TextEncoder().encode(text);
   const version = selectVersion(data.length);
   const size = moduleCount(version);
@@ -747,12 +753,17 @@ export function generateQR(text: string): { matrix: number[][]; version: number;
   // Place data
   placeData(baseMatrix, interleaved);
 
-  // Try all 8 masks, pick lowest penalty
+  // Try all 8 masks, pick lowest penalty (or use the forced one)
   let bestMatrix = baseMatrix;
   let bestPenalty = Infinity;
   let bestMask = 0;
 
-  for (let mask = 0; mask < 8; mask++) {
+  const forced = options?.forceMask;
+  const masks = forced !== undefined && forced >= 0 && forced <= 7
+    ? [forced]
+    : [0, 1, 2, 3, 4, 5, 6, 7];
+
+  for (const mask of masks) {
     const candidate = deepCopy(baseMatrix);
     applyMask(candidate, reserved, mask);
     placeFormatBits(candidate, mask);
@@ -771,7 +782,7 @@ export function generateQR(text: string): { matrix: number[][]; version: number;
     result.push(Array.from(row));
   }
 
-  return { matrix: result, version, size };
+  return { matrix: result, version, size, mask: bestMask };
 }
 
 /* ================================================================== */

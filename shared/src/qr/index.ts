@@ -1,1 +1,1 @@
-export { generateQR, qrToSvg, type QrSvgOptions } from './qr';
+export { generateQR, qrToSvg, type QrSvgOptions, type GenerateQROptions } from './qr';
