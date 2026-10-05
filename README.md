@@ -1,6 +1,6 @@
 # OpenMimic
 
-> **状态:早期开发中(v0.0.2-p4),下表为逐项实现状态** — 详见 [docs/claims-audit.md](docs/claims-audit.md)
+> **状态:早期开发中(v0.0.2-p4),下表为逐项实现状态** — 详见 [docs/claims-audit.md](docs/claims-audit.md)(截至 2026-10-08 核查)
 
 **通用人格仿真引擎:复刻任何人,预演万局。**
 
@@ -145,13 +145,15 @@ resp = client.chat.completions.create(
 
 **已实现并借鉴:**
 
-- conviction 置信分的思路、`contested` 状态命名、危机词熔断思路借鉴自 [衔枝 Twig](https://github.com/qimingjiu/twig-memory)(MIT)。本项目将其从「单 AI 对一个人的纵向理解审计」扩展为「多信源证言之间的横向对质」,代码为全新实现;对照与范围见其 [ATTRIBUTION.md](https://github.com/qimingjiu/twig-memory/blob/main/ATTRIBUTION.md)。
+- conviction 置信分的思路、`contested` 状态命名、`contested` 否决流(contest/uncontest + re-raise)、论断权限墙(诊断词/危机词过滤)、危机词熔断思路借鉴自 [衔枝 Twig](https://github.com/qimingjiu/twig-memory)(MIT)。本项目将其从「单 AI 对一个人的纵向理解审计」扩展为「多信源证言之间的横向对质」,代码为全新实现;对照与范围见其 [ATTRIBUTION.md](https://github.com/qimingjiu/twig-memory/blob/main/ATTRIBUTION.md)。
+- DEPLOY-FOR-AI 的 onboarding 做法学自衔枝。
+
+论断配对(跨证人找语义相关论断,用 LLM / embedding / 关键词三级回落)是本项目自有机制,不是衔枝反证搜索的实现。
 
 **计划借鉴(尚未实现):**
 
-- 反证搜索、盲推导审计、contested 否决流、论断权限墙同源自衔枝设计文档。
+- 反证搜索(对既有论断先生成反面假设、再检索反证并强制回应)、盲推导审计同源自衔枝设计文档。
 - 过程评测三指标(证据覆盖/矛盾响应/记忆修复)为衔枝设计文档 §6 在证言场景下的计划化用;当前 CourtReport 仅实现 evidenceCoverage。
-- DEPLOY-FOR-AI 的 onboarding 做法学自衔枝。
 
 **参照项目:**
 
@@ -183,6 +185,19 @@ resp = client.chat.completions.create(
   - 模型调用可靠性:9 类错误分类 + retry-after 解析 + 修复 attemptJson 盲重试 + 合并 extractJson
   - PII 脱敏:手机/邮箱/身份证/银行卡/凭据泄露正则 + 敏感字段掩码 + 稳定序列化
   - 证据基础分类修复:"大概/差不多"+数字不触发 inferred、一人称事件叙事归 witnessed、unknown 上限 0.6→0.85
+- 聊天记录导入(collector-chatlog):text/csv/json 三格式;preview→import 两步;PII 脱敏 + 注入检测 + 回流筛查
+- 角色卡桥接(bridge-sillytavern):SillyTavern Character Card V2 双向转换(JSON + PNG chara tEXt 块)
+- 证言集(output-biography):逐章引语验证 + 保密内容过滤 + 无据细节检查 + 主体否决
+- 带权限范围的令牌(scoped tokens):omk_ 前缀;9 种 scope;显式白名单(禁通配符);SHA-256 加盐;fail-closed
+- 能力目录:机器可读能力清单(含 scope 要求),GET /api/capabilities
+- 话题覆盖调度(coverage):逐维度状态(untouched/shallow/covered/cautious);缺失关系推荐
+- 邀请短码:8 字符不混淆字母表(29 字符);已接入邀请链接
+- 提示词隔离:所有用户文本入 LLM 前包裹数据块 + 注入检测(flag, don't reject) + 守卫扫描
+- 说话风格画像(style-stats):消息力量画像 + 言语行为模板(10 类) + 常用语;已接入 persona 组装
+- 四级披露(disclosure):speakable / reference_only / presence_only / excluded + holdUntilRaised
+- 访谈员 v2:9 意图分类、退缩检测(5 类)、证据基础标注(4 类)、质量门(去重/单问题/防提前结束)、反机械追问
+- 留一证人(LOWO)评测 + 对照臂(baseline/claims-stripped/episodes-stripped)
+- 当面房间防泄密:no-talk list(LLM 生成 + 规则兜底) + 两级泄密检测 + guided rewrite(最多两次)
 
 ### 计划
 
