@@ -272,10 +272,10 @@ export const DivergenceSchema = z.object({
   subjectId: z.string().min(1),
   courtSessionId: z.string().min(1),
   topic: z.string().min(1),
-  type: z.enum(['perspective', 'factual']),
+  type: z.enum(['perspective', 'factual', 'supersedes', 'refines', 'retelling_diverges']),
   /** At least 2 positions from different witnesses. */
   positions: z.array(DivergencePositionSchema).min(2),
-  resolution: z.enum(['kept_both', 'qualified', 'unresolved']).optional(),
+  resolution: z.enum(['kept_both', 'qualified', 'unresolved', 'pre_judged']).optional(),
 });
 export type Divergence = z.infer<typeof DivergenceSchema>;
 
@@ -356,6 +356,10 @@ export const CourtReportSchema = z.object({
   episodeCount: z.number().int().nonnegative().optional(),
   /** Number of claims with at least one supporting episode. */
   claimsWithEpisode: z.number().int().nonnegative().optional(),
+  /** Number of pairs resolved by deterministic pre-judgment (skipped LLM). */
+  preJudgedPairs: z.number().int().nonnegative().optional(),
+  /** Number of pairs that required LLM relation judgment. */
+  llmJudgedPairs: z.number().int().nonnegative().optional(),
 });
 export type CourtReport = z.infer<typeof CourtReportSchema>;
 

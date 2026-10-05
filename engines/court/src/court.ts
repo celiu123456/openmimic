@@ -3,8 +3,10 @@ import { z } from 'zod';
 import {
   CONVICTION_UNCHALLENGED_CAP,
   CONTRADICTION_CHECK_RULES,
+  OBSERVER_GUARD,
   SOURCE_GUARD,
   extractJson,
+  generateStructuredJson,
   normalizeProviderError,
   wrapUntrusted,
   appendGuardInstruction,
@@ -15,17 +17,20 @@ import {
   type CourtSession,
   type Divergence,
   type Episode,
+  type RepairChatMessage,
   type Testimony,
   type Witness,
 } from '@openmimic/shared';
 import { computeFingerprint, type EmbeddingClient, type Store } from '@openmimic/kernel';
 import {
+  classifyPair,
   EmbeddingClaimPairFinder,
   KeywordClaimPairFinder,
   KeywordConflictFinder,
   LLMClaimPairFinder,
   type ClaimPairFinder,
   type ConflictFinder,
+  type PairPreJudgmentResult,
 } from './conflict';
 import type { LLMClient, LLMCompletionRequest } from './llm';
 
@@ -104,6 +109,8 @@ function buildFilingSystem(displayName: string): string {
     '请确保 episodes 和 claims 数组都非空(只要证言中有具体事件和可对质的描述)。',
     '',
     SOURCE_GUARD,
+    '',
+    OBSERVER_GUARD,
     '★ 三层分开:证人对自己的评价不得立为关于被描述者的论断;证人的感受归证人,被描述者的行为归被描述者,两人的互动归关系。',
   ].join('\n');
 }
@@ -148,39 +155,48 @@ const CONFRONTATION_SYSTEM = [
 
 type Attempt<T> = { ok: true; value: T } | { ok: false; error: Error };
 
-function toError(caught: unknown): Error {
-  return caught instanceof Error ? caught : new Error(String(caught));
+/**
+ * Adapt a court LLMClient to the RepairModel interface used by
+ * generateStructuredJson. Each call records purpose for usage tracking.
+ */
+function asRepairModel(llm: LLMClient, purpose: string): { chat: (msgs: RepairChatMessage[]) => Promise<string> } {
+  return {
+    chat: async (msgs: RepairChatMessage[]) => {
+      const system = msgs.filter((m) => m.role === 'system').map((m) => m.content).join('\n');
+      const user = msgs.filter((m) => m.role === 'user').pop()?.content ?? '';
+      return llm.complete({ system, user, purpose });
+    },
+  };
 }
 
 /**
- * Attempt an LLM call that should return parseable JSON.
+ * Attempt a structured JSON call with repair loop.
  *
- * Only retries on *retryable* errors (rate limit, timeout, upstream 5xx).
- * Non-retryable errors (402 quota, 401 auth, 400 bad request) are
- * surfaced immediately — the old implementation blindly retried all
- * errors, burning budget on calls that could never succeed.
+ * Uses generateStructuredJson from shared: on validation failure the model's
+ * raw output and the validation error are fed back for a repair attempt.
+ * Non-retryable errors (402 quota, 401 auth) propagate immediately.
  */
 async function attemptJson<T>(
   llm: LLMClient,
   request: LLMCompletionRequest,
-  parse: (text: string) => T,
-  attempts: number,
+  validate: (value: unknown) => T,
+  maxAttempts: number,
 ): Promise<Attempt<T>> {
-  let error: Error = new Error('no attempt was made');
-  for (let attempt = 0; attempt < Math.max(1, attempts); attempt += 1) {
-    try {
-      const text = await llm.complete(request);
-      return { ok: true, value: parse(text) };
-    } catch (caught) {
-      error = toError(caught);
-      // Non-retryable errors: stop immediately
-      const normalized = normalizeProviderError('llm', caught);
-      if (!normalized.retryable) {
-        return { ok: false, error: normalized };
-      }
-    }
+  try {
+    const result = await generateStructuredJson({
+      model: asRepairModel(llm, request.purpose ?? 'other'),
+      messages: [
+        { role: 'system', content: request.system },
+        { role: 'user', content: request.user },
+      ],
+      validate,
+      maxAttempts,
+    });
+    return { ok: true, value: result };
+  } catch (caught) {
+    const error = caught instanceof Error ? caught : new Error(String(caught));
+    return { ok: false, error };
   }
-  return { ok: false, error };
 }
 
 // extractJson re-exported from the import above for backward compatibility.
@@ -472,11 +488,8 @@ export async function runCourt(
         maxTokens: 4096,
         purpose: 'court-filing',
       },
-      (text) => {
-        const raw = extractJson(text);
-        // Use lenient parsing: validate each item individually
-        return lenientParseFilingResponse(raw);
-      },
+      // validate receives the already-extracted JSON value
+      (raw) => lenientParseFilingResponse(raw),
       options.filingAttempts ?? 2,
     );
 
@@ -649,11 +662,56 @@ export async function runCourt(
 
   /* ---------------------- 3. Relation judgment ------------------------- */
   const divergences: Divergence[] = [];
+  let preJudgedPairs = 0;
+  let llmJudgedPairs = 0;
 
   for (const pair of pairs) {
     pairedClaimIds.add(pair.claimA.id);
     pairedClaimIds.add(pair.claimB.id);
 
+    // --- Deterministic pre-judgment: skip LLM when a rule matches ---
+    const preJudgment: PairPreJudgmentResult | null = classifyPair(pair.claimA, pair.claimB);
+    if (preJudgment) {
+      preJudgedPairs += 1;
+      const NEW_DIV_TYPES = new Set(['supersedes', 'refines', 'retelling_diverges'] as const);
+      type NewDivType = 'supersedes' | 'refines' | 'retelling_diverges';
+      const divType: Divergence['type'] = (NEW_DIV_TYPES as ReadonlySet<string>).has(preJudgment.relation)
+        ? (preJudgment.relation as NewDivType)
+        : preJudgment.relation === 'contradicts'
+          ? 'factual'
+          : 'perspective';
+      const divId = newId();
+      const divergence: Divergence = {
+        id: divId,
+        subjectId,
+        courtSessionId: sessionId,
+        topic: pair.claimA.text.slice(0, 50),
+        type: divType,
+        positions: [
+          { witnessId: pair.claimA.witnessIds?.[0] ?? '', claimId: pair.claimA.id, summary: pair.claimA.text },
+          { witnessId: pair.claimB.witnessIds?.[0] ?? '', claimId: pair.claimB.id, summary: pair.claimB.text },
+        ],
+        resolution: 'pre_judged',
+      };
+      store.putDivergence(divergence);
+      divergences.push(divergence);
+
+      // For contradicts, mark both contested just like factual_conflict unresolved
+      if (preJudgment.relation === 'contradicts') {
+        store.putClaim({ ...pair.claimA, status: 'contested' });
+        store.putClaim({ ...pair.claimB, status: 'contested' });
+      }
+
+      transcript.push({
+        type: 'challenge',
+        claimId: pair.claimA.id,
+        text: `pre-judgment: ${preJudgment.relation} (rule=${preJudgment.rule}, conf=${preJudgment.confidence.toFixed(2)})`,
+        at: now(),
+      });
+      continue;
+    }
+
+    llmJudgedPairs += 1;
     const judgment = await attemptJson(
       llm,
       {
@@ -662,8 +720,8 @@ export async function runCourt(
         maxTokens: 1024,
         purpose: 'court-relation',
       },
-      (text) => RelationSchema.parse(extractJson(text)),
-      1,
+      (raw) => RelationSchema.parse(raw),
+      2,
     );
 
     if (!judgment.ok) {
@@ -748,8 +806,8 @@ export async function runCourt(
           maxTokens: 1024,
           purpose: 'court-relation',
         },
-        (text) => ConfrontationVerdictSchema.parse(extractJson(text)),
-        1,
+        (raw) => ConfrontationVerdictSchema.parse(raw),
+        2,
       );
 
       if (!confrontation.ok || confrontation.value.verdict === 'unresolved') {
@@ -879,6 +937,8 @@ export async function runCourt(
     factualConflicts,
     episodeCount: filedEpisodes.length,
     claimsWithEpisode,
+    preJudgedPairs,
+    llmJudgedPairs,
   };
 
   const session: CourtSession = {

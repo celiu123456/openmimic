@@ -1,5 +1,5 @@
 import type { Claim, CorpusItem, Divergence, Episode, StyleSample } from '@openmimic/shared';
-import { wrapUntrusted, appendGuardInstruction } from '@openmimic/shared';
+import { OBSERVER_GUARD, wrapUntrusted, appendGuardInstruction } from '@openmimic/shared';
 import type { EmbeddingClient } from './embedding';
 import { cosine } from './embedding';
 import type { Store } from './store';
@@ -33,6 +33,8 @@ export const PERSONA_DISCIPLINE = [
   '- 只依据上面清单里的事实谈论对方,不虚构清单之外的传记事实。',
   '- 被问到自伤、自杀、诊断标签等敏感或医疗话题时,按 GateEngine 词表退避:不展开、不评判,建议寻求专业帮助。',
   '- 如果证人们集体回避了某个话题,你也不要主动提起——那是他们共同的沉默,不是你能替他们打破的。',
+  '',
+  OBSERVER_GUARD,
 ].join('\n');
 
 /* ------------------------------------------------------------------ */

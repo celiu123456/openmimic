@@ -19,7 +19,15 @@ import type { Plugin } from '@openmimic/kernel';
 import type { Store, PluginTableHandle } from '@openmimic/kernel';
 import type { Router } from '@openmimic/server';
 import type { LLMClient, LLMCompletionRequest } from '@openmimic/engine-court';
-import { extractJson } from '@openmimic/engine-court';
+import {
+  PRIVATE_MARKERS,
+  splitSentences,
+  extractPrivateSentences,
+} from '@openmimic/engine-room';
+import {
+  generateStructuredJson,
+  type RepairChatMessage,
+} from '@openmimic/shared';
 import type {
   Testimony,
   Episode,
@@ -89,7 +97,10 @@ export interface BiographySection {
   paragraphs: BiographyParagraph[];
   removed: boolean;
   removalNote: string | null;
+  /** @deprecated Use qualityPass instead. Kept for backward compat. */
   qualityScore: number | null;
+  /** Pass/fail gate: false when any quality dimension critically fails. */
+  qualityPass: boolean | null;
   qualityIssues: QualityDimension[];
 }
 
@@ -194,59 +205,17 @@ const TOPIC_DIMENSION_LABELS: Record<string, string> = {
 /* ================================================================== */
 
 /**
- * Phrases that mark content as entrusted-secret in testimony.
- * Equivalent to engines/room PRIVATE_MARKERS; implemented here as a pure
- * function (to be replaced by shared/src/prompt/untrusted.ts when merged).
+ * Confidential markers: re-exported from room engine for backward compatibility.
+ * The canonical list is PRIVATE_MARKERS from @openmimic/engine-room.
  */
-export const CONFIDENTIAL_MARKERS: readonly string[] = [
-  '别告诉',
-  '别跟',
-  '千万别',
-  '别外传',
-  '只跟你说',
-  '你可别',
-  '你别跟',
-  '谁都没说',
-  '别人不知道',
-  '没跟',
-  '嘱咐我',
-  '别让他',
-  '别让她',
-  '别让.*知道',
-];
-
-/**
- * Split Chinese text into sentences.
- * Equivalent to room engine's splitSentences.
- */
-function splitChineseSentences(text: string): string[] {
-  return text.split(/(?<=[。！？；\n])/).map((s) => s.trim()).filter(Boolean);
-}
+export const CONFIDENTIAL_MARKERS: readonly string[] = PRIVATE_MARKERS;
 
 /**
  * Extract confidential sentence ranges from a testimony text.
- * A sentence containing a confidential marker is confidential, along with
- * the preceding sentence (which typically states the fact being hidden).
- *
- * Returns the confidential sentences (used to filter material).
+ * Delegates to room engine's extractPrivateSentences.
  */
 export function extractConfidentialSentences(text: string): string[] {
-  const sentences = splitChineseSentences(text);
-  const confidentialIndices = new Set<number>();
-  for (let i = 0; i < sentences.length; i++) {
-    const sentence = sentences[i]!;
-    const isMarked = CONFIDENTIAL_MARKERS.some((m) => {
-      if (m.includes('.*')) {
-        return new RegExp(m).test(sentence);
-      }
-      return sentence.includes(m);
-    });
-    if (isMarked) {
-      if (i > 0) confidentialIndices.add(i - 1);
-      confidentialIndices.add(i);
-    }
-  }
-  return [...confidentialIndices].sort((a, b) => a - b).map((i) => sentences[i]!);
+  return extractPrivateSentences(text);
 }
 
 /**
@@ -254,7 +223,7 @@ export function extractConfidentialSentences(text: string): string[] {
  * Returns the cleaned text (may be shorter or empty).
  */
 export function removeConfidentialContent(text: string): string {
-  const confidential = extractConfidentialSentences(text);
+  const confidential = extractPrivateSentences(text);
   if (confidential.length === 0) return text;
   let cleaned = text;
   for (const sentence of confidential) {
@@ -740,32 +709,23 @@ export async function generateChapter(
     .replace('{voice_label}', style.label)
     .replace('{subjectName}', subjectName);
 
-  // First attempt
-  const text = await llm.complete({
-    system,
-    user,
-    maxTokens: 2048,
-    purpose: 'biography-chapter',
+  const repairModel = {
+    chat: async (msgs: RepairChatMessage[]) => {
+      const sysContent = msgs.filter((m) => m.role === 'system').map((m) => m.content).join('\n');
+      const userContent = msgs.filter((m) => m.role === 'user').pop()?.content ?? '';
+      return llm.complete({ system: sysContent, user: userContent, maxTokens: 2048, purpose: 'biography-chapter' });
+    },
+  };
+
+  return generateStructuredJson({
+    model: repairModel,
+    messages: [
+      { role: 'system', content: system },
+      { role: 'user', content: user },
+    ],
+    validate: (raw) => RawChapterSchema.parse(raw),
+    maxAttempts: 2,
   });
-
-  let parsed: RawChapterOutput;
-  try {
-    const raw = extractJson(text);
-    parsed = RawChapterSchema.parse(raw);
-  } catch (firstError) {
-    // Repair retry: feed back the error with full context
-    const repairUser = `上一次输出有格式错误: ${firstError instanceof Error ? firstError.message : String(firstError)}\n\n请修正后输出合法的 JSON。注意:sourceWitnessIds 必须使用素材区给出的证人 id(如 ${materialForChapter[0]?.witnessId ?? 'w-xxx'}),不要编造。引号内容必须逐字来自可引原话区。\n\n${user}`;
-    const repairText = await llm.complete({
-      system,
-      user: repairUser,
-      maxTokens: 2048,
-      purpose: 'biography-chapter-repair',
-    });
-    const repairRaw = extractJson(repairText);
-    parsed = RawChapterSchema.parse(repairRaw);
-  }
-
-  return parsed;
 }
 
 /**
@@ -1242,19 +1202,27 @@ export async function checkUnsupportedDetails(
     .replace('{body}', body)
     .replace('{material}', material);
 
-  const text = await llm.complete({
-    system: DETAIL_CHECK_SYSTEM,
-    user,
-    maxTokens: 1024,
-    purpose: 'biography-detail-check',
-  });
+  const repairModel = {
+    chat: async (msgs: RepairChatMessage[]) => {
+      const sysContent = msgs.filter((m) => m.role === 'system').map((m) => m.content).join('\n');
+      const userContent = msgs.filter((m) => m.role === 'user').pop()?.content ?? '';
+      return llm.complete({ system: sysContent, user: userContent, maxTokens: 1024, purpose: 'biography-detail-check' });
+    },
+  };
 
   try {
-    const raw = extractJson(text);
-    const parsed = UnsupportedDetailSchema.parse(raw);
+    const parsed = await generateStructuredJson({
+      model: repairModel,
+      messages: [
+        { role: 'system', content: DETAIL_CHECK_SYSTEM },
+        { role: 'user', content: user },
+      ],
+      validate: (raw) => UnsupportedDetailSchema.parse(raw),
+      maxAttempts: 2,
+    });
     return parsed.unsupportedDetails;
   } catch {
-    // If parsing fails, treat as no unsupported details found
+    // If all attempts fail, treat as no unsupported details found
     return [];
   }
 }
@@ -1320,6 +1288,7 @@ export function buildFinalChapter(
       removed: false,
       removalNote: null,
       qualityScore: null,
+      qualityPass: null,
       qualityIssues: [],
     };
   }
@@ -1339,6 +1308,7 @@ export function buildFinalChapter(
     removed: false,
     removalNote: null,
     qualityScore: null,
+    qualityPass: null,
     qualityIssues: [],
   };
 }
@@ -1478,6 +1448,7 @@ export async function generateBiography(
         removed: false,
         removalNote: null,
         qualityScore: null,
+        qualityPass: null,
         qualityIssues: [],
       });
       continue;
@@ -1509,6 +1480,7 @@ export async function generateBiography(
         removed: false,
         removalNote: null,
         qualityScore: 0,
+        qualityPass: false,
         qualityIssues: [],
       });
       continue;
@@ -1593,6 +1565,7 @@ export async function generateBiography(
           removed: false,
           removalNote: null,
           qualityScore: 0,
+          qualityPass: false,
           qualityIssues: [],
         });
         continue;
@@ -1678,6 +1651,7 @@ export async function generateBiography(
         removed: false,
         removalNote: null,
         qualityScore: qr.score,
+        qualityPass: !qr.requiresRewrite,
         qualityIssues: qr.dimensions,
       });
     } catch (err) {
@@ -1695,6 +1669,7 @@ export async function generateBiography(
         removed: false,
         removalNote: null,
         qualityScore: 0,
+        qualityPass: false,
         qualityIssues: [],
       });
     }

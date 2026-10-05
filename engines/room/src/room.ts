@@ -509,7 +509,7 @@ export interface RoomStats {
  * Phrases that mark content as private/confidential in testimony.
  * Used for the secret leak guard.
  */
-const PRIVATE_MARKERS = [
+export const PRIVATE_MARKERS = [
   '别告诉',
   '别跟',
   '千万别',
@@ -526,7 +526,7 @@ const PRIVATE_MARKERS = [
 /**
  * Split Chinese text into sentences on common sentence-end punctuation.
  */
-function splitSentences(text: string): string[] {
+export function splitSentences(text: string): string[] {
   return text.split(/(?<=[。！？；\n])/).map((s) => s.trim()).filter(Boolean);
 }
 
@@ -534,7 +534,7 @@ function splitSentences(text: string): string[] {
  * Extract private sentence ranges from a testimony text.
  * Returns the private sentences (sentence containing a marker + the preceding one).
  */
-function extractPrivateSentences(text: string): string[] {
+export function extractPrivateSentences(text: string): string[] {
   const sentences = splitSentences(text);
   const result: string[] = [];
   for (let i = 0; i < sentences.length; i++) {

@@ -17,8 +17,12 @@ import type { Plugin } from '@openmimic/kernel';
 import type { Store } from '@openmimic/kernel';
 import type { Router } from '@openmimic/server';
 import type { LLMClient, LLMCompletionRequest } from '@openmimic/engine-court';
-import { extractJson } from '@openmimic/engine-court';
-import { wrapUntrusted, appendGuardInstruction } from '@openmimic/shared';
+import {
+  generateStructuredJson,
+  wrapUntrusted,
+  appendGuardInstruction,
+  type RepairChatMessage,
+} from '@openmimic/shared';
 
 /* ------------------------------------------------------------------ */
 /* Schemas                                                             */
@@ -112,14 +116,22 @@ export async function scoreOnePrediction(
   predicted: string,
   actual: string,
 ): Promise<{ match: MatchGrade; cue: string }> {
-  const request: LLMCompletionRequest = {
-    system: SCORE_SYSTEM,
-    user: buildScoreUser(predicted, actual),
-    maxTokens: 256,
+  const repairModel = {
+    chat: async (msgs: RepairChatMessage[]) => {
+      const sysContent = msgs.filter((m) => m.role === 'system').map((m) => m.content).join('\n');
+      const userContent = msgs.filter((m) => m.role === 'user').pop()?.content ?? '';
+      return llm.complete({ system: sysContent, user: userContent, maxTokens: 256 });
+    },
   };
-  const text = await llm.complete(request);
-  const parsed = MatchResultSchema.parse(extractJson(text));
-  return parsed;
+  return generateStructuredJson({
+    model: repairModel,
+    messages: [
+      { role: 'system', content: SCORE_SYSTEM },
+      { role: 'user', content: buildScoreUser(predicted, actual) },
+    ],
+    validate: (raw) => MatchResultSchema.parse(raw),
+    maxAttempts: 2,
+  });
 }
 
 export function computeScore(items: ScoreItem[]): number {

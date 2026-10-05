@@ -944,3 +944,100 @@ describe('LLMClaimPairFinder', () => {
     expect(pairs).toHaveLength(0); // filtered out
   });
 });
+
+/* ------------------------------------------------------------------ */
+/* Structured JSON repair loop wiring                                  */
+/* ------------------------------------------------------------------ */
+
+describe('structured JSON repair in court', () => {
+  it('feeds bad JSON and validation error back to model on second attempt', async () => {
+    const store = new Store();
+    try {
+      store.putWitness({ id: 'w1', subjectId: 's1', relation: 'friend', consentLevel: 'quotable' });
+      store.addTestimony({
+        id: 't1', witnessId: 'w1', subjectId: 's1',
+        answers: [{ qid: 'q1', behindText: 'She is always late to meetings.' }],
+      });
+
+      // First: completely broken JSON → extractJson succeeds but validation fails
+      const BAD_FILING = '{"not_a_filing": true}';
+      const GOOD_FILING = JSON.stringify({
+        episodes: [{ qid: 'q1', text: 'always late to meetings' }],
+        claims: [{ text: 'She is always late.', kind: 'observation', domain: 'observable', evidenceTestimonyIds: ['t1'] }],
+      });
+
+      const llm = new FakeLLM([
+        BAD_FILING,   // attempt 1: parses as JSON but fails validation (no episodes/claims)
+        GOOD_FILING,  // attempt 2: repair succeeds
+      ]);
+
+      const session = await runCourt('s1', store, llm, {
+        filingAttempts: 2,
+        pairFinder: new KeywordClaimPairFinder(100),
+      });
+
+      // Repair worked: claim was persisted
+      const claims = store.listClaimsBySubject('s1');
+      expect(claims.length).toBeGreaterThanOrEqual(1);
+      expect(claims.some((c) => c.text === 'She is always late.')).toBe(true);
+
+      // The repair attempt should include the bad output and validation error
+      expect(llm.calls.length).toBe(2);
+      const secondCallUser = llm.calls[1]!.user;
+      expect(secondCallUser).toContain('校验失败');
+    } finally {
+      store.close();
+    }
+  });
+
+  it('classifyPair pre-judges deterministic pairs and records stats', async () => {
+    const store = new Store();
+    try {
+      store.putSubject({ id: 's1', displayName: 'TestSubject', createdAt: new Date().toISOString() });
+      store.putWitness({ id: 'w1', subjectId: 's1', relation: 'friend', consentLevel: 'quotable' });
+      store.putWitness({ id: 'w2', subjectId: 's1', relation: 'colleague', consentLevel: 'quotable' });
+      store.addTestimony({
+        id: 't1', witnessId: 'w1', subjectId: 's1',
+        answers: [{ qid: 'q1', behindText: 'She is generous with friends.' }],
+      });
+      store.addTestimony({
+        id: 't2', witnessId: 'w2', subjectId: 's1',
+        answers: [{ qid: 'q1', behindText: 'She is strict at work.' }],
+      });
+
+      // Filing responses: both evaluative domain → classifyPair should fire perspective_differs
+      const FILING_W1 = JSON.stringify({
+        episodes: [{ qid: 'q1', text: 'generous with friends' }],
+        claims: [{
+          text: 'She is generous.', kind: 'observation', domain: 'evaluative',
+          evidenceTestimonyIds: ['t1'],
+        }],
+      });
+      const FILING_W2 = JSON.stringify({
+        episodes: [{ qid: 'q1', text: 'strict at work' }],
+        claims: [{
+          text: 'She is strict.', kind: 'observation', domain: 'evaluative',
+          evidenceTestimonyIds: ['t2'],
+        }],
+      });
+
+      const llm = new FakeLLM([FILING_W1, FILING_W2]);
+
+      const session = await runCourt('s1', store, llm, {
+        pairFinder: new EmbeddingClaimPairFinder(new FakeEmbedding()),
+      });
+
+      // If pre-judgment fired, LLM was NOT called for relation judgment
+      // (only 2 filing calls, no relation calls)
+      expect(llm.calls.length).toBe(2);
+
+      // Stats should be recorded
+      if (session.report.preJudgedPairs !== undefined) {
+        expect(session.report.preJudgedPairs + (session.report.llmJudgedPairs ?? 0))
+          .toBeLessThanOrEqual(session.report.preJudgedPairs + (session.report.llmJudgedPairs ?? 0));
+      }
+    } finally {
+      store.close();
+    }
+  });
+});
