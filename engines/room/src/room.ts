@@ -745,6 +745,12 @@ const NO_TALK_LIST_SCHEMA = z.array(z.object({
  * Input: each witness's relation and a summary of their testimony.
  * Output: topics that would reveal secrets to present witnesses, with
  *   keywords for post-generation checking.
+ *
+ * The prompt asks the model to systematically check each witness's
+ * understanding of the subject's current situation (career, health,
+ * finances, relationships, living arrangements, etc.) against every
+ * other witness's testimony for contradictions. This avoids hardcoding
+ * domain-specific categories.
  */
 export async function generateNoTalkList(
   llm: LLMClient,
@@ -761,13 +767,23 @@ export async function generateNoTalkList(
   const system = [
     `你是一位隐私保护分析师。以下是关于"${subjectName}"的多位证人的证言。这些证人马上要坐在同一个房间里聊天。`,
     '你的任务:找出哪些事实如果在房间里被说出来,会让在场的某位证人当场得知自己被瞒了的事。',
+    '',
+    '方法——逐位检查:',
+    '对每一位在场证人,提取其证言中对此人现状的认知(工作、健康、感情、财务、住处等),然后逐一与其他证人所述的事实核对。',
+    '如果其他证人提到了该证人不知道或明显相反的事实,这个事实就不能在房间里说出来。',
+    '',
     '两类情形:',
-    '1. 某证人的证言里有明确的保密嘱托(如"千万别跟XX说""你别跟XX提"),这件事不能当着被瞒的人说。',
-    '2. 不同证人对同一件事持有矛盾认知(如A知道TA辞职了,而B还以为TA在上班),说出真相会让不知情的那位当场知道自己被骗。',
+    '1. 明确的保密嘱托(如"千万别跟XX说""你别跟XX提"):这件事不能当着被瞒的人说。',
+    '2. 认知矛盾:证人A知道的事实与证人B所相信的版本冲突。若事实在房间里被说出——即使是暗示、间接引用、或换了说法——B都会当场得知自己被瞒了。',
+    '',
+    '示例:',
+    '张三(同学)说"她已经递了离职申请,打算搬去成都";李四(父亲)说"她刚升职,工作很稳定"。',
+    '→ 条目: topic="递了离职申请", blindWitnessId=李四的id, blindClaim="刚升职,工作稳定", keywords=["离职","辞职","申请","搬","走","不干了","换城市"]。',
+    '注意:即使某句台词不直接说"辞职"而说"他走了""不在这边了",只要能让不知情者推断出真相,就应该列入keywords。',
     '',
     '对每一条,给出:',
     '- topic: 简短描述这个秘密(10字以内)',
-    '- keywords: 3-6个标志性词/短语,用于检测生成的台词是否触及该话题(要涵盖同义表述)',
+    '- keywords: 3-6个标志性词/短语,必须涵盖直接说法和间接/委婉说法(如"辞职"和"走了""不干了"),用于检测台词是否触及该话题',
     '- knowingWitnessIds: 知情的证人id列表',
     '- blindWitnessId: 不该知道这件事的在场证人id',
     '- blindClaim: 该证人目前相信的版本(20字以内)',
@@ -871,7 +887,10 @@ export function buildNoTalkListFallback(
 
 /**
  * Check whether a generated line would reveal a no-talk topic to a blind
- * witness. Only called when the line hits at least one keyword.
+ * witness, given what that witness currently believes.
+ *
+ * Fail-closed: ambiguous answers (anything other than a clear "否") are
+ * treated as leaks.
  *
  * Returns true if the line should be blocked (it leaks the topic).
  */
@@ -880,16 +899,21 @@ export async function llmVerifyLeak(
   utteranceText: string,
   topic: string,
   blindWitnessRelation: string,
+  blindClaim: string,
 ): Promise<boolean> {
   const system = '你是一个隐私判定器。只回答"是"或"否",不要其他文字。';
   const user = [
-    `以下这句话如果在聊天室里被说出来,在场的"${blindWitnessRelation}"会不会因此得知"${topic}"这件事?`,
+    `在场的"${blindWitnessRelation}"目前相信的版本是:"${blindClaim}"。`,
+    `以下这句话如果在聊天室里被说出来,${blindWitnessRelation}会不会因此得知或起疑事实并非如此——也就是发现"${topic}"?`,
     `台词:"${utteranceText}"`,
+    '即使只是暗示、间接提及,只要可能让其产生怀疑,就回答"是"。',
     '只回答"是"或"否"。',
   ].join('\n');
 
   const resp = await llm.complete({ system, user });
-  return resp.trim().startsWith('是');
+  // Fail-closed: only an unambiguous "否" is treated as safe
+  const trimmed = resp.trim();
+  return !trimmed.startsWith('否');
 }
 
 /**
@@ -1255,17 +1279,32 @@ async function runSchedule(
     }
 
     // LLM-based no-talk verification: for speech lines in behind mode,
-    // check if any no-talk keyword is hit and verify with one LLM call
+    // check against the no-talk list. Two trigger paths:
+    //   (a) keyword hit: always verify
+    //   (b) substantive line (>= 8 chars): verify if the no-talk list is
+    //       non-empty, to catch euphemisms and indirect references
+    // Skip: if the speaker IS the blind witness (they can't leak to themselves).
+    // Cap: at most MAX_VERIFY_PER_LINE items checked per line.
+    const MAX_VERIFY_PER_LINE = 3;
     if (mode === 'behind' && line.kind === 'speech' && noTalkList.length > 0) {
+      const isSubstantive = line.text.length >= 8;
+      let verifyCount = 0;
       for (const item of noTalkList) {
+        if (verifyCount >= MAX_VERIFY_PER_LINE) break;
+        // Skip: the blind witness speaking can't leak to themselves
+        if (draft.witness.id === item.blindWitnessId) continue;
         const keywordHit = item.keywords.some((kw) => line.text.includes(kw));
-        if (!keywordHit) continue;
+        // Send for verification if: keyword hit, OR line is substantive
+        if (!keywordHit && !isSubstantive) continue;
 
         // Find the blind witness's relation for the LLM prompt
         const blindDraft = drafts.find((d) => d.witness.id === item.blindWitnessId);
         const blindRelation = blindDraft?.witness.relation ?? '在场的人';
         try {
-          const isLeak = await llmVerifyLeak(llm, line.text, item.topic, blindRelation);
+          verifyCount += 1;
+          const isLeak = await llmVerifyLeak(
+            llm, line.text, item.topic, blindRelation, item.blindClaim,
+          );
           if (isLeak) {
             // Block this line: rewrite or fall back to stage direction
             if (secretLeakBudget.remaining > 0) {
@@ -1281,7 +1320,7 @@ async function runSchedule(
             break; // no need to check more items
           }
         } catch {
-          // LLM call failed: err on the safe side, treat keyword hit as leak
+          // LLM call failed: err on the safe side, treat as leak
           line.kind = 'stage';
           line.text = stageLine();
           line.qids = [];

@@ -151,20 +151,21 @@ describe('buildNoTalkListFallback', () => {
 describe('llmVerifyLeak', () => {
   it('returns true when LLM says yes', async () => {
     const llm = new FakeLLM(['是']);
-    const result = await llmVerifyLeak(llm, '她做了手术', '查出病情', '父亲');
+    const result = await llmVerifyLeak(llm, '她做了手术', '查出病情', '父亲', '她刚升职,工作稳定');
     expect(result).toBe(true);
   });
 
   it('returns false when LLM says no', async () => {
     const llm = new FakeLLM(['否']);
-    const result = await llmVerifyLeak(llm, '她最近请假了', '查出病情', '父亲');
+    const result = await llmVerifyLeak(llm, '她最近请假了', '查出病情', '父亲', '她刚升职,工作稳定');
     expect(result).toBe(false);
   });
 
-  it('returns false on ambiguous response', async () => {
+  it('treats ambiguous response as leak (fail-closed)', async () => {
     const llm = new FakeLLM(['不确定']);
-    const result = await llmVerifyLeak(llm, '她在看成都的房子', '查出病情', '父亲');
-    expect(result).toBe(false);
+    const result = await llmVerifyLeak(llm, '她在看成都的房子', '查出病情', '父亲', '她刚升职,工作稳定');
+    // Fail-closed: anything other than clear "否" is treated as leak
+    expect(result).toBe(true);
   });
 });
 
