@@ -353,6 +353,55 @@ SillyTavern Character Card V2. It is a standard `bridge` plugin.
 
 See `integrations/sillytavern/README.md` for usage instructions.
 
+## Graph engine plugin
+
+The `graph` plugin (`engines/graph/`) is an event-driven incremental recompute
+engine. It tracks which court outputs (claims, episodes, divergences) depend on
+which testimonies, and marks affected parts as dirty when input changes.
+
+**Service provided**: `graph` (GraphEngine)
+
+**Events listened**:
+
+| Event | Handler |
+|-------|---------|
+| `testimony.added` | Marks dirty (scoped to affected witness's claims) |
+| `court.finished` | Records dependency edges and persona version snapshot |
+
+The plugin also reacts to claim.contested / claim.uncontested when wired
+through the gate engine's contest/uncontest routes.
+
+**Events emitted**:
+
+| Event | When |
+|-------|------|
+| `graph.dirty` | A dirty mark is created |
+| `graph.recomputed` | A recompute finishes |
+| `graph.auto_trigger` | Auto-trigger timer fires (auto mode only) |
+
+**Routes**:
+
+| Method | Path | Scope | Purpose |
+|--------|------|-------|---------|
+| `GET` | `/api/subjects/:id/graph` | `testimony.read` | Dependency and version overview |
+| `POST` | `/api/subjects/:id/graph/recompute` | `court.run` | Trigger manual recompute |
+
+**Config (in `openmimic.yml`)**:
+
+```yaml
+plugins:
+  - use: "./engines/graph"
+    config:
+      triggerMode: manual    # 'manual' (default) or 'auto'
+      quietPeriodMs: 30000   # quiet period before auto-trigger (ms)
+      dailyLimit: 5          # max auto-recomputes per subject per day
+```
+
+**Non-determinism**: court output has ~47% overlap between identical runs.
+The graph engine handles this via 3-pass claim matching (exact text, bigram
+Jaccard >= 0.5, optional LLM semantic). Claims are classified as retained,
+merged (similar text), added (new), or retired (gone).
+
 ## Unloading
 
 `PluginHost.unload(name)` runs the dispose callback, removes provided services, collector/scenario registrations, and event listeners. It refuses to unload a plugin if another loaded plugin depends on one of its services.
