@@ -47,7 +47,7 @@ async function generatePrediction(
   system: string,
   user: string,
 ): Promise<string> {
-  const request: LLMCompletionRequest = { system, user };
+  const request: LLMCompletionRequest = { system, user, purpose: 'eval-predict' };
   return await llm.complete(request);
 }
 

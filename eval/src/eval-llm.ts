@@ -12,6 +12,12 @@
 
 import { z } from 'zod';
 import type { LLMClient, LLMCompletionRequest } from '@openmimic/engine-court';
+import {
+  checkBudget,
+  recordUsage,
+  InsufficientBalanceError,
+  type CallUsage,
+} from '@openmimic/shared';
 
 const ChatCompletionResponseSchema = z.object({
   choices: z
@@ -21,6 +27,12 @@ const ChatCompletionResponseSchema = z.object({
       }),
     )
     .min(1),
+  usage: z.object({
+    prompt_tokens: z.number().optional(),
+    completion_tokens: z.number().optional(),
+    prompt_cache_hit_tokens: z.number().optional(),
+    cached_tokens: z.number().optional(),
+  }).optional(),
 });
 
 export interface EvalLLMOptions {
@@ -56,9 +68,11 @@ export class EvalLLMClient implements LLMClient {
     return this.baseUrl.length > 0 && this.model.length > 0;
   }
 
-  async complete({ system, user }: LLMCompletionRequest): Promise<string> {
+  async complete({ system, user, purpose }: LLMCompletionRequest): Promise<string> {
     if (!this.baseUrl) throw new Error('LLM_BASE_URL is not configured');
     if (!this.model) throw new Error('LLM_MODEL is not configured');
+
+    checkBudget();
 
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), this.timeoutMs);
@@ -84,6 +98,9 @@ export class EvalLLMClient implements LLMClient {
 
       if (!response.ok) {
         const detail = await response.text().catch(() => '');
+        if (response.status === 402) {
+          throw new InsufficientBalanceError(402, detail.slice(0, 500));
+        }
         throw new Error(
           `LLM request failed: ${response.status} ${response.statusText}${detail ? ` -- ${detail.slice(0, 500)}` : ''}`,
         );
@@ -92,6 +109,18 @@ export class EvalLLMClient implements LLMClient {
       const parsed = ChatCompletionResponseSchema.parse(await response.json());
       const content = parsed.choices[0]?.message.content ?? '';
       if (!content) throw new Error('LLM response contained no message content');
+
+      // Record usage
+      const tag = purpose ?? 'other';
+      const callUsage: CallUsage = {
+        promptTokens: parsed.usage?.prompt_tokens ?? 0,
+        completionTokens: parsed.usage?.completion_tokens ?? 0,
+        cachedTokens: parsed.usage?.prompt_cache_hit_tokens
+          ?? parsed.usage?.cached_tokens
+          ?? 0,
+      };
+      recordUsage(tag, callUsage);
+
       return content;
     } finally {
       clearTimeout(timer);

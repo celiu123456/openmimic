@@ -83,7 +83,7 @@ export async function llmClaimMatch(
 
   async function call(textA: string, textB: string): Promise<'same' | 'different' | null> {
     const user = `## 论断 A\n${textA}\n\n## 论断 B\n${textB}`;
-    const request: LLMCompletionRequest = { system: prompt, user };
+    const request: LLMCompletionRequest = { system: prompt, user, purpose: 'eval-judge' };
     for (let attempt = 0; attempt < 2; attempt++) {
       try {
         const raw = await llm.complete(request);

@@ -8,6 +8,11 @@
 export interface LLMCompletionRequest {
   system: string;
   user: string;
+  /**
+   * Purpose tag for usage tracking (e.g. 'room-compose', 'room-verify').
+   * Defaults to 'other' when omitted.
+   */
+  purpose?: string;
 }
 
 export interface LLMClient {

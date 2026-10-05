@@ -26,6 +26,13 @@ import {
 } from '../fixtures/suzhi';
 import type { RoomUtterance } from '@openmimic/shared';
 import {
+  getUsageSummary,
+  formatUsageSummary,
+  writeUsageSummary,
+  BudgetExceededError,
+  InsufficientBalanceError,
+} from '@openmimic/shared';
+import {
   buildReport,
   formatReport,
   checkCriteria,
@@ -226,10 +233,37 @@ async function main() {
   }
   console.log(`\nOverall: ${allPass ? 'ALL PASS' : 'SOME FAILED'}`);
 
+  // Print and persist usage summary
+  const usageSummary = getUsageSummary();
+  console.log('\n' + formatUsageSummary(usageSummary));
+  writeUsageSummary(`/tmp/room-realism-usage-${fixtureName}-${runNumber}.json`, usageSummary);
+
+  // Append usage to the run doc
+  const usageMd: string[] = ['### LLM Usage', ''];
+  const sorted = Object.entries(usageSummary.buckets).sort(([a], [b]) => a.localeCompare(b));
+  usageMd.push('| Bucket | Calls | Prompt Tokens | Completion Tokens | Cached |');
+  usageMd.push('|--------|-------|---------------|-------------------|--------|');
+  for (const [name, b] of sorted) {
+    usageMd.push(`| ${name} | ${b.calls} | ${b.promptTokens} | ${b.completionTokens} | ${b.cachedTokens} |`);
+  }
+  const t = usageSummary.totals;
+  usageMd.push(`| **TOTAL** | ${t.calls} | ${t.promptTokens} | ${t.completionTokens} | ${t.cachedTokens} |`);
+  usageMd.push('');
+
+  // Re-read and append usage section
+  const currentDoc = readFileSync(outPath, 'utf8');
+  writeFileSync(outPath, currentDoc + usageMd.join('\n') + '\n', 'utf8');
+
   store.close();
 }
 
 main().catch((e) => {
+  // Print usage even on failure
+  console.error('\n' + formatUsageSummary());
+  if (e instanceof BudgetExceededError || e instanceof InsufficientBalanceError) {
+    console.error(`room-realism-run stopped: ${e.message}`);
+    process.exit(2);
+  }
   console.error('room-realism-run failed:', e);
   process.exit(1);
 });

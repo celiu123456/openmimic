@@ -1,4 +1,10 @@
 import { z } from 'zod';
+import {
+  checkBudget,
+  recordUsage,
+  InsufficientBalanceError,
+  type CallUsage,
+} from '@openmimic/shared';
 
 /** A single LLM completion request. */
 export interface LLMCompletionRequest {
@@ -6,6 +12,11 @@ export interface LLMCompletionRequest {
   user: string;
   /** Optional max tokens for the response. */
   maxTokens?: number;
+  /**
+   * Purpose tag for usage tracking (e.g. 'court-filing', 'room-compose').
+   * Defaults to 'other' when omitted.
+   */
+  purpose?: string;
 }
 
 /** One chat message forwarded verbatim to an OpenAI-compatible upstream. */
@@ -48,6 +59,12 @@ const ChatCompletionResponseSchema = z.object({
       }),
     )
     .min(1),
+  usage: z.object({
+    prompt_tokens: z.number().optional(),
+    completion_tokens: z.number().optional(),
+    prompt_cache_hit_tokens: z.number().optional(),
+    cached_tokens: z.number().optional(),
+  }).optional(),
 });
 
 /**
@@ -117,9 +134,11 @@ export class OpenAICompatClient implements LLMClient {
     });
   }
 
-  async complete({ system, user, maxTokens }: LLMCompletionRequest): Promise<string> {
+  async complete({ system, user, maxTokens, purpose }: LLMCompletionRequest): Promise<string> {
     if (!this.baseUrl) throw new Error('LLM_BASE_URL is not configured');
     if (!this.model) throw new Error('LLM_MODEL is not configured');
+
+    checkBudget();
 
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), this.timeoutMs);
@@ -153,6 +172,9 @@ export class OpenAICompatClient implements LLMClient {
 
       if (!response.ok) {
         const detail = await response.text().catch(() => '');
+        if (response.status === 402) {
+          throw new InsufficientBalanceError(402, detail.slice(0, 500));
+        }
         throw new Error(
           `LLM request failed: ${response.status} ${response.statusText}${detail ? ` — ${detail.slice(0, 500)}` : ''}`,
         );
@@ -161,6 +183,18 @@ export class OpenAICompatClient implements LLMClient {
       const parsed = ChatCompletionResponseSchema.parse(await response.json());
       const content = parsed.choices[0]?.message.content ?? '';
       if (!content) throw new Error('LLM response contained no message content');
+
+      // Record usage
+      const tag = purpose ?? 'other';
+      const usage: CallUsage = {
+        promptTokens: parsed.usage?.prompt_tokens ?? 0,
+        completionTokens: parsed.usage?.completion_tokens ?? 0,
+        cachedTokens: parsed.usage?.prompt_cache_hit_tokens
+          ?? parsed.usage?.cached_tokens
+          ?? 0,
+      };
+      recordUsage(tag, usage);
+
       return content;
     } finally {
       clearTimeout(timer);

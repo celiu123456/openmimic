@@ -451,6 +451,7 @@ export async function runCourt(
         system: buildFilingSystem(displayName),
         user: buildFilingUser(witness, testimonies, displayName),
         maxTokens: 4096,
+        purpose: 'court-filing',
       },
       (text) => {
         const raw = extractJson(text);
@@ -631,6 +632,7 @@ export async function runCourt(
         system: buildRelationSystem(displayName),
         user: buildRelationUser(pair.claimA, pair.claimB, witnessRelationMap),
         maxTokens: 1024,
+        purpose: 'court-relation',
       },
       (text) => RelationSchema.parse(extractJson(text)),
       1,
@@ -716,6 +718,7 @@ export async function runCourt(
           system: CONFRONTATION_SYSTEM,
           user: buildConfrontationUser(pair.claimA, pair.claimB, witnessRelationMap),
           maxTokens: 1024,
+          purpose: 'court-relation',
         },
         (text) => ConfrontationVerdictSchema.parse(extractJson(text)),
         1,

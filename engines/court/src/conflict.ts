@@ -243,6 +243,7 @@ export class LLMClaimPairFinder implements ClaimPairFinder {
         system: LLM_PAIR_SYSTEM,
         user: userPrompt,
         maxTokens: 2048,
+        purpose: 'court-pairing',
       });
 
       const raw = tryParseJson(response);

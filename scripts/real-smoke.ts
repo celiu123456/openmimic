@@ -24,6 +24,12 @@ import {
   demoTestimonies,
   demoWitnesses,
 } from '@openmimic/fixtures';
+import {
+  getUsageSummary,
+  formatUsageSummary,
+  BudgetExceededError,
+  InsufficientBalanceError,
+} from '@openmimic/shared';
 
 // Load .env manually (no dotenv dependency)
 import { readFileSync } from 'node:fs';
@@ -233,10 +239,18 @@ async function main() {
   writeFileSync(outPath, lines.join('\n'), 'utf-8');
   console.log(`Results written to ${outPath}`);
 
+  // Print usage summary
+  console.log('\n' + formatUsageSummary());
+
   store.close();
 }
 
 main().catch((err) => {
+  console.error('\n' + formatUsageSummary());
+  if (err instanceof BudgetExceededError || err instanceof InsufficientBalanceError) {
+    console.error(`real-smoke stopped: ${err.message}`);
+    process.exit(2);
+  }
   console.error('real-smoke failed:', err);
   process.exit(1);
 });

@@ -22,6 +22,12 @@ import { runLowo } from './lowo';
 import { runAblation } from './ablation';
 import { runStability } from './stability';
 import { writeFileSync } from 'node:fs';
+import {
+  getUsageSummary,
+  formatUsageSummary,
+  BudgetExceededError,
+  InsufficientBalanceError,
+} from '@openmimic/shared';
 
 async function main(): Promise<void> {
   const startTime = Date.now();
@@ -155,9 +161,11 @@ async function main(): Promise<void> {
   const totalDuration = Date.now() - startTime;
   results.totalDurationMs = totalDuration;
   results.endTime = new Date().toISOString();
+  results.usage = getUsageSummary();
 
   console.error(`\n=== Round 2 Complete ===`);
   console.error(`Total duration: ${(totalDuration / 1000 / 60).toFixed(1)} minutes`);
+  console.error('\n' + formatUsageSummary());
 
   // Write results
   writeFileSync('/tmp/eval-round2-results.json', JSON.stringify(results, null, 2));
@@ -168,6 +176,16 @@ async function main(): Promise<void> {
 }
 
 main().catch((err) => {
+  console.error('\n' + formatUsageSummary());
+  if (err instanceof BudgetExceededError || err instanceof InsufficientBalanceError) {
+    console.error(`Round 2 stopped: ${err.message}`);
+    // Save partial results
+    writeFileSync('/tmp/eval-round2-results.json', JSON.stringify({
+      error: err.message,
+      usage: getUsageSummary(),
+    }, null, 2));
+    process.exit(2);
+  }
   console.error(err);
   process.exit(1);
 });

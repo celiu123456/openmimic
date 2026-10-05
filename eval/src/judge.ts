@@ -112,7 +112,7 @@ async function callJudge(
     candidateB,
   ].join('\n');
 
-  const request: LLMCompletionRequest = { system: systemPrompt, user };
+  const request: LLMCompletionRequest = { system: systemPrompt, user, purpose: 'eval-judge' };
 
   // Two attempts: initial + one retry
   for (let attempt = 0; attempt < 2; attempt++) {

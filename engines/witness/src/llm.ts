@@ -9,6 +9,8 @@
 export interface LLMCompletionRequest {
   system: string;
   user: string;
+  /** Purpose tag for usage tracking. Defaults to 'other' when omitted. */
+  purpose?: string;
 }
 
 export interface LLMClient {

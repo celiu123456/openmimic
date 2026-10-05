@@ -834,7 +834,6 @@ export async function generateNoTalkList(
 
   const user = `在场证人:\n${witnessSummaries}`;
 
-  // Double-generate and union for stability
   const parseOne = (resp: string): NoTalkItem[] => {
     try {
       const jsonMatch = resp.match(/\[[\s\S]*\]/);
@@ -854,32 +853,39 @@ export async function generateNoTalkList(
     }
   };
 
-  const [resp1, resp2] = await Promise.all([
-    llm.complete({ system, user }),
-    llm.complete({ system, user }),
-  ]);
-
-  const items1 = parseOne(resp1);
-  const items2 = parseOne(resp2);
-
-  // Union by (topic, blindWitnessId) key — prefer item with more keywords
-  const seen = new Map<string, NoTalkItem>();
-  for (const item of [...items1, ...items2]) {
-    const key = `${item.topic}::${item.blindWitnessId}`;
-    const existing = seen.get(key);
-    if (!existing || item.keywords.length > existing.keywords.length) {
-      seen.set(key, item);
+  // Single-generate by default; double-generate only when stability is
+  // more important than budget.  The old double-generate + union approach
+  // is available when the LLM_NOTALK_DOUBLE_GENERATE env var is set.
+  let items: NoTalkItem[];
+  if (process.env.LLM_NOTALK_DOUBLE_GENERATE === '1') {
+    const [resp1, resp2] = await Promise.all([
+      llm.complete({ system, user, purpose: 'room-notalk' }),
+      llm.complete({ system, user, purpose: 'room-notalk' }),
+    ]);
+    const items1 = parseOne(resp1);
+    const items2 = parseOne(resp2);
+    const seen = new Map<string, NoTalkItem>();
+    for (const item of [...items1, ...items2]) {
+      const key = `${item.topic}::${item.blindWitnessId}`;
+      const existing = seen.get(key);
+      if (!existing || item.keywords.length > existing.keywords.length) {
+        seen.set(key, item);
+      }
     }
+    items = [...seen.values()];
+  } else {
+    const resp = await llm.complete({ system, user, purpose: 'room-notalk' });
+    items = parseOne(resp);
   }
 
   // Sort by severity (high first), then cap
-  const merged = [...seen.values()].sort((a, b) => {
+  items.sort((a, b) => {
     if (a.severity === 'high' && b.severity !== 'high') return -1;
     if (a.severity !== 'high' && b.severity === 'high') return 1;
     return 0;
   });
 
-  return merged.slice(0, NO_TALK_LIST_CAP);
+  return items.slice(0, NO_TALK_LIST_CAP);
 }
 
 /* ------------------------------------------------------------------ */
@@ -990,7 +996,7 @@ export async function llmVerifyLeak(
     '只回答"是"或"否"。',
   ].join('\n');
 
-  const resp = await llm.complete({ system, user });
+  const resp = await llm.complete({ system, user, purpose: 'room-verify' });
   // Fail-closed: only an unambiguous "否" is treated as safe
   const trimmed = resp.trim();
   return !trimmed.startsWith('否');
@@ -1022,7 +1028,7 @@ async function composeLine(
   const system = buildSystem(context, mode, topicSeed, actionHint, extra);
   const user = buildUser(context, mode, topicSeed, transcript, actionHint, extra);
 
-  const first = await attemptResponse(llm, { system, user }, 2);
+  const first = await attemptResponse(llm, { system, user, purpose: 'room-compose' }, 2);
   if (!first.ok) return undefined;
 
   // The verbatim-overlap rule protects `synthesis_only` words only: a
@@ -1920,7 +1926,7 @@ export async function runBehindRoom(
     const generationCalls = utterances.length;
     const totalLlmCalls = generationCalls + scheduleStats.verifyCallCount
       + scheduleStats.totalLlmCalls
-      + (noTalkList.length > 0 ? 2 : 0); // +2 for double-generate no-talk list
+      + (noTalkList.length > 0 ? (process.env.LLM_NOTALK_DOUBLE_GENERATE === '1' ? 2 : 1) : 0);
     options.onStats({
       noTalkList,
       verifyCallCount: scheduleStats.verifyCallCount,
