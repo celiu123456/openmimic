@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref } from 'vue';
 import { useRouter } from 'vue-router';
-import { qrToSvg } from '@openmimic/shared';
+import { qrToSvg } from '@openmimic/shared/browser';
 import {
   ApiError,
   api,

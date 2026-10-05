@@ -5,7 +5,8 @@
   "description": "OpenMimic shared types, zod schemas and constants.",
   "type": "module",
   "exports": {
-    ".": "./src/index.ts"
+    ".": "./src/index.ts",
+    "./browser": "./src/browser.ts"
   },
   "dependencies": {
     "zod": "^3.25.76"
