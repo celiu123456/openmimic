@@ -117,17 +117,21 @@ async function main() {
   const testimonies = store.listBySubject(subjectId);
   const episodes = store.listEpisodesBySubject(subjectId);
   const claims = store.listClaimsBySubject(subjectId);
-  const { buckets, quotableIndex } = buildMaterialBuckets(witnesses, testimonies, episodes, claims);
+  const { buckets, quotableIndex } = buildMaterialBuckets(
+    witnesses, testimonies, episodes, claims,
+    { filterConfidential: true },
+  );
 
   console.log(`Material: ${buckets.length} buckets, ${quotableIndex.length} quotable entries`);
 
-  // Generate biography
+  // Generate biography (confidential content excluded by default)
   console.log('Generating biography...');
   let result: GenerationResult;
   try {
     result = await generateBiography(llm, store, subjectId, {
       minWitnesses: 3,
       qualityThreshold: 75,
+      includeConfidential: false,
     });
   } catch (err) {
     if (err instanceof InsufficientBalanceError || err instanceof BudgetExceededError) {
@@ -161,30 +165,20 @@ function writeOutput(
   } catch { /* first run */ }
 
   const lines: string[] = [];
-  lines.push('# Biography Real Run');
-  lines.push('');
 
-  // If there's existing content and doesn't already have the "first run" label,
-  // preserve it as first-run comparison section
-  if (existingContent.length > 0 && !existingContent.includes('第一次')) {
-    lines.push('## 第一次:管线故障');
-    lines.push('');
-    const oldBody = existingContent.replace(/^# Biography Real Run\n+/, '');
-    lines.push(oldBody);
+  // Preserve existing content (first and second runs) and append
+  if (existingContent.length > 0) {
+    // Keep everything up to the end; we append a new section
+    lines.push(existingContent.trimEnd());
     lines.push('');
     lines.push('---');
     lines.push('');
-  } else if (existingContent.includes('第一次')) {
-    // Already has first-run section; extract it
-    const marker = '---';
-    const idx = existingContent.indexOf(marker);
-    if (idx > 0) {
-      lines.push(existingContent.slice(existingContent.indexOf('## 第一次'), idx + marker.length));
-      lines.push('');
-    }
+  } else {
+    lines.push('# Biography Real Run');
+    lines.push('');
   }
 
-  lines.push('## 第二次:修正后');
+  lines.push('## 第三次:无据细节检查+保密过滤+质检修正');
   lines.push('');
   lines.push(`> Generated at ${new Date().toISOString()}`);
   lines.push(`> Subject: limo (demo)`);
@@ -242,14 +236,41 @@ function writeOutput(
     }
     lines.push('');
 
+    lines.push('### Detail Check (unsupported details)');
+    lines.push('');
+    if (result.detailCheckResults.size === 0) {
+      lines.push('No detail checks ran.');
+    } else {
+      for (const [chapterNo, dcr] of result.detailCheckResults) {
+        if (dcr.found.length === 0) {
+          lines.push(`Chapter ${chapterNo}: clean (no unsupported details)`);
+        } else {
+          lines.push(`Chapter ${chapterNo}: ${dcr.found.length} unsupported detail(s), ${dcr.removed.length} removed`);
+          for (const d of dcr.found) {
+            lines.push(`  - [${d.detail}] "${d.sentence}" -- ${d.reason}`);
+          }
+          if (dcr.removed.length > 0) {
+            lines.push(`  Removed sentences:`);
+            for (const r of dcr.removed) {
+              lines.push(`  - "${r}"`);
+            }
+          }
+        }
+      }
+    }
+    lines.push('');
+
     lines.push('### Quality Review');
     lines.push('');
+    // Quality score table
+    lines.push('| Chapter | Score | Rewrite? | Dimensions |');
+    lines.push('|---------|-------|----------|------------|');
     for (const [chapterNo, qr] of result.qualityResults) {
-      lines.push(`Chapter ${chapterNo}: score=${qr.score}, requiresRewrite=${qr.requiresRewrite}`);
-      for (const dim of qr.dimensions) {
-        const issueStr = dim.issues.length > 0 ? ` [${dim.issues.join(', ')}]` : '';
-        lines.push(`  - ${dim.key}: ${dim.score}${issueStr}`);
-      }
+      const dimSummary = qr.dimensions.map((d) => {
+        const issueStr = d.issues.length > 0 ? `[${d.issues.join(',')}]` : '';
+        return `${d.key}:${d.score}${issueStr}`;
+      }).join('; ');
+      lines.push(`| ${chapterNo} | ${qr.score} | ${qr.requiresRewrite} | ${dimSummary} |`);
     }
     lines.push('');
 

@@ -37,6 +37,7 @@ const biography = ref<BiographyData | null>(null);
 const phase = ref<'loading' | 'empty' | 'generating' | 'ready' | 'error'>('loading');
 const error = ref('');
 const generating = ref(false);
+const includeConfidential = ref(false);
 
 async function fetchJson<T>(path: string, init?: RequestInit): Promise<T> {
   const response = await fetch(path, init);
@@ -71,7 +72,11 @@ async function generate() {
   try {
     const result = await fetchJson<{ biography: BiographyData }>(
       `/api/subjects/${encodeURIComponent(subjectId)}/biography`,
-      { method: 'POST' },
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ includeConfidential: includeConfidential.value }),
+      },
     );
     biography.value = result.biography;
     phase.value = 'ready';
@@ -137,6 +142,10 @@ function splitQuotes(text: string): Array<{ text: string; quoted: boolean }> {
     <template v-if="phase === 'empty'">
       <h1>小传</h1>
       <p>还没有生成小传。</p>
+      <label class="confidential-toggle">
+        <input type="checkbox" v-model="includeConfidential" />
+        包含朋友嘱托保密的内容
+      </label>
       <button class="btn primary" @click="generate" :disabled="generating">
         生成小传
       </button>
@@ -205,6 +214,18 @@ function splitQuotes(text: string): Array<{ text: string; quoted: boolean }> {
   border-left: 3px solid #e2e8f0;
   padding-left: 0.8rem;
   margin-bottom: 1.5rem;
+}
+.confidential-toggle {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  font-size: 0.9rem;
+  color: #64748b;
+  margin-bottom: 1rem;
+  cursor: pointer;
+}
+.confidential-toggle input {
+  margin: 0;
 }
 .meta {
   font-size: 0.85rem;

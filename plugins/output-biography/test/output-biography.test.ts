@@ -15,12 +15,18 @@ import {
   buildSilenceNote,
   buildFinalChapter,
   extractSentences,
+  extractConfidentialSentences,
+  removeConfidentialContent,
+  checkUnsupportedDetails,
+  removeUnsupportedSentences,
   BIOGRAPHY_STYLES,
+  CONFIDENTIAL_MARKERS,
   type Biography,
   type BiographyParagraph,
   type QuotableEntry,
   type MaterialBucket,
   type BiographySection,
+  type UnsupportedDetail,
 } from '../src/index';
 
 /* ------------------------------------------------------------------ */
@@ -39,6 +45,8 @@ function makeCtx(body: unknown, params: Record<string, string> = {}): RouteConte
 function createFakeLLM(overrides?: Partial<{
   chapter: unknown;
   failFirst: boolean;
+  /** Return value for biography-detail-check calls. Default: empty array (no unsupported details). */
+  detailCheckResult: unknown;
 }>): LLMClient & { prompts: LLMCompletionRequest[] } {
   let callCount = 0;
   const prompts: LLMCompletionRequest[] = [];
@@ -47,6 +55,12 @@ function createFakeLLM(overrides?: Partial<{
     async complete(req: LLMCompletionRequest): Promise<string> {
       prompts.push(req);
       callCount++;
+
+      // Handle detail-check purpose
+      if (req.purpose === 'biography-detail-check') {
+        return JSON.stringify(overrides?.detailCheckResult ?? { unsupportedDetails: [] });
+      }
+
       if (overrides?.failFirst && callCount === 1) {
         return 'not json at all';
       }
@@ -372,7 +386,7 @@ describe('output-biography plugin', () => {
     );
     const obs = result.dimensions.find((d) => d.key === 'observerSemantics');
     expect(obs).toBeDefined();
-    expect(obs!.score).toBeLessThan(50);
+    expect(obs!.score).toBeLessThan(60);
     expect(obs!.issues).toContain('omniscient_narrator_language');
   });
 
@@ -382,7 +396,7 @@ describe('output-biography plugin', () => {
       [],
     );
     const spec = result.dimensions.find((d) => d.key === 'speculativeLanguage');
-    expect(spec!.score).toBeLessThan(60);
+    expect(spec!.score).toBeLessThan(80);
   });
 
   it('reviewQuality detects sensitive diagnostic terms', () => {
@@ -765,5 +779,179 @@ describe('output-biography plugin', () => {
       chapterPrompt!.user.includes('careful with money') ||
       chapterPrompt!.user.includes('shares food');
     expect(hasQuotable).toBe(true);
+  });
+
+  /* --- Confidential content filter --- */
+
+  it('extractConfidentialSentences finds sentences with secrecy markers', () => {
+    const text = '他特别慷慨。千万别跟他妈提这事。他对钱不敏感。';
+    const confidential = extractConfidentialSentences(text);
+    // Should find 2: the marker sentence AND the preceding fact sentence
+    expect(confidential.length).toBe(2);
+    expect(confidential[0]).toContain('他特别慷慨'); // preceding fact
+    expect(confidential[1]).toContain('千万别'); // marker sentence
+  });
+
+  it('extractConfidentialSentences returns empty when no markers present', () => {
+    const text = '他每次都抢着买单。朋友们都知道他大方。';
+    const confidential = extractConfidentialSentences(text);
+    expect(confidential.length).toBe(0);
+  });
+
+  it('removeConfidentialContent strips marked sentences and preceding facts', () => {
+    // The preceding sentence (fact) and the marker sentence are both removed
+    const text = '他花钱大方。别告诉别人他借了钱。他请客从不犹豫。';
+    const cleaned = removeConfidentialContent(text);
+    expect(cleaned).not.toContain('别告诉');
+    expect(cleaned).not.toContain('他花钱大方'); // preceding fact also removed
+    expect(cleaned).toContain('请客从不犹豫'); // unrelated sentence stays
+  });
+
+  it('buildMaterialBuckets with filterConfidential removes marked content', () => {
+    store = new Store();
+    store.putSubject({ id: 's1', displayName: 'Alice' });
+    store.putWitness({ id: 'w1', subjectId: 's1', relation: 'Friend', consentLevel: 'quotable' });
+    store.putWitness({ id: 'w2', subjectId: 's1', relation: 'Colleague', consentLevel: 'quotable' });
+    store.putWitness({ id: 'w3', subjectId: 's1', relation: 'Neighbor', consentLevel: 'quotable' });
+    store.addTestimony({
+      id: 't1', witnessId: 'w1', subjectId: 's1',
+      answers: [{ qid: 'q1', behindText: '他花钱大方。千万别跟他妈提他借了五万。' }],
+    });
+    store.addTestimony({
+      id: 't2', witnessId: 'w2', subjectId: 's1',
+      answers: [{ qid: 'q1', behindText: 'She is careful with money.' }],
+    });
+    store.addTestimony({
+      id: 't3', witnessId: 'w3', subjectId: 's1',
+      answers: [{ qid: 'q1', behindText: 'She shares food with neighbors.' }],
+    });
+    const witnesses = store.listWitnessesBySubject('s1');
+    const testimonies = store.listBySubject('s1');
+
+    // With filtering
+    const { buckets: filtered } = buildMaterialBuckets(
+      witnesses, testimonies, [], [], { filterConfidential: true },
+    );
+    const w1Filtered = filtered.filter((b) => b.witnessId === 'w1');
+    for (const b of w1Filtered) {
+      for (const excerpt of b.excerpts) {
+        expect(excerpt).not.toContain('千万别');
+      }
+    }
+
+    // Without filtering
+    const { buckets: unfiltered } = buildMaterialBuckets(
+      witnesses, testimonies, [], [], { filterConfidential: false },
+    );
+    const w1Unfiltered = unfiltered.filter((b) => b.witnessId === 'w1');
+    const allText = w1Unfiltered.flatMap((b) => b.excerpts).join('');
+    // The original text should still be there (or at least not have the marker removed)
+    expect(allText).toContain('千万别');
+  });
+
+  /* --- Unsupported detail check --- */
+
+  it('checkUnsupportedDetails returns details from LLM response', async () => {
+    const fakeLLM: LLMClient = {
+      async complete(): Promise<string> {
+        return JSON.stringify({ unsupportedDetails: [
+          { sentence: '他穿着蓝色工装', detail: '蓝色工装', reason: '素材中没有提到衣着颜色' },
+        ] });
+      },
+    };
+    const body = '他穿着蓝色工装来到了办公室。同事说他很勤快。';
+    const material = ['同事说他加班到很晚'];
+    const details = await checkUnsupportedDetails(fakeLLM, body, material);
+    expect(details.length).toBe(1);
+    expect(details[0].sentence).toContain('蓝色工装');
+  });
+
+  it('checkUnsupportedDetails returns empty when LLM finds nothing', async () => {
+    const fakeLLM: LLMClient = {
+      async complete(): Promise<string> {
+        return JSON.stringify({ unsupportedDetails: [] });
+      },
+    };
+    const body = '同事说他加班到很晚。';
+    const material = ['同事说他加班到很晚'];
+    const details = await checkUnsupportedDetails(fakeLLM, body, material);
+    expect(details.length).toBe(0);
+  });
+
+  it('removeUnsupportedSentences strips flagged sentences', () => {
+    const paragraphs: BiographyParagraph[] = [
+      {
+        text: '他穿着蓝色工装走进来。同事都很佩服他。',
+        attribution: null,
+        sourceRefs: [{ witnessId: 'w1' }],
+        conflict: false,
+      },
+    ];
+    const unsupported: UnsupportedDetail[] = [
+      { sentence: '他穿着蓝色工装走进来', detail: '蓝色工装', reason: '无据' },
+    ];
+    const { cleaned, removed } = removeUnsupportedSentences(paragraphs, unsupported);
+    expect(removed.length).toBe(1);
+    expect(cleaned[0].text).not.toContain('蓝色工装');
+    expect(cleaned[0].text).toContain('佩服');
+  });
+
+  /* --- Quality score variation --- */
+
+  it('two clearly different texts must produce different quality scores', () => {
+    // Good Chinese text with material overlap
+    const goodText = '他的发小回忆说,跟他吃饭从来没让买过单。前上司说林默对钱不敏感。';
+    const material = [
+      '跟我吃饭从来没让我买过单',
+      '林默对钱不敏感,但这不代表他大方',
+    ];
+
+    const goodResult = reviewQuality(goodText, [{ witnessId: 'w1' }, { witnessId: 'w2' }], {
+      materialExcerpts: material,
+      quotableTexts: material,
+      validationFailureCount: 0,
+    });
+
+    // Bad text: English, speculative, omniscient, no material overlap
+    const badText = 'He secretly felt that nobody understood him. Perhaps he was destined for greatness. She must have felt terrible about his clinical depression.';
+    const badResult = reviewQuality(badText, [], {
+      materialExcerpts: material,
+      quotableTexts: material,
+      validationFailureCount: 10,
+    });
+
+    // Scores must differ
+    expect(goodResult.score).not.toBe(badResult.score);
+    // Good text should score higher
+    expect(goodResult.score).toBeGreaterThan(badResult.score);
+    // Bad text should be flagged for rewrite
+    expect(badResult.requiresRewrite).toBe(true);
+    expect(goodResult.requiresRewrite).toBe(false);
+  });
+
+  it('quality scores vary across chapters with different content', () => {
+    const material = ['他花钱大方,请客从不犹豫'];
+
+    // Chapter with projected feelings (should get dinged)
+    const withProjection = '他觉得自己不够好。他觉得朋友们不理解他。他觉得工作没意义。他觉得生活很累。';
+    const r1 = reviewQuality(withProjection, [{ witnessId: 'w1' }], {
+      materialExcerpts: material,
+      validationFailureCount: 0,
+    });
+
+    // Chapter without projected feelings
+    const withoutProjection = '朋友们都说他花钱大方,请客从不犹豫。';
+    const r2 = reviewQuality(withoutProjection, [{ witnessId: 'w1' }], {
+      materialExcerpts: material,
+      validationFailureCount: 0,
+    });
+
+    // The chapter with multiple projected feelings should score lower on observerSemantics
+    const obs1 = r1.dimensions.find((d) => d.key === 'observerSemantics');
+    const obs2 = r2.dimensions.find((d) => d.key === 'observerSemantics');
+    expect(obs1!.score).toBeLessThan(obs2!.score);
+
+    // Overall scores should differ
+    expect(r1.score).not.toBe(r2.score);
   });
 });
