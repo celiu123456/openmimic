@@ -18,6 +18,7 @@ import {
   type GateState,
   type ContestRecord,
 } from './gate';
+import type { CrisisAuditEvent } from './crisis';
 
 export const gatePlugin: Plugin = {
   name: 'gate',
@@ -51,6 +52,34 @@ export const gatePlugin: Plugin = {
       )`,
       { appendOnly: true },
     );
+
+    // Crisis audit log (append-only, no raw text — only time + type)
+    const crisisAuditTable = store.registerPluginTable(
+      'gate', 'crisis_audit',
+      `CREATE TABLE IF NOT EXISTS plugin_gate_crisis_audit (
+        id TEXT PRIMARY KEY,
+        at TEXT NOT NULL,
+        type TEXT NOT NULL,
+        source TEXT NOT NULL,
+        subject_id TEXT,
+        session_key TEXT
+      )`,
+      { appendOnly: true },
+    );
+
+    const persistCrisisAudit = (event: CrisisAuditEvent): void => {
+      crisisAuditTable.insert({
+        id: `crisis-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+        at: event.at,
+        type: event.type,
+        source: event.source,
+        subject_id: event.subjectId ?? null,
+        session_key: event.sessionKey ?? null,
+      });
+    };
+
+    // Provide crisis audit logger as a service
+    ctx.provide('crisisAudit', persistCrisisAudit);
 
     // Hydrate from DB
     for (const row of contestTable.query('1=1 ORDER BY rowid ASC')) {
