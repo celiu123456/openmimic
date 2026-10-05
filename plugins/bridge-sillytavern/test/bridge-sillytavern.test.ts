@@ -181,7 +181,7 @@ describe('export: field mapping', () => {
     expect(result.card.data.name).toBe('林默');
   });
 
-  it('populates description from surviving claims', () => {
+  it('populates description from surviving claims and episodes', () => {
     store = makeSeededStore();
     const result = exportCharacterCard(DEMO_SUBJECT_ID, store, {
       acknowledgeRealPerson: true,
@@ -190,6 +190,9 @@ describe('export: field mapping', () => {
     expect(result.card.data.description.length).toBeGreaterThan(10);
     // Should contain claim text
     expect(result.card.data.description).toContain('林默');
+    // Should have both sections
+    expect(result.card.data.description).toContain('别人眼中的他');
+    expect(result.card.data.description).toContain('别人讲过的事');
   });
 
   it('populates mes_example from corpus items', () => {
@@ -202,13 +205,43 @@ describe('export: field mapping', () => {
     expect(result.card.data.mes_example).toContain('{{char}}:');
   });
 
-  it('includes system_prompt with identity disclaimer', () => {
+  it('includes system_prompt with Chinese identity and kernel discipline', () => {
     store = makeSeededStore();
     const result = exportCharacterCard(DEMO_SUBJECT_ID, store, {
       acknowledgeRealPerson: true,
     });
-    expect(result.card.data.system_prompt).toContain('simulation');
-    expect(result.card.data.system_prompt).toContain('not the real person');
+    // Identity line in Chinese
+    expect(result.card.data.system_prompt).toContain('人格模拟');
+    expect(result.card.data.system_prompt).toContain('不是本人');
+    // Kernel's PERSONA_DISCIPLINE must be present verbatim
+    expect(result.card.data.system_prompt).toContain('行为纪律');
+    expect(result.card.data.system_prompt).toContain('说话像真人');
+    // Instruction to use description content
+    expect(result.card.data.system_prompt).toContain('别人讲过的事');
+    // Speaking style section (from style-stats)
+    expect(result.card.data.system_prompt).toContain('说话风格');
+  });
+
+  it('description contains episodes section', () => {
+    store = makeSeededStore();
+    const result = exportCharacterCard(DEMO_SUBJECT_ID, store, {
+      acknowledgeRealPerson: true,
+    });
+    expect(result.card.data.description).toContain('别人讲过的事');
+    // Episodes should appear with witness relation labels
+    expect(result.card.data.description).toContain('发小');
+  });
+
+  it('personality does not double the "对" prefix', () => {
+    store = makeSeededStore();
+    const result = exportCharacterCard(DEMO_SUBJECT_ID, store, {
+      acknowledgeRealPerson: true,
+    });
+    // c-limo-4 has audience "对亲密的人" — should render as
+    // "对亲密的人：..." not "对对亲密的人：..."
+    expect(result.card.data.personality).not.toContain('对对');
+    // But it should still contain the audience
+    expect(result.card.data.personality).toContain('对亲密的人');
   });
 
   it('includes creator_notes with OpenMimic provenance and privacy warning', () => {

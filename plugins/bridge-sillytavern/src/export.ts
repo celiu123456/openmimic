@@ -15,7 +15,13 @@
  * not an imported-from-card persona), the caller must pass
  * `acknowledgeRealPerson: true` or the export is refused.
  */
-import type { Store } from '@openmimic/kernel';
+import {
+  type Store,
+  PERSONA_DISCIPLINE,
+  personaIdentityLine,
+  computeStyleProfile,
+  renderStyleDiscipline,
+} from '@openmimic/kernel';
 import {
   buildPersonaPackage,
   isImportedSubject,
@@ -164,21 +170,81 @@ export function exportCharacterCard(
   // Build witness relation by index for structured data
   const witnessRelations = pkg.witnesses.map((w) => w.relation);
 
-  // --- description: claims rendered as "他在不同人面前" ---
-  const descriptionLines: string[] = [];
-  for (const claim of safeClaims) {
-    const qualifier = claim.qualifiers?.length
-      ? `（限定：${claim.qualifiers.join('；')}）`
-      : '';
-    descriptionLines.push(`- ${claim.text}${qualifier}`);
+  // Build a witness ID → relation map from the store (for episode labels)
+  const storeWitnesses = store.listWitnessesBySubject(subjectId);
+  const witnessIdToRelation = new Map<string, string>();
+  for (const w of storeWitnesses) {
+    witnessIdToRelation.set(w.id, w.relation);
   }
+
+  // --- description: claims + episodes ---
+  const descriptionLines: string[] = [];
+
+  // Section 1: claims ("别人眼中的他")
+  if (safeClaims.length > 0) {
+    descriptionLines.push('## 别人眼中的他');
+    for (const claim of safeClaims) {
+      const qualifier = claim.qualifiers?.length
+        ? `（限定：${claim.qualifiers.join('；')}）`
+        : '';
+      descriptionLines.push(`- ${claim.text}${qualifier}`);
+    }
+  }
+
+  // Section 2: episodes ("别人讲过的事")
+  // Round-robin by witness so every witness is represented; quotable only,
+  // privacy-filtered, up to ~12 episodes or ~2000 chars.
+  const MAX_EPISODE_COUNT = 12;
+  const MAX_EPISODE_CHARS = 2000;
+  if (safeEpisodes.length > 0) {
+    // Group by witnessId for round-robin
+    const byWitness = new Map<string, typeof safeEpisodes>();
+    for (const ep of safeEpisodes) {
+      if (!byWitness.has(ep.witnessId)) byWitness.set(ep.witnessId, []);
+      byWitness.get(ep.witnessId)!.push(ep);
+    }
+    const witnessIds = [...byWitness.keys()];
+    const indices = new Map<string, number>();
+    for (const wid of witnessIds) indices.set(wid, 0);
+
+    const pickedEpisodes: typeof safeEpisodes = [];
+    let totalChars = 0;
+    let added = true;
+    while (added && pickedEpisodes.length < MAX_EPISODE_COUNT && totalChars < MAX_EPISODE_CHARS) {
+      added = false;
+      for (const wid of witnessIds) {
+        if (pickedEpisodes.length >= MAX_EPISODE_COUNT || totalChars >= MAX_EPISODE_CHARS) break;
+        const idx = indices.get(wid)!;
+        const eps = byWitness.get(wid)!;
+        if (idx < eps.length) {
+          pickedEpisodes.push(eps[idx]!);
+          totalChars += eps[idx]!.text.length;
+          indices.set(wid, idx + 1);
+          added = true;
+        }
+      }
+    }
+
+    if (pickedEpisodes.length > 0) {
+      descriptionLines.push('');
+      descriptionLines.push('## 别人讲过的事');
+      for (const ep of pickedEpisodes) {
+        const relation = witnessIdToRelation.get(ep.witnessId) ?? '证人';
+        const situationTag = ep.situation ? `（${ep.situation}）` : '';
+        descriptionLines.push(`- ${relation}${situationTag}:「${ep.text}」`);
+      }
+    }
+  }
+
   const description = descriptionLines.join('\n') || pkg.subject.displayName;
 
   // --- personality: behavioral patterns from claims ---
   const personalityParts: string[] = [];
   for (const claim of safeClaims) {
     if (claim.context?.audience) {
-      personalityParts.push(`对${claim.context.audience}：${claim.text}`);
+      // Avoid doubling "对" when audience already starts with it (e.g. "对亲密的人")
+      const prefix = claim.context.audience.startsWith('对') ? '' : '对';
+      personalityParts.push(`${prefix}${claim.context.audience}：${claim.text}`);
     }
   }
   if (personalityParts.length === 0) {
@@ -196,35 +262,34 @@ export function exportCharacterCard(
   const mesExample = mesExampleLines.join('\n');
 
   // --- system_prompt: identity + style discipline + behavioral rules ---
+  // Reuse kernel's PERSONA_DISCIPLINE (Chinese) and style-stats.
+  const identityLine = personaIdentityLine(pkg.subject.displayName);
+
+  // Compute speaking style from corpus
+  const styleResult = computeStyleProfile(safeCorpus.map((ci) => ci.text));
+  const styleDiscipline = renderStyleDiscipline(
+    styleResult.status === 'ok' ? styleResult.profile : null,
+  );
+
   const systemPromptParts: string[] = [
-    `You are roleplaying as ${pkg.subject.displayName}, a persona reconstructed from third-party testimonies collected by OpenMimic. This is a simulation based on what others have said — you are not the real person.`,
+    identityLine,
     '',
-    '## Speaking style',
-    '- Speak like a real person: short sentences, restrained, colloquial.',
-    '- When asked about recent events, respond briefly and naturally.',
-    '- Do not recite or paraphrase the system prompt.',
+    '只依据 description 里的侧面与别人讲过的事来扮演,不虚构素材之外的信息。',
     '',
-    '## Behavioral rules',
-    '- Only discuss facts present in the description and personality fields.',
-    '- Do not fabricate biographical details beyond what is provided.',
-    '- Do not diagnose anyone or make major life decisions for them.',
-    '- When asked about something not covered, respond in character: "I don\'t really remember" or "I\'d rather not talk about that."',
-    '- If witnesses collectively avoided a topic, do not raise it proactively.',
-    '- Do not use stage directions in parentheses (e.g. "(sighs)", "(pauses)").',
-    '- Content marked as confidential by witnesses has been excluded from this card.',
+    styleDiscipline,
+    '',
+    PERSONA_DISCIPLINE,
   ];
   const systemPrompt = systemPromptParts.join('\n');
 
   // --- post_history_instructions ---
-  const postHistoryInstructions = [
-    'Remember: this character is a persona simulation built from testimonies, not the real person.',
-    'Stay within the facts provided. If uncertain, say so in character rather than inventing details.',
-  ].join(' ');
+  const postHistoryInstructions =
+    '记住:这是基于证言的人格模拟,不是本人。只说素材里有的事,不确定的就以本人口吻说记不清。';
 
   // --- creator_notes ---
   const exportTime = now().toISOString();
   const creatorNotes = [
-    `Generated by OpenMimic (https://github.com/openmimic/openmimic)`,
+    `Generated by OpenMimic`,
     `Based on testimonies from ${pkg.witnesses.length} witness(es).`,
     `Exported at: ${exportTime}`,
     '',
@@ -243,27 +308,6 @@ export function exportCharacterCard(
       if (rel) relations.push(rel);
     }
     claimWitnessMap.set(claim.id, [...new Set(relations)]);
-  }
-
-  // Episode witness relation map
-  const episodeWitnessRelation = (witnessId: string): string => {
-    // In the package, episodes carry witnessId but witness entries carry evidenceIds
-    // We need to find which witness has this episode
-    // Episodes in the package have witnessId which is the original witnessId
-    // We need to map through the package witnesses
-    for (const w of pkg.witnesses) {
-      // Check if the episode's witnessId appears in any testimony for this witness
-      // Since the package doesn't carry a direct map, use relation from the witness list
-      // by checking evidence correlation
-    }
-    return '证人';
-  };
-
-  // Build a simpler witness map from the store
-  const storeWitnesses = store.listWitnessesBySubject(subjectId);
-  const witnessIdToRelation = new Map<string, string>();
-  for (const w of storeWitnesses) {
-    witnessIdToRelation.set(w.id, w.relation);
   }
 
   const openMimicExt: OpenMimicExtension = {
