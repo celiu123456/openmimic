@@ -1,0 +1,15 @@
+{
+  "name": "@openmimic/bridge-sillytavern",
+  "version": "0.0.1",
+  "private": true,
+  "description": "Bidirectional converter between .persona packages and SillyTavern Character Card V2.",
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "dependencies": {
+    "@openmimic/kernel": "*",
+    "@openmimic/shared": "*",
+    "@openmimic/server": "*"
+  }
+}

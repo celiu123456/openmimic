@@ -22,3 +22,4 @@ plugins:
   - use: "./plugins/silence-signal"
   - use: "./plugins/output-biography"
   - use: "./plugins/collector-chatlog"
+  - use: "./plugins/bridge-sillytavern"

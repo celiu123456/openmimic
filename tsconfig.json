@@ -19,7 +19,8 @@
       "@openmimic/meta-perception": ["./plugins/meta-perception/src/index.ts"],
       "@openmimic/silence-signal": ["./plugins/silence-signal/src/index.ts"],
       "@openmimic/output-biography": ["./plugins/output-biography/src/index.ts"],
-      "@openmimic/collector-chatlog": ["./plugins/collector-chatlog/src/index.ts"]
+      "@openmimic/collector-chatlog": ["./plugins/collector-chatlog/src/index.ts"],
+      "@openmimic/bridge-sillytavern": ["./plugins/bridge-sillytavern/src/index.ts"]
     }
   },
   "include": [

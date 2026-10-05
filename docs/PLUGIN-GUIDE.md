@@ -325,6 +325,33 @@ const MY_CAPABILITIES: CapabilityDeclaration[] = [
 
 The capability directory is publicly readable and contains only the catalog
 (no data). It helps API consumers discover what an instance can do.
+## SillyTavern bridge plugin
+
+The `bridge-sillytavern` plugin converts between OpenMimic personas and
+SillyTavern Character Card V2. It is a standard `bridge` plugin.
+
+**Routes (admin-gated):**
+
+| Method | Path | Purpose |
+|--------|------|---------|
+| `GET` | `/api/subjects/:id/export/character-card?format=json\|png` | Export persona as V2 card |
+| `POST` | `/api/import/character-card` | Import V2 card (JSON or PNG body) |
+
+**Key design decisions:**
+
+- **Privacy**: synthesis_only text is withheld; private-marker content is
+  filtered; witness names travel as relation labels only (no name hints).
+- **Real-person gate**: exporting a native (non-imported) subject requires
+  `acknowledgeRealPerson=true`.
+- **Import safety**: all imported text passes through `detectInjection()`
+  and `sanitizeDelimiters()`. Nothing enters the testimony ledger; claims
+  use a synthetic court session with conviction 0.5.
+- **Round-trip**: `extensions.openmimic` carries structured data so an
+  exported card re-imports without loss.
+- **Zero new dependencies**: PNG tEXt chunk I/O and CRC32 are implemented
+  from scratch using `node:zlib` and `Buffer`.
+
+See `integrations/sillytavern/README.md` for usage instructions.
 
 ## Unloading
 
