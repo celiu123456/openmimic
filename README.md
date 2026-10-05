@@ -85,7 +85,7 @@ resp = client.chat.completions.create(
 | 人格组装(async, witness-relation-grouped claims + round-robin episodes + divergences + corpus → 6000 char system prompt) | 已实现 |
 | WitnessEngine(采集 + 邀请 + AI 追问访谈) | 已实现 |
 | CourtEngine(v2: filing with episodes + LLM/embedding/keyword pairing + relation judgment + confrontation + divergence map + conviction computation) | 已实现 |
-| RoomEngine(背后/当面双模式 + 危机词 + 诊断词防护) | 已实现 |
+| RoomEngine(背后/当面双模式 + 危机词 + 诊断词防护 + 跨证人泄密保护) | 已实现 |
 | GraphEngine(证言图谱,改一条证言自动重算关联人格) | 计划 |
 | GateEngine(contested 否决流 + 论断权限墙 + re-raise 机制) | 已实现 |
 | 元知觉(meta-perception: 主体预测证人作答,LLM 评分,per-witness breakdown) | 已实现 |
@@ -100,7 +100,7 @@ resp = client.chat.completions.create(
 | **WitnessEngine** | 证言采集与立场标注:每条证言记录来源、关系、立场,原文永久可溯 |
 | **CourtEngine** | v2 对抗式质询管线:4 阶段——(1) filing: 从每位证人的证言中提取候选论断和 episode(具体事例,必须是证言原文的逐字子串),per-item lenient parsing(单条无效不废弃全部);(2) pairing: 首选 LLMClaimPairFinder(一次 LLM 调用找语义相关对),次选 embedding 余弦,末选关键词重叠;(3) relation judgment: LLM 判定论断对关系(agreement / perspective_difference / factual_conflict / unrelated),perspective_difference 要求同一行为维度且方向不同,事实冲突进入 confrontation 对质;(4) conviction computation: 纯函数,base 0.5,按证人数/episode/配对状态计算置信分。视角差异生成 divergence 记录保留双方观点;一致论断合并证据。体检报告(CourtReport)含存活/限定/争议/退役论断数、episode 数、divergence 数 |
 | **GraphEngine** | 计划:证言图谱,使人格成为图的实时派生物(改一条证言自动重算关联人格)。当前无代码 |
-| **RoomEngine** | 房间模拟:背后/当面双模式群体对话;危机词命中拒绝开房间,诊断词触发重写或降级为舞台指令 |
+| **RoomEngine** | 房间模拟:背后/当面双模式群体对话;危机词命中拒绝开房间,诊断词触发重写或降级为舞台指令;跨证人泄密保护——LLM 生成 no-talk list(跨证人知识冲突检测)+ 规则兜底(显式保密标记),两级检测(关键词快扫 + LLM 语义判断,fail-closed),阻断后 guided rewrite(用安全素材引导重写最多两次,失败才降为舞台提示),25% 舞台提示上限。局限:保护覆盖依赖 LLM 准确列出知识冲突,euphemism 检测依赖语义判断模型质量,不提供形式化保证 |
 | **GateEngine** | 论断否决(contest/uncontest)、诊断词/危机词权限墙、re-raise 机制(contested 论断在新证据充足时自动恢复)。contest 记录持久化于插件表(append-only)。前端 CourtReportView 提供 "我不同意" 按钮与撤回功能 |
 
 ## .persona 人格包
@@ -162,7 +162,7 @@ resp = client.chat.completions.create(
 - 内核:证言账本(append-only + triggers)、授权门(synthesis_only 遮蔽)、插件装配 v1(inject/provide 依赖注入、topo sort、unload、Registry 扩展点、YAML config tree)、人格组装 v2(async, audience-grouped claims + episodes + divergences + corpus, 6000 char budget)
 - WitnessEngine:问卷采集、邀请链接、AI 追问访谈
 - CourtEngine v2:filing with episodes + embedding/keyword pairing + relation judgment + confrontation + divergence map + conviction computation(纯函数)
-- RoomEngine:背后/当面双模式 + 危机词拒绝 + 诊断词重写/降级
+- RoomEngine:背后/当面双模式 + 危机词拒绝 + 诊断词重写/降级 + 跨证人泄密保护(no-talk list + 两级检测 + guided rewrite + 25% 舞台上限)
 - 对外挂载:OpenAI 兼容端点、MCP Server(stdio)、纯库 import(`@openmimic/core` createOpenMimic)
 - .persona 人格包 v2 导出/导入(含 consent 过滤、episodes、divergences、corpus)
 - 语料箱(corpus):当事人本人原话,作为说话风格参照,物理上独立于证言表

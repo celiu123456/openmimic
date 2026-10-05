@@ -63,7 +63,7 @@
 | WitnessEngine | 已实现 | `engines/witness/src/plugin.ts` · `engines/witness/test/` | 采集、邀请、问卷、AI 追问访谈,注册为 collector 类型插件 |
 | CourtEngine | 已实现 | `engines/court/src/court.ts` · `engines/court/src/conflict.ts` · `engines/court/src/plugin.ts` · `engines/court/test/court.test.ts` | v2 管线:filing(提取论断+事例,per-item lenient parsing) → pairing(LLMClaimPairFinder/EmbeddingClaimPairFinder/KeywordClaimPairFinder 三级回落) → relation judgment(要求同一行为维度) → confrontation → conviction computation;divergence map 保留视角差异;仍为多步 LLM 调用而非独立智能体进程 |
 | GraphEngine | 计划 | `engines/graph/` 只有 .gitkeep | 无代码;README 声称"人格是图的实时派生物……改一条证言自动重算"无实现 |
-| RoomEngine | 已实现 | `engines/room/src/room.ts` · `engines/room/src/plugin.ts` · `engines/room/test/room.test.ts` | 背后/当面双模式,round-robin 调度,consent overlap 防护,crisis/diagnosis 词表 |
+| RoomEngine | 已实现 | `engines/room/src/room.ts` · `engines/room/src/plugin.ts` · `engines/room/test/room.test.ts` | 背后/当面双模式,round-robin 调度,consent overlap 防护,crisis/diagnosis 词表,no-talk list(LLM 生成跨证人知识冲突 + 规则兜底),两级泄密检测(关键词快扫 + LLM 语义判断),guided rewrite(阻断后用安全素材引导重写最多两次,失败才降为舞台提示),25% 舞台提示上限(接近时优先排低负担证人) |
 | GateEngine(独立引擎) | 已实现 | `engines/gate/src/gate.ts` · `engines/gate/src/plugin.ts` · `engines/gate/test/gate.test.ts` | 论断否决(contest/uncontest)、诊断词/危机词权限墙(filterSessionClaims)、re-raise 机制(canReraise + checkReraiseAfterCourt)、reraised 结构化字段。contest 记录持久化于插件表(append-only)。前端 CourtReportView 提供否决按钮 |
 
 ## CourtEngine 细项

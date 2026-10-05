@@ -144,6 +144,8 @@ export interface RunBehindRoomOptions {
   maxUtterances?: number;
   /** Upper bound on turns per witness; values above 2 are clamped down. */
   maxTurnsPerWitness?: number;
+  /** Called with generation statistics after the room is built. */
+  onStats?: (stats: RoomStats) => void;
 }
 
 export interface OpenDoorOptions {
@@ -467,6 +469,29 @@ interface ComposedLine {
 
 /** Stage direction used when a secret leak is caught and cannot be rewritten. */
 export const SECRET_LEAK_FALLBACK_STAGE = '欲言又止,没说下去';
+
+/* ------------------------------------------------------------------ */
+/* Room generation statistics                                          */
+/* ------------------------------------------------------------------ */
+
+/**
+ * Statistics from a room generation run.
+ * Used for diagnostics, run logging, and tuning.
+ */
+export interface RoomStats {
+  /** The no-talk list generated for this room. */
+  noTalkList: NoTalkItem[];
+  /** Total LLM verification calls for no-talk detection. */
+  verifyCallCount: number;
+  /** Number of lines blocked by no-talk detection. */
+  blockedCount: number;
+  /** Number of blocked lines successfully rewritten. */
+  rewriteSuccessCount: number;
+  /** Number of lines that became stage directions (after rewrite failure). */
+  stageDirectionCount: number;
+  /** Total LLM calls in the room (generation + verification + rewrite). */
+  totalLlmCalls: number;
+}
 
 /**
  * Phrases that mark content as private/confidential in testimony.
@@ -1114,6 +1139,9 @@ function hasDedupConflict(
  * - A witness who just spoke cannot be the immediate next speaker.
  * - Occasionally (every 3rd pick), let someone who hasn't spoken recently go
  *   to prevent monopoly.
+ * - When `preferLowBurden` is true (stage-direction cap approaching), prefer
+ *   witnesses who are NOT the knowing side of any no-talk item (they are less
+ *   likely to trigger blocks).
  */
 function pickNextSpeaker(
   drafts: readonly UtteranceDraft[],
@@ -1121,6 +1149,8 @@ function pickNextSpeaker(
   turnCounts: Map<string, number>,
   maxPerWitness: number,
   turnIndex: number,
+  preferLowBurden: boolean = false,
+  noTalkBurden: ReadonlySet<string> = new Set(),
 ): UtteranceDraft | undefined {
   const eligible = drafts.filter(
     (d) => (turnCounts.get(d.witness.id) ?? 0) < maxPerWitness,
@@ -1137,6 +1167,14 @@ function pickNextSpeaker(
 
   if (pool.length === 0) return undefined;
 
+  // When stage-direction cap is approaching, prefer witnesses without no-talk burden
+  if (preferLowBurden && noTalkBurden.size > 0) {
+    const lowBurden = pool.filter((d) => !noTalkBurden.has(d.witness.id));
+    if (lowBurden.length > 0) {
+      return lowBurden[turnIndex % lowBurden.length];
+    }
+  }
+
   // Every 3rd turn, prefer the least-spoken witness for variety
   if (turnIndex % 3 === 2) {
     const minTurns = Math.min(...pool.map((d) => turnCounts.get(d.witness.id) ?? 0));
@@ -1150,6 +1188,45 @@ function pickNextSpeaker(
 
   // Default: round-robin through eligible pool
   return pool[turnIndex % pool.length];
+}
+
+/**
+ * Extract safe topics from a witness's memory that do not overlap with any
+ * no-talk item's keywords. These are suggested as alternative conversation
+ * material when a line is blocked by the no-talk guard.
+ *
+ * Returns 2-4 short topic phrases (truncated to 20 chars each).
+ */
+function extractSafeTopics(
+  memory: readonly MemoryEntry[],
+  noTalkList: readonly NoTalkItem[],
+  witnessId: string,
+): string[] {
+  // Collect all no-talk keywords relevant to this witness (items where they know the secret)
+  const forbiddenKeywords = new Set<string>();
+  for (const item of noTalkList) {
+    if (item.knowingWitnessIds.includes(witnessId)) {
+      for (const kw of item.keywords) forbiddenKeywords.add(kw);
+    }
+  }
+  if (forbiddenKeywords.size === 0) return [];
+
+  // Split each memory entry into sentences, keep those not touching any keyword
+  const safePhrases: string[] = [];
+  for (const mem of memory) {
+    const sentences = mem.text.split(/(?<=[。！？；\n])/).map((s) => s.trim()).filter(Boolean);
+    for (const sentence of sentences) {
+      const touchesForbidden = [...forbiddenKeywords].some((kw) => sentence.includes(kw));
+      if (!touchesForbidden && sentence.length >= 4) {
+        // Truncate to a useful snippet
+        safePhrases.push(sentence.substring(0, 20));
+      }
+    }
+  }
+
+  // Deduplicate and pick up to 4
+  const unique = [...new Set(safePhrases)];
+  return unique.slice(0, 4);
 }
 
 /**
@@ -1169,6 +1246,15 @@ interface FrontScheduleConfig {
   behindMemory: Map<string, MemoryEntry[]>;
 }
 
+/** Mutable stats accumulator passed through runSchedule. */
+interface ScheduleStats {
+  verifyCallCount: number;
+  blockedCount: number;
+  rewriteSuccessCount: number;
+  stageFromNoTalk: number;
+  totalLlmCalls: number;
+}
+
 async function runSchedule(
   drafts: readonly UtteranceDraft[],
   subjectName: string,
@@ -1184,6 +1270,7 @@ async function runSchedule(
   frontConfig?: FrontScheduleConfig,
   privateElements: readonly PrivateFactElements[] = [],
   noTalkList: readonly NoTalkItem[] = [],
+  stats?: ScheduleStats,
 ): Promise<RoomUtterance[]> {
   const utterances: RoomUtterance[] = [];
   const turnCounts = new Map<string, number>();
@@ -1196,9 +1283,25 @@ async function runSchedule(
   let halfTruthDone = false;
   // Track whether the previous turn was the half-truth (so next person deflects)
   let lastWasHalfTruth = false;
+  // Stage direction count for the 25% cap
+  let stageDirectionCount = 0;
+  // Maximum allowed stage directions (25% of cap)
+  const maxStageDirections = Math.floor(cap * 0.25);
+  // Build set of witness IDs that carry no-talk burden (knowing side)
+  const noTalkBurdenSet = new Set<string>();
+  for (const item of noTalkList) {
+    for (const wid of item.knowingWitnessIds) {
+      noTalkBurdenSet.add(wid);
+    }
+  }
 
   for (let turnIndex = 0; utterances.length < cap; turnIndex += 1) {
-    const draft = pickNextSpeaker(drafts, utterances, turnCounts, maxPerWitness, turnIndex);
+    // When stage direction count is approaching the 25% cap, prefer low-burden witnesses
+    const approachingStageCap = stageDirectionCount >= maxStageDirections - 1 && maxStageDirections > 0;
+    const draft = pickNextSpeaker(
+      drafts, utterances, turnCounts, maxPerWitness, turnIndex,
+      approachingStageCap, noTalkBurdenSet,
+    );
     if (!draft) break; // all witnesses exhausted
 
     const displayLabel = displayLabels.get(draft.witness.id) ?? draft.witness.relation;
@@ -1220,6 +1323,7 @@ async function runSchedule(
         anchors: [],
       });
       turnCounts.set(draft.witness.id, (turnCounts.get(draft.witness.id) ?? 0) + 1);
+      stageDirectionCount += 1;
       lastWasHalfTruth = false;
       continue;
     }
@@ -1299,57 +1403,37 @@ async function runSchedule(
     //   reveal the secret to the blind witness. This catches euphemisms and
     //   indirect references that keyword matching misses.
     //
-    // The LLM receives the blind witness's current knowledge context —
-    // their full testimony summary — so it can judge whether the line
-    // adds information beyond what that witness already knows.
+    // When a line IS a leak, the engine tries a *guided rewrite* (up to 2
+    // attempts) before falling back to a stage direction. The rewrite prompt
+    // tells the persona exactly which topic to avoid and offers safe
+    // alternative material from the witness's own testimony.
     //
     // Skip: if the speaker IS the blind witness (they can't leak to themselves).
     //
-    // Hard caps (rationale: a behind room has ~12 utterances. With N
-    // no-talk items and K witnesses, uncapped verification would be
-    // O(utterances * N) LLM calls. We cap at MAX_VERIFY_PER_LINE = 3
-    // per line and MAX_VERIFY_CALLS_PER_ROOM = 15 per room to keep
-    // latency and cost bounded — 15 is enough to verify every line
-    // against 1-2 items, which covers realistic fixtures).
+    // Hard caps: MAX_VERIFY_PER_LINE = 3, MAX_VERIFY_CALLS_PER_ROOM = 15.
     const MAX_VERIFY_PER_LINE = 3;
-    // Hard-cap: total LLM verification calls per room. Beyond this,
-    // fall back to keyword-only detection (no LLM semantic check).
-    // Rationale: prevents runaway LLM costs on rooms with many no-talk
-    // items or many turns; 15 covers 12 utterances x 1.25 avg checks.
     const MAX_VERIFY_CALLS_PER_ROOM = 15;
+    const MAX_REWRITE_ATTEMPTS = 2;
     if (mode === 'behind' && line.kind === 'speech' && noTalkList.length > 0) {
       const isSubstantive = line.text.length >= 8;
       let verifyCount = 0;
+      let leakedItem: NoTalkItem | undefined;
       for (const item of noTalkList) {
         if (verifyCount >= MAX_VERIFY_PER_LINE) break;
-        // Skip: the blind witness speaking can't leak to themselves
         if (draft.witness.id === item.blindWitnessId) continue;
         const keywordHit = item.keywords.some((kw) => line.text.includes(kw));
 
-        // When LLM budget is exhausted, degrade to keyword-only detection:
-        // only keyword hits trigger blocking, no semantic check.
+        // When LLM budget is exhausted, degrade to keyword-only detection
         if (verifyCallsUsed >= MAX_VERIFY_CALLS_PER_ROOM) {
           if (keywordHit) {
-            // Block directly on keyword match (no LLM call)
-            if (secretLeakBudget.remaining > 0) {
-              secretLeakBudget.remaining -= 1;
-              line.kind = 'stage';
-              line.text = SECRET_LEAK_FALLBACK_STAGE;
-              line.qids = [];
-            } else {
-              line.kind = 'stage';
-              line.text = stageLine();
-              line.qids = [];
-            }
+            leakedItem = item;
             break;
           }
           continue;
         }
 
-        // Send for verification if: keyword hit, OR line is substantive
         if (!keywordHit && !isSubstantive) continue;
 
-        // Find the blind witness's relation and full knowledge context
         const blindDraft = drafts.find((d) => d.witness.id === item.blindWitnessId);
         const blindRelation = blindDraft?.witness.relation ?? '在场的人';
         const blindWitnessContext = blindDraft
@@ -1358,30 +1442,90 @@ async function runSchedule(
         try {
           verifyCount += 1;
           verifyCallsUsed += 1;
+          if (stats) stats.verifyCallCount += 1;
           const isLeak = await llmVerifyLeak(
             llm, line.text, item.topic, blindRelation, item.blindClaim,
             blindWitnessContext,
           );
           if (isLeak) {
-            // Block this line: rewrite or fall back to stage direction
-            if (secretLeakBudget.remaining > 0) {
-              secretLeakBudget.remaining -= 1;
-              line.kind = 'stage';
-              line.text = SECRET_LEAK_FALLBACK_STAGE;
-              line.qids = [];
-            } else {
-              line.kind = 'stage';
-              line.text = stageLine();
-              line.qids = [];
-            }
-            break; // no need to check more items
+            leakedItem = item;
+            break;
           }
         } catch {
           // LLM call failed: err on the safe side, treat as leak
-          line.kind = 'stage';
-          line.text = stageLine();
-          line.qids = [];
+          leakedItem = item;
           break;
+        }
+      }
+
+      // Guided rewrite when a leak is detected
+      if (leakedItem) {
+        if (stats) stats.blockedCount += 1;
+        const blindDraft = drafts.find((d) => d.witness.id === leakedItem.blindWitnessId);
+        const blindRelation = blindDraft?.witness.relation ?? '在场的人';
+        const safeTopics = extractSafeTopics(draft.memory, noTalkList, draft.witness.id);
+        const safeHint = safeTopics.length > 0
+          ? `可以聊:${safeTopics.map((t) => `「${t}」`).join('、')}`
+          : '换一个完全不涉及此事的话头';
+
+        // Collect ALL forbidden keywords from ALL no-talk items where this
+        // speaker is NOT the blind witness (they are checked against all items).
+        const allForbiddenKws = new Set<string>();
+        for (const item of noTalkList) {
+          if (draft.witness.id === item.blindWitnessId) continue;
+          for (const kw of item.keywords) allForbiddenKws.add(kw);
+        }
+        const forbiddenList = [...allForbiddenKws].slice(0, 15).map((k) => `「${k}」`).join('、');
+
+        let rewritten = false;
+        for (let attempt = 0; attempt < MAX_REWRITE_ATTEMPTS && !rewritten; attempt++) {
+          const rewriteSystem = buildSystem(context, mode, topicSeed, actionHint, extra);
+          const rewriteUser = buildUser(context, mode, topicSeed, utterances, actionHint, extra)
+            + `\n\n★这句话会让「${blindRelation}」知道「${leakedItem!.topic}」,不能说。`
+            + `\n禁用词:${forbiddenList}。这些词一个都不能出现。`
+            + `\n换一个完全不涉及此事的话头。${safeHint}。`
+            + '\n只输出 JSON {"text":"...","qids":[...]}。';
+          const rewriteResult = await attemptResponse(llm, { system: rewriteSystem, user: rewriteUser }, 1);
+          if (stats) stats.totalLlmCalls += 1;
+          if (!rewriteResult.ok) continue;
+
+          // Verify the rewrite doesn't still leak
+          let stillLeaks = false;
+          // Quick keyword check on all no-talk items
+          for (const item of noTalkList) {
+            if (draft.witness.id === item.blindWitnessId) continue;
+            if (item.keywords.some((kw) => rewriteResult.value.text.includes(kw))) {
+              stillLeaks = true;
+              break;
+            }
+          }
+          // Also check private content
+          if (!stillLeaks && privateTexts.length > 0) {
+            stillLeaks = hasPrivateLeak(rewriteResult.value.text, privateTexts, privateElements);
+          }
+
+          if (!stillLeaks) {
+            line.text = rewriteResult.value.text;
+            line.qids = rewriteResult.value.qids;
+            rewritten = true;
+            if (stats) stats.rewriteSuccessCount += 1;
+          }
+        }
+
+        if (!rewritten) {
+          // All rewrites failed: fall back to stage direction
+          if (secretLeakBudget.remaining > 0) {
+            secretLeakBudget.remaining -= 1;
+            line.kind = 'stage';
+            line.text = SECRET_LEAK_FALLBACK_STAGE;
+            line.qids = [];
+          } else {
+            line.kind = 'stage';
+            line.text = stageLine();
+            line.qids = [];
+          }
+          stageDirectionCount += 1;
+          if (stats) stats.stageFromNoTalk += 1;
         }
       }
     }
@@ -1409,6 +1553,7 @@ async function runSchedule(
         line.kind = 'stage';
         line.text = stageLine();
         line.qids = [];
+        stageDirectionCount += 1;
       }
     }
 
@@ -1426,6 +1571,7 @@ async function runSchedule(
         line.kind = 'stage';
         line.text = stageLine();
         line.qids = [];
+        stageDirectionCount += 1;
       }
     }
 
@@ -1488,6 +1634,7 @@ async function runSchedule(
           line.kind = 'stage';
           line.text = stageLine();
           line.qids = [];
+          stageDirectionCount += 1;
         }
       }
     }
@@ -1646,6 +1793,14 @@ export async function runBehindRoom(
     })),
   }));
 
+  const scheduleStats: ScheduleStats = {
+    verifyCallCount: 0,
+    blockedCount: 0,
+    rewriteSuccessCount: 0,
+    stageFromNoTalk: 0,
+    totalLlmCalls: 0,
+  };
+
   let stageCursor = 0;
   const utterances = await runSchedule(
     drafts,
@@ -1666,6 +1821,7 @@ export async function runBehindRoom(
     undefined, // no frontConfig for behind room
     privateElements,
     noTalkList,
+    scheduleStats,
   );
 
   const room: Room = {
@@ -1677,6 +1833,24 @@ export async function runBehindRoom(
     createdAt: now(),
   };
   store.putRoom(room);
+
+  // Emit stats if the caller requested them
+  if (options.onStats) {
+    const totalStageDirections = utterances.filter((u) => u.kind === 'stage').length;
+    const generationCalls = utterances.length;
+    const totalLlmCalls = generationCalls + scheduleStats.verifyCallCount
+      + scheduleStats.totalLlmCalls
+      + (noTalkList.length > 0 ? 1 : 0); // +1 for no-talk list generation
+    options.onStats({
+      noTalkList,
+      verifyCallCount: scheduleStats.verifyCallCount,
+      blockedCount: scheduleStats.blockedCount,
+      rewriteSuccessCount: scheduleStats.rewriteSuccessCount,
+      stageDirectionCount: totalStageDirections,
+      totalLlmCalls,
+    });
+  }
+
   return room;
 }
 

@@ -13,7 +13,7 @@ import { writeFileSync, readFileSync, existsSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { Store } from '@openmimic/kernel';
 import { OpenAICompatClient } from '@openmimic/engine-court';
-import { runBehindRoom, openDoor } from '@openmimic/engine-room';
+import { runBehindRoom, openDoor, type RoomStats } from '@openmimic/engine-room';
 import {
   seedDemo,
   DEMO_SUBJECT_ID,
@@ -88,7 +88,10 @@ async function main() {
 
   // Generate behind room
   console.log('Generating behind room...');
-  const room = await runBehindRoom(subjectId, store, llm);
+  let roomStats: RoomStats | undefined;
+  const room = await runBehindRoom(subjectId, store, llm, {
+    onStats: (s) => { roomStats = s; },
+  });
   console.log(`Behind: ${room.behindTranscript.length} utterances`);
 
   // Open door (unless behind-only)
@@ -146,6 +149,38 @@ async function main() {
     `Date: ${new Date().toISOString()}`,
     `Model: ${model}`,
     '',
+  ];
+
+  // No-talk list and verification stats
+  if (roomStats) {
+    md.push('### No-Talk List', '');
+    if (roomStats.noTalkList.length === 0) {
+      md.push('(none)', '');
+    } else {
+      md.push('| Topic | Keywords | Blind Witness | Blind Claim | Knowing Witnesses |');
+      md.push('|-------|----------|---------------|-------------|-------------------|');
+      for (const item of roomStats.noTalkList) {
+        const blindRel = witnessRelation.get(item.blindWitnessId) ?? item.blindWitnessId;
+        const knowingRels = item.knowingWitnessIds
+          .map((id) => witnessRelation.get(id) ?? id)
+          .join(', ');
+        md.push(`| ${item.topic} | ${item.keywords.join(', ')} | ${blindRel} | ${item.blindClaim} | ${knowingRels} |`);
+      }
+      md.push('');
+    }
+
+    md.push('### Room Statistics', '');
+    md.push('| Metric | Value |');
+    md.push('|--------|-------|');
+    md.push(`| Verify calls | ${roomStats.verifyCallCount} |`);
+    md.push(`| Lines blocked | ${roomStats.blockedCount} |`);
+    md.push(`| Successful rewrites | ${roomStats.rewriteSuccessCount} |`);
+    md.push(`| Stage directions | ${roomStats.stageDirectionCount} |`);
+    md.push(`| Total LLM calls | ${roomStats.totalLlmCalls} |`);
+    md.push('');
+  }
+
+  md.push(
     formatReport(report),
     '',
     '### Criteria Checks',
@@ -158,7 +193,7 @@ async function main() {
     '',
     ...room.behindTranscript.map(formatUtt),
     '',
-  ];
+  );
 
   if (frontTranscript) {
     md.push(

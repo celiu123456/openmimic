@@ -307,7 +307,9 @@ describe('behind room with LLM no-talk list', () => {
       answers: [{ qid: 'q1', behindText: '她升职了,挺好的。' }],
     });
 
-    // Script: no-talk list LLM returns items, then compose lines, then verify
+    // Script: no-talk list LLM returns items, then compose lines, then verify.
+    // After a leak is detected, the engine tries up to 2 guided rewrites.
+    // Both rewrites here still contain keywords, so they fail and fall to stage.
     const noTalkResponse = JSON.stringify([{
       topic: '查出病情',
       keywords: ['体检', '手术', '查出', '穿刺'],
@@ -321,9 +323,10 @@ describe('behind room with LLM no-talk list', () => {
       noTalkResponse,                       // no-talk list generation
       line('她体检查出来问题了'),            // sister's line (hits keyword)
       '是',                                 // verify: yes, this leaks
-      line('她最近状态不太好'),              // sister retry (after stage direction budget used)
+      line('她体检有点问题'),                // rewrite attempt 1 (still has '体检')
+      line('查出来不太好'),                  // rewrite attempt 2 (still has '查出')
       line('她升职挺开心的'),                // father's line (safe)
-      line('她确实很努力'),                  // sister second turn
+      line('她最近状态不太好'),              // sister second turn
       line('是啊,争气'),                    // father second turn
     ]);
 
@@ -426,5 +429,207 @@ describe('behind room with LLM no-talk list', () => {
     // and built a rule-based no-talk list targeting the mother witness.
     // (The actual keyword check at room level would only fire if lines
     // happened to contain keywords from the fallback list.)
+  });
+});
+
+/* ------------------------------------------------------------------ */
+/* Regression tests for specific leak scenarios                        */
+/* ------------------------------------------------------------------ */
+
+describe('regression: no-talk leak scenarios', () => {
+  let store: Store;
+
+  beforeEach(() => {
+    store = new Store();
+  });
+
+  afterEach(() => {
+    store.close();
+  });
+
+  it('Run 15 lines 6-7: euphemism + explicit resignation blocked with mother present', async () => {
+    // Run 15 root cause: 前上司 said "走得让我到现在都别扭" (euphemism for
+    // resignation) and 前任 said "我刷朋友圈才知道他辞职了" (explicit).
+    // Mother believes "公司器重他". Both must be blocked.
+    store.putSubject({ id: 's1', displayName: '林默' });
+    store.putWitness({ id: 'w-boss', subjectId: 's1', relation: '前上司', consentLevel: 'quotable' });
+    store.putWitness({ id: 'w-ex', subjectId: 's1', relation: '前任', consentLevel: 'quotable' });
+    store.putWitness({ id: 'w-mother', subjectId: 's1', relation: '母亲', consentLevel: 'quotable' });
+    store.addTestimony({
+      id: 't-boss', witnessId: 'w-boss', subjectId: 's1',
+      answers: [{ qid: 'q1', behindText: '他裸辞前三周,我看见他一个人在消防楼梯里打电话。他走的方式,像个逃兵。' }],
+    });
+    store.addTestimony({
+      id: 't-ex', witnessId: 'w-ex', subjectId: 's1',
+      answers: [{ qid: 'q1', behindText: '后来他把工作也辞了。我刷朋友圈才知道他辞职了。' }],
+    });
+    store.addTestimony({
+      id: 't-mother', witnessId: 'w-mother', subjectId: 's1',
+      answers: [{ qid: 'q1', behindText: '他上个月还跟我说公司器重他。我寻思他是不是要升职了。' }],
+    });
+
+    const noTalkResponse = JSON.stringify([{
+      topic: '辞职/裸辞',
+      keywords: ['辞职', '裸辞', '辞了', '离职', '不干了'],
+      knowingWitnessIds: ['w-boss', 'w-ex'],
+      blindWitnessId: 'w-mother',
+      blindClaim: '公司器重他,要升职了',
+      sourceFragment: '他裸辞前三周',
+    }]);
+
+    // Flow for boss's euphemism "走得让我到现在都别扭":
+    //   - no keyword hit, but text >= 8 chars -> LLM verification
+    //   - LLM says "是" -> blocked
+    //   - rewrite attempt 1 returns line with keyword '辞了' -> keyword blocked
+    //   - rewrite attempt 2 returns line with keyword '离职' -> keyword blocked
+    //   - falls to stage direction
+    //
+    // Flow for ex's explicit "我刷朋友圈才知道他辞职了":
+    //   - keyword '辞职' hits -> LLM verification
+    //   - LLM says "是" -> blocked
+    //   - rewrites also contain keywords -> stage direction
+
+    const llm = new FakeLLM([
+      noTalkResponse,                                   // no-talk list generation
+      line('走得让我到现在都别扭'),                     // boss original (euphemism, no keyword)
+      '是',                                             // verify: yes, leaks resignation
+      line('他辞了以后我一直在想'),                     // rewrite 1: keyword '辞了'
+      line('他离职的事让我很不舒服'),                   // rewrite 2: keyword '离职'
+      line('他上个月还跟我说公司器重他'),               // mother's line (safe, her own knowledge)
+      line('我刷朋友圈才知道他辞职了'),                 // ex original (keyword '辞职')
+      '是',                                             // verify: yes
+      line('他辞了以后朋友圈也不发了'),                 // rewrite 1: keyword '辞了'
+      line('他不干了以后就消失了'),                     // rewrite 2: keyword '不干了'
+      line('嗯'),                                       // mother second turn
+      line('唉'),                                       // boss second turn
+      line('是'),                                       // ex second turn
+    ]);
+
+    const room = await runBehindRoom('s1', store, llm, {
+      maxTurnsPerWitness: 2,
+    });
+
+    // The original euphemism and explicit leak must NOT appear in the transcript
+    const texts = room.behindTranscript.map((u) => u.text);
+    expect(texts).not.toContain('走得让我到现在都别扭');
+    expect(texts).not.toContain('我刷朋友圈才知道他辞职了');
+
+    // No speech line should contain any resignation keyword
+    const speechTexts = room.behindTranscript
+      .filter((u) => u.kind === 'speech')
+      .map((u) => u.text);
+    for (const st of speechTexts) {
+      expect(st).not.toContain('辞职');
+      expect(st).not.toContain('辞了');
+      expect(st).not.toContain('离职');
+      expect(st).not.toContain('裸辞');
+    }
+  });
+
+  it('Run 9: "借了两万" blocked when mother is present', async () => {
+    // Run 9 root cause: 发小 mentioned "借了两万" in front of 母亲 who was
+    // told "千万别跟他妈提" about the loan.
+    //
+    // Note: composeLine's own private-leak guard (privateTexts/Elements
+    // from the "千万别" marker) fires BEFORE the no-talk check, so the
+    // faxiao's leaking line is caught at the composeLine level. The test
+    // verifies the end result: no loan mention in any speech line.
+    store.putSubject({ id: 's1', displayName: '林默' });
+    store.putWitness({ id: 'w-faxiao', subjectId: 's1', relation: '发小', consentLevel: 'quotable' });
+    store.putWitness({ id: 'w-mother', subjectId: 's1', relation: '母亲', consentLevel: 'quotable' });
+    store.addTestimony({
+      id: 't-faxiao', witnessId: 'w-faxiao', subjectId: 's1',
+      answers: [{ qid: 'q1', behindText: '上个月他半夜给我打电话,借了两万,说手头周转一下,还嘱咐我千万别跟他妈提。' }],
+    });
+    store.addTestimony({
+      id: 't-mother', witnessId: 'w-mother', subjectId: 's1',
+      answers: [{ qid: 'q1', behindText: '他上个月还给我转了五千,说让我买个按摩椅。' }],
+    });
+
+    const noTalkResponse = JSON.stringify([{
+      topic: '借钱/手头紧',
+      keywords: ['借', '两万', '周转', '手头'],
+      knowingWitnessIds: ['w-faxiao'],
+      blindWitnessId: 'w-mother',
+      blindClaim: '他还给我转了五千',
+      sourceFragment: '借了两万,千万别跟他妈提',
+    }]);
+
+    // Use function-based responses for composeLine calls to always return
+    // safe content. The private-leak guard in composeLine catches leak
+    // attempts and rewrites/stages internally, consuming extra responses.
+    const llm = new FakeLLM([
+      noTalkResponse,                                   // no-talk list
+      // composeLine calls are dynamic: depending on private-leak detection,
+      // it may consume 1-3 responses per line. Use functions for robustness.
+      (req) => req.user.includes('发小') ? line('他半夜给我借了两万') : line('他还给我转了五千'),
+      (req) => line('他最近联系少了'),   // faxiao rewrite (composeLine private leak catch)
+      (req) => line('他还挺好的'),       // safe fallback
+      (req) => line('他还给我转了五千'), // mother
+      (req) => line('他最近联系少了'),   // faxiao second turn
+      (req) => line('嗯'),               // mother second turn
+      (req) => line('是啊'),             // extra safe responses
+      (req) => line('对'),
+    ]);
+
+    const room = await runBehindRoom('s1', store, llm, {
+      maxTurnsPerWitness: 2,
+    });
+
+    // The loan mention must NOT appear in speech
+    const speechTexts = room.behindTranscript
+      .filter((u) => u.kind === 'speech')
+      .map((u) => u.text);
+    for (const st of speechTexts) {
+      expect(st).not.toContain('两万');
+      expect(st).not.toContain('借了两万');
+    }
+    // Room should complete
+    expect(room.behindTranscript.length).toBeGreaterThan(0);
+  });
+
+  it('innocuous speech passes through when LLM says no leak', async () => {
+    // 苏芷 fixture: 闺蜜 says "她最近老念叨想换个节奏" which is an
+    // innocuous phrasing under 父亲's "刚升职" no-talk item.
+    // The LLM verification should say "否" and the line passes through.
+    store.putSubject({ id: 's1', displayName: '苏芷' });
+    store.putWitness({ id: 'w-bestie', subjectId: 's1', relation: '闺蜜', consentLevel: 'quotable' });
+    store.putWitness({ id: 'w-father', subjectId: 's1', relation: '父亲', consentLevel: 'quotable' });
+    store.addTestimony({
+      id: 't-bestie', witnessId: 'w-bestie', subjectId: 's1',
+      answers: [{ qid: 'q1', behindText: '她上个月跟我说她想离开北京。她就说想换个节奏生活。' }],
+    });
+    store.addTestimony({
+      id: 't-father', witnessId: 'w-father', subjectId: 's1',
+      answers: [{ qid: 'q1', behindText: '上个月她打电话回来说升职了,我高兴了一晚上。' }],
+    });
+
+    const noTalkResponse = JSON.stringify([{
+      topic: '离开北京/离职',
+      keywords: ['离开', '离职', '辞职', '递了申请'],
+      knowingWitnessIds: ['w-bestie'],
+      blindWitnessId: 'w-father',
+      blindClaim: '升职了',
+      sourceFragment: '她想离开北京',
+    }]);
+
+    const llm = new FakeLLM([
+      noTalkResponse,                                   // no-talk list
+      line('她最近老念叨想换个节奏'),                   // bestie (innocuous, no keyword)
+      '否',                                             // verify: no, "换个节奏" doesn't reveal departure
+      line('嗯她确实争气'),                             // father
+      line('对她一直很努力'),                           // bestie second turn
+      line('是'),                                       // father second turn
+    ]);
+
+    const room = await runBehindRoom('s1', store, llm, {
+      maxTurnsPerWitness: 2,
+    });
+
+    // The innocuous line should have passed through as speech
+    const speechTexts = room.behindTranscript
+      .filter((u) => u.kind === 'speech')
+      .map((u) => u.text);
+    expect(speechTexts).toContain('她最近老念叨想换个节奏');
   });
 });
