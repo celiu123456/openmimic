@@ -7,3 +7,4 @@ export * from './persona';
 export * from './plugin-host';
 export * from './reflux';
 export * from './store';
+export * from './style-stats';

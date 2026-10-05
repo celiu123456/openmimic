@@ -371,6 +371,41 @@
 | | **Room 合计** | **93** | **62359** | **3985** | **22144** |
 | | **总计** | **734** | **509312** | **357405** | **275160** |
 
+---
+
+## Liveness (活人感)
+
+> **UNCALIBRATED**: 活人感评测管线已搭建 (rubric / judge / sample-hygiene / calibrate / scenarios / simulator / ablation), 但**没有经过标定** — 不存在人工指认的真人样本白名单。
+>
+> 在项目主人提供真人样本并通过标定门禁 (accuracy > 80%, valid pairs >= 20, position bias <= 30%) 之前, 本管线不产出任何读数。
+>
+> 标定样本格式见 `eval/samples.example.json`。
+
+### L-0. 管线结构
+
+| 模块 | 文件 | 说明 |
+|------|------|------|
+| 评分表 | `eval/src/liveness-rubric.ts` | 13 信号 (7 AI tell + 6 human tell), 每信号带 cue/notCue/weak 探测器 |
+| 裁判 | `eval/src/liveness-judge.ts` | 成对盲评, 位置互换, SHA 冻结, 信号引用校验 (无信号=作废) |
+| 样本卫生 | `eval/src/sample-hygiene.ts` | 6 类污染检测 (AI 身份泄露/prompt 泄露/种子标记/舞台指示/emoji spam/过长) |
+| 标定门禁 | `eval/src/liveness-calibrate.ts` | 输入人工指认的真人 + AI 样本, 先过卫生再判; 不过则后续活人感评测拒跑 |
+| 场景脚本 | `eval/src/liveness-scenarios.ts` | 20 个手写虚构场景 (5 类 x 4), 8-12 轮, 全虚构名字 |
+| 用户模拟器 | `eval/src/liveness-simulator.ts` | 烦躁模型 + mulberry32 确定性 PRNG, 脚本式对话 |
+| 消融入口 | `eval/src/liveness-ablation.ts` | 4 个提示词变体 (现状/精简/仅红线/加风格画像), Wilson 区间 |
+| 样本格式 | `eval/samples.example.json` | 真人样本必须由项目主人亲自指认 |
+
+### L-1. 方法铁律合规
+
+| 铁律 | 状态 |
+|------|------|
+| #1 成对 > 绝对分 | 合规: `judgeLivenessPair` 只做成对判定 |
+| #2 位置互换 | 合规: 每对跑两次 (A/B 互换), 不一致则作废 |
+| #4 SHA 冻结 | 合规: `LIVENESS_JUDGE_PROMPT_SHA` 硬编码, `verifyLivenessPromptSha` 校验 |
+| #5 标定门禁 | 合规: `requireLivenessCalibration` 在消融前强制检查 |
+| #6 真人样本溯源 | 合规: 不提供真人样本, 仓库只放格式说明 |
+| #8 裁判必须引用信号 ID | 合规: 零信号判定直接作废 |
+| #9 报告负面 | 合规: 本节明确标注 UNCALIBRATED, 不产出读数 |
+
 ### Round 2 结论
 
 1. **管线可用性**: 标定 100% 通过, 裁判 prompt 在 74 对 (含 24 对对抗) 上完全准确, 0 偏置。

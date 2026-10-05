@@ -1,0 +1,23 @@
+{
+  "$comment": "活人感标定样本格式。真人样本必须由项目主人亲自指认,不得由 AI 生成或从数据库自动抓取。AI 样本可以是模型对同一触发消息的回复。每侧至少 20 条才能通过标定门禁。",
+  "human": [
+    {
+      "id": "human_example_0",
+      "text": "嗯行 知道了",
+      "trigger": "明天记得带伞",
+      "context": [
+        { "role": "user", "content": "看天气预报了吗" },
+        { "role": "assistant", "content": "看了 明天有雨" }
+      ]
+    },
+    "也可以只放纯文本,不带 trigger 和 context"
+  ],
+  "ai": [
+    {
+      "id": "ai_example_0",
+      "text": "好的,我会记得带伞的!谢谢你的提醒~",
+      "trigger": "明天记得带伞"
+    },
+    "AI 样本同理,纯文本也行"
+  ]
+}
