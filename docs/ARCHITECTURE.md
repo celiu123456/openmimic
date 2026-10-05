@@ -159,12 +159,17 @@ engines/
                   coverage scheduling, short invite codes)
                   Interview strategy migrated from the author's earlier platform project.
   graph/          (planned) GraphEngine
-  gate/           (planned) GateEngine as independent engine
+  gate/           GateEngine (contest/uncontest, claim permission wall, re-raise)
 server/           HTTP server, mount-rest, mount-openai, mount-mcp
 web/              browser client
 shared/           Zod schemas, types, prompt isolation, sanitization, provider errors, JSON extraction
 plugins/
   collector-freetext/   freetext testimony collector
+  collector-chatlog/    chat log import (text/csv/json, PII, reflux screening)
+  bridge-sillytavern/   SillyTavern Character Card V2 bidirectional converter
+  output-biography/     biography generation from testimony
+  silence-signal/       collective silence detection
+  meta-perception/      subject predicts witness responses, LLM scoring
   scenario-review/      review meeting scenario
   example-bridge/       webhook bridge (court.finished → POST)
 packages/

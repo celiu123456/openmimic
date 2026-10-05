@@ -168,7 +168,7 @@ The kernel (`kernel/src/`) owns four things: testimony ledger, persona assembly,
 
 Five plugin kinds: `engine` (processing pipelines), `collector` (evidence gathering), `scenario` (room topic presets), `bridge` (external system sync), `mount` (external surfaces like HTTP or MCP). Dependencies between plugins are resolved by topological sort; cycles raise `CyclicDependencyError`.
 
-Three example plugins ship with the repo: `collector-freetext` (free-form text testimony), `scenario-review` (review meeting topic preset), `example-bridge` (court.finished -> webhook POST).
+Eight plugins ship with the repo: three examples (`collector-freetext`, `scenario-review`, `example-bridge`) and five production plugins (`collector-chatlog` for chat log import, `bridge-sillytavern` for Character Card V2 conversion, `output-biography` for testimony-based biography generation, `silence-signal` for collective silence detection, `meta-perception` for subject self-prediction scoring).
 
 See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for the full directory layout, event flow, and security layer details.
 
