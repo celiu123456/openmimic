@@ -15,3 +15,4 @@ export * from './retreat';
 export * from './testimony';
 export * from './coverage';
 export * from './short-code';
+export * from './interviewer-v4';

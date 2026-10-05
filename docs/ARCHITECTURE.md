@@ -232,7 +232,8 @@ engines/
   room/           RoomEngine plugin (behind/front dual-mode rooms)
   witness/        WitnessEngine plugin (testimony collection, invites, interview, basis,
                   coverage scheduling, short invite codes)
-                  Interview strategy migrated from the author's earlier platform project.
+                  v4: per-turn generation interviewer (single model, full history, no
+                  fixed questionnaire). Questionnaire-based v3 retained for compatibility.
   graph/          GraphEngine (event-driven incremental recompute)
   gate/           GateEngine (contest/uncontest, claim permission wall, re-raise)
 server/           HTTP server, mount-rest, mount-openai, mount-mcp
@@ -398,6 +399,33 @@ edit the text before it enters the answer.
 - **Early submission**: the witness can finish at any time. Already-answered
   parts are submitted normally; remaining questions are not marked as
   avoided (they were simply not reached).
+
+### v4 per-turn interviewer (engines/witness/src/interviewer-v4/)
+
+Replaces the fixed questionnaire with single-model per-turn generation.
+Each turn sends the complete conversation history to the LLM, which
+decides what to ask next. No fixed questions, no navigator, no planning.
+
+- **prompt.ts**: builds a Chinese system prompt with identity, role binding,
+  objective, method rules, optional uncovered aspects, and opening/retreat/
+  repair injections.
+- **guards.ts**: server-side zero-model guards reusing `interview-state.ts`
+  (single question, dedup, closing regex, acknowledgement check). One repair
+  retry on failure; second failure returns `interview_generation_failed`.
+- **session.ts**: chat session state with Zod schemas. Rejected outputs
+  stay in turns with `rejected: true` for audit but are excluded from
+  history sent to the LLM.
+- **interviewer.ts**: `startChat`, `say`, `finishChat`, `getChatHistory`.
+  Converts turns to `TestimonyAnswer[]` via existing `submitTestimony`.
+- **Plugin**: registered as `collector:chat` alongside `collector:interview`.
+  Requires LLM; when unavailable, chat routes return 404 while questionnaire
+  routes continue working.
+
+Two scenarios share the same module with different objective sentences:
+- **informant**: witness describes someone else.
+- **self**: subject describes themselves.
+
+See [docs/INTERVIEWER-V4.md](INTERVIEWER-V4.md) for full details.
 
 ### Short invite codes (engines/witness/src/short-code.ts)
 

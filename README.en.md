@@ -67,7 +67,7 @@ Docker and systemd deployment are also documented: see [docs/DEPLOY-FOR-AI.md](d
   ledger (SQLite)                                        └──> .persona export
 ```
 
-1. **Collect testimony.** Friends answer a structured questionnaire via an invite link. The WitnessEngine records each answer with the witness's relationship, stance, consent level, and verbatim text. The ledger is append-only (SQLite triggers block UPDATE/DELETE). An AI follow-up interview strategy is available (migrated from the author's earlier platform project), with intent classification, retreat detection, and quality gates.
+1. **Collect testimony.** Friends share their perspective via an invite link. The v4 interviewer uses per-turn generation: a single model sees the full conversation history and decides what to ask next (no fixed questionnaire, no navigator). The questionnaire-based collector (v3) is retained for compatibility. The WitnessEngine records each answer with the witness's relationship, stance, consent level, and verbatim text. The ledger is append-only (SQLite triggers block UPDATE/DELETE).
 
 2. **Run the court.** The CourtEngine processes testimony through a four-stage pipeline:
    - *Filing*: extract candidate claims and episodes (verbatim sub-strings of testimony) from each witness, with per-item lenient parsing.

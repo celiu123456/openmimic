@@ -85,7 +85,7 @@ resp = client.chat.completions.create(
 | 授权门(synthesis_only 遮蔽,court/external 双 scope) | 已实现 |
 | 插件装配(v1: inject/provide 依赖注入,topo sort,unload,Registry 扩展点,config tree) | 已实现 |
 | 人格组装(async, witness-relation-grouped claims + round-robin episodes + divergences + corpus → 6000 char system prompt) | 已实现 |
-| WitnessEngine(采集 + 邀请 + AI 追问访谈) | 已实现 |
+| WitnessEngine(采集 + 邀请 + v4 逐轮生成访谈;题库版保留兼容) | 已实现 |
 | CourtEngine(v2: filing with episodes + LLM/embedding/keyword pairing + relation judgment + confrontation + divergence map + conviction computation) | 已实现 |
 | RoomEngine(背后/当面双模式 + 危机词 + 诊断词防护 + 跨证人泄密保护) | 已实现 |
 | GraphEngine(证言图谱,改一条证言自动重算关联人格) | 计划 |
@@ -99,7 +99,7 @@ resp = client.chat.completions.create(
 
 | 引擎 | 职责 |
 |---|---|
-| **WitnessEngine** | 证言采集与立场标注:每条证言记录来源、关系、立场,原文永久可溯 |
+| **WitnessEngine** | 证言采集与立场标注:v4 逐轮生成访谈(单模型完整历史,无固定题库);题库版(v3)保留兼容。每条证言记录来源、关系、立场,原文永久可溯 |
 | **CourtEngine** | v2 对抗式质询管线:4 阶段——(1) filing: 从每位证人的证言中提取候选论断和 episode(具体事例,必须是证言原文的逐字子串),per-item lenient parsing(单条无效不废弃全部);(2) pairing: 首选 LLMClaimPairFinder(一次 LLM 调用找语义相关对),次选 embedding 余弦,末选关键词重叠;(3) relation judgment: LLM 判定论断对关系(agreement / perspective_difference / factual_conflict / unrelated),perspective_difference 要求同一行为维度且方向不同,事实冲突进入 confrontation 对质;(4) conviction computation: 纯函数,base 0.5,按证人数/episode/配对状态计算置信分。视角差异生成 divergence 记录保留双方观点;一致论断合并证据。体检报告(CourtReport)含存活/限定/争议/退役论断数、episode 数、divergence 数 |
 | **GraphEngine** | 计划:证言图谱,使人格成为图的实时派生物(改一条证言自动重算关联人格)。当前无代码 |
 | **RoomEngine** | 房间模拟:背后/当面双模式群体对话;危机词命中拒绝开房间,诊断词触发重写或降级为舞台指令;跨证人泄密保护——LLM 生成 no-talk list(仅收高代价秘密:明确嘱托保密 + 推翻在场证人对重大现状的认知;双次生成取并集上限 8 条;规则兜底不受上限挤出) + 两级检测(关键词快扫 + LLM 语义判断含部分泄露,fail-closed) + guided rewrite(用安全素材引导重写最多两次,失败才降为舞台提示) + 25% 舞台提示上限。**局限**:防护依赖模型判定,不是保证;清单每次生成可能不同;部分泄露判定边界(如"换城市"vs"换节奏")取决于模型理解力 |

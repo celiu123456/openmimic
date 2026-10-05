@@ -33,6 +33,17 @@ import {
   type SubmitTestimonyOptions,
   type SubmitTestimonyResult,
 } from './testimony';
+import {
+  startChat,
+  say,
+  finishChat,
+  getChatHistory,
+  type ChatInterviewOptions,
+  type StartChatResult,
+  type SayInput,
+  type SayResult,
+  type FinishChatInput,
+} from './interviewer-v4/interviewer';
 
 /** The collector surface once a {@link Store} is bound to it. */
 export interface WitnessCollector {
@@ -97,6 +108,46 @@ export const witnessPlugin: Plugin = {
     const llm = ctx.has('llm') ? ctx.get<LLMClient>('llm') : undefined;
     const collector = createWitnessCollector(store, llm ? { llm } : {});
     ctx.provide('witness', collector);
+  },
+};
+
+/** The v4 chat collector surface once a {@link Store} is bound. */
+export interface ChatCollector {
+  startChat(token: string, mode?: 'informant' | 'self'): Promise<StartChatResult>;
+  say(sessionId: string, input: SayInput): Promise<SayResult>;
+  finishChat(sessionId: string, input: FinishChatInput): ReturnType<typeof finishChat>;
+  getChatHistory(sessionId: string): ReturnType<typeof getChatHistory>;
+}
+
+/** Bind the v4 ChatCollector functions to one store. */
+export function createChatCollector(
+  store: Store,
+  options: ChatInterviewOptions,
+): ChatCollector {
+  return {
+    startChat: (token, mode) => startChat(store, token, options, mode),
+    say: (sessionId, input) => say(store, sessionId, input, options),
+    finishChat: (sessionId, input) => finishChat(store, sessionId, input, options),
+    getChatHistory: (sessionId) => getChatHistory(store, sessionId, options),
+  };
+}
+
+/**
+ * Plugin for the v4 chat-based interviewer.
+ *
+ * Registered as `kind: 'collector'`, `name: 'chat'`: coexists with the
+ * question-tree `witness` collector. Requires an LLM.
+ */
+export const chatPlugin: Plugin = {
+  name: 'chat',
+  kind: 'collector',
+  version: '0.0.1',
+  inject: ['store', 'llm'],
+  apply(ctx) {
+    const store = ctx.get<Store>('store');
+    const llm = ctx.get<LLMClient>('llm');
+    const collector = createChatCollector(store, { llm });
+    ctx.provide('chat', collector);
   },
 };
 

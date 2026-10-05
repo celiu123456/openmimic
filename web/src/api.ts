@@ -137,6 +137,32 @@ export interface SubmitResult {
   count: number;
 }
 
+/** v4 chat session start result. */
+export interface ChatStartPayload {
+  sessionId: string;
+  message: { id: string; text: string };
+}
+
+/** v4 chat turn result. */
+export interface ChatSayPayload {
+  message?: { id: string; text: string };
+  confirm?: { text: string };
+}
+
+/** v4 chat turn in the history. */
+export interface ChatTurnPayload {
+  id: string;
+  role: 'assistant' | 'user';
+  text: string;
+  at: string;
+}
+
+/** v4 chat history result. */
+export interface ChatHistoryPayload {
+  turns: ChatTurnPayload[];
+  mode: string;
+}
+
 /** What opening an interview session hands back. */
 export interface StartedInterviewPayload {
   sessionId: string;
@@ -227,6 +253,14 @@ export interface ApiClient {
   resolveShortCode(code: string): Promise<ShortCodePayload>;
   /** Get coverage overview for a subject. */
   getCoverage(subjectId: string): Promise<CoverageResponse>;
+  /** v4: Start a chat interview session. */
+  startChat(token: string, mode?: 'informant' | 'self'): Promise<ChatStartPayload>;
+  /** v4: Send a message in the chat interview. */
+  sayChat(sessionId: string, text: string, source?: 'text' | 'speech', asrConfidence?: number): Promise<ChatSayPayload>;
+  /** v4: Finish the chat interview. */
+  finishChat(sessionId: string, consentLevel: ConsentLevel, relation?: string): Promise<SubmitResult>;
+  /** v4: Get chat history (for refresh recovery). */
+  getChatHistory(sessionId: string): Promise<ChatHistoryPayload>;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -377,6 +411,36 @@ export function createApiClient(options: ApiClientOptions = {}): ApiClient {
     getCoverage: (subjectId) =>
       request<CoverageResponse>(
         `/api/subjects/${encodeURIComponent(subjectId)}/coverage`,
+      ),
+
+    startChat: (token, mode) =>
+      request<ChatStartPayload>(
+        `/api/invites/${encodeURIComponent(token)}/chat`,
+        jsonInit('POST', mode ? { mode } : {}),
+      ),
+
+    sayChat: (sessionId, text, source, asrConfidence) =>
+      request<ChatSayPayload>(
+        `/api/chat/${encodeURIComponent(sessionId)}/say`,
+        jsonInit('POST', {
+          text,
+          ...(source ? { source } : {}),
+          ...(asrConfidence !== undefined ? { asrConfidence } : {}),
+        }),
+      ),
+
+    finishChat: (sessionId, consentLevel, relation) =>
+      request<SubmitResult>(
+        `/api/chat/${encodeURIComponent(sessionId)}/finish`,
+        jsonInit('POST', {
+          consentLevel,
+          ...(relation ? { relation } : {}),
+        }),
+      ),
+
+    getChatHistory: (sessionId) =>
+      request<ChatHistoryPayload>(
+        `/api/chat/${encodeURIComponent(sessionId)}`,
       ),
   };
 }

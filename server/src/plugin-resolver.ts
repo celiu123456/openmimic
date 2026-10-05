@@ -8,7 +8,7 @@
  */
 
 import type { Plugin } from '@openmimic/kernel';
-import { witnessPlugin } from '@openmimic/engine-witness';
+import { witnessPlugin, chatPlugin } from '@openmimic/engine-witness';
 import { courtPlugin } from '@openmimic/engine-court';
 import { roomPlugin } from '@openmimic/engine-room';
 import { gatePlugin } from '@openmimic/engine-gate';
@@ -34,6 +34,7 @@ function tryRequirePlugin(relativePath: string): Plugin | undefined {
 
 const BUILTIN_PLUGINS: ReadonlyMap<string, Plugin> = new Map<string, Plugin>([
   ['@openmimic/engine-witness', witnessPlugin],
+  ['@openmimic/engine-chat', chatPlugin],
   ['@openmimic/engine-court', courtPlugin],
   ['@openmimic/engine-room', roomPlugin],
   ['@openmimic/engine-gate', gatePlugin],

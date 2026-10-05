@@ -315,7 +315,7 @@ export async function startServer(options: StartServerOptions): Promise<RunningS
 
   const useNames = [
     '@openmimic/engine-witness',
-    ...(llm ? ['@openmimic/engine-court', '@openmimic/engine-room'] : []),
+    ...(llm ? ['@openmimic/engine-chat', '@openmimic/engine-court', '@openmimic/engine-room'] : []),
     '@openmimic/engine-gate',
     '@openmimic/meta-perception',
     '@openmimic/silence-signal',

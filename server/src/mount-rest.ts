@@ -22,12 +22,16 @@ import {
   AnswerQuestionInputSchema,
   FinishInterviewInputSchema,
   SubmitTestimonyInputSchema,
+  SayInputSchema,
+  FinishChatInputSchema,
+  InterviewStateError,
   computeCoverage,
   adviseRelationGaps,
   resolveShortCode,
   WITNESS_V2_QUESTIONNAIRES,
   WITNESS_V2_FRIEND,
   type WitnessCollector,
+  type ChatCollector,
 } from '@openmimic/engine-witness';
 import { RateLimiter } from './auth';
 import { DEMO_SUBJECT_ID } from '../../fixtures/limo';
@@ -257,6 +261,7 @@ export const mountRestPlugin: Plugin<MountRestConfig> = {
       return { status: 201, body: result };
     }, { open: true });
 
+    /** @deprecated Use POST /api/invites/:token/chat instead. */
     router.post('/api/invites/:token/interview', (context) => {
       const started = collector.startInterview(context.params.token ?? '');
       return {
@@ -270,22 +275,67 @@ export const mountRestPlugin: Plugin<MountRestConfig> = {
       };
     }, { open: true });
 
+    /** @deprecated Use POST /api/chat/:sid/say instead. */
     router.post('/api/interview/:sid/answer', async (context) => {
       const input = AnswerQuestionInputSchema.parse(context.body);
       const step = await collector.answerQuestion(context.params.sid ?? '', input);
       return { status: 200, body: step };
     }, { open: true });
 
+    /** @deprecated Use POST /api/chat/:sid/say instead. */
     router.post('/api/interview/:sid/followup', (context) => {
       const input = AnswerFollowupInputSchema.parse(context.body);
       const step = collector.answerFollowup(context.params.sid ?? '', input);
       return { status: 200, body: step };
     }, { open: true });
 
+    /** @deprecated Use POST /api/chat/:sid/finish instead. */
     router.post('/api/interview/:sid/finish', (context) => {
       const input = FinishInterviewInputSchema.parse(context.body);
       const result = collector.finishInterview(context.params.sid ?? '', input);
       return { status: 201, body: result };
+    }, { open: true });
+
+    /* ---------------------------------------------------------------- */
+    /* v4 chat routes (open — gated by invite token)                     */
+    /* ---------------------------------------------------------------- */
+
+    const hasChat = () => ctx.has('chat');
+    const getChat = () => ctx.get<ChatCollector>('chat');
+
+    router.post('/api/invites/:token/chat', async (context) => {
+      if (!hasChat()) throw new HttpError(404, 'chat_unavailable', 'Chat interviewer not available');
+      const body = (context.body ?? {}) as Record<string, unknown>;
+      const mode = body.mode === 'self' ? 'self' as const : undefined;
+      const result = await getChat().startChat(context.params.token ?? '', mode);
+      return { status: 201, body: result };
+    }, { open: true });
+
+    router.post('/api/chat/:sid/say', async (context) => {
+      if (!hasChat()) throw new HttpError(404, 'chat_unavailable', 'Chat interviewer not available');
+      const body = SayInputSchema.parse(context.body);
+      try {
+        const result = await getChat().say(context.params.sid ?? '', body);
+        return { status: 200, body: result };
+      } catch (caught) {
+        if (caught instanceof InterviewStateError && caught.message === 'interview_generation_failed') {
+          return { status: 503, body: errorBody('interview_generation_failed', '生成失败，请稍后重试') };
+        }
+        throw caught;
+      }
+    }, { open: true });
+
+    router.post('/api/chat/:sid/finish', (context) => {
+      if (!hasChat()) throw new HttpError(404, 'chat_unavailable', 'Chat interviewer not available');
+      const body = FinishChatInputSchema.parse(context.body);
+      const result = getChat().finishChat(context.params.sid ?? '', body);
+      return { status: 201, body: result };
+    }, { open: true });
+
+    router.get('/api/chat/:sid', (context) => {
+      if (!hasChat()) throw new HttpError(404, 'chat_unavailable', 'Chat interviewer not available');
+      const result = getChat().getChatHistory(context.params.sid ?? '');
+      return { status: 200, body: result };
     }, { open: true });
 
     /* ---------------------------------------------------------------- */

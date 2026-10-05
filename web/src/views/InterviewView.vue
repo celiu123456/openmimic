@@ -33,8 +33,20 @@ import {
 } from '../interview';
 import MicButton from '../components/MicButton.vue';
 import ProgressDots from '../components/ProgressDots.vue';
+import ChatView from './ChatView.vue';
 
 type Phase = 'loading' | 'invalid' | 'error' | 'opening' | 'questions' | 'submit' | 'done';
+
+/**
+ * When true, the v4 chat interface is used instead of the v3 questionnaire.
+ * Starts true; flips to false if the server responds 404 on the chat endpoint.
+ */
+const useChat = ref(true);
+
+function onChatFallback(): void {
+  useChat.value = false;
+  // Invite data already loaded; just show the v3 opening/questions phase
+}
 
 const RELATIONS = ['朋友', '同事', '家人', '其他'];
 /** Fixed opening line the product insists on; not configurable on purpose. */
@@ -433,7 +445,15 @@ onMounted(() => {
 </script>
 
 <template>
-  <main v-if="phase === 'loading'" class="room center">
+  <!-- v4 chat mode: tried after invite loads, falls back to v3 questionnaire on 404 -->
+  <ChatView
+    v-if="useChat && displayName && phase !== 'loading' && phase !== 'invalid' && phase !== 'error'"
+    :token="token"
+    :display-name="displayName"
+    @fallback="onChatFallback"
+  />
+
+  <main v-else-if="phase === 'loading'" class="room center">
     <p class="lede">正在打开……</p>
   </main>
 
