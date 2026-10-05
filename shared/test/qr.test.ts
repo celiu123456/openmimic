@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import { describe, expect, it } from 'vitest';
 import { generateQR, qrToSvg } from '../src/qr';
 
@@ -212,19 +213,59 @@ describe('SVG output', () => {
 /* Format info reference                                               */
 /* ------------------------------------------------------------------ */
 
+/**
+ * Read the 15-bit format information from one copy placed in the matrix.
+ * copy=1: around the top-left finder.
+ * copy=2: top-right (horizontal) + bottom-left (vertical).
+ */
+function readFormatCopy(matrix: number[][], size: number, copy: 1 | 2): number {
+  let info = 0;
+  if (copy === 1) {
+    // ISO 18004:2015 Table C.2 — Copy 1 around TL finder
+    // Vertical (col 8): bits 0-5 at rows 0-5, bit 6 at row 7, bit 7 at row 8
+    for (let i = 0; i < 6; i++) info |= (matrix[i]![8]! & 1) << i;
+    info |= (matrix[7]![8]! & 1) << 6;
+    info |= (matrix[8]![8]! & 1) << 7;
+    // Horizontal (row 8): bits 14-9 at cols 0-5, bit 8 at col 7
+    for (let i = 0; i < 6; i++) info |= (matrix[8]![i]! & 1) << (14 - i);
+    info |= (matrix[8]![7]! & 1) << 8;
+    // bit 7 already set from vertical
+  } else {
+    // Copy 2: horizontal at row 8 right end + vertical at col 8 bottom
+    // Horizontal (row 8): bit i at col size-1-i for i=0..7
+    for (let i = 0; i < 8; i++) info |= (matrix[8]![size - 1 - i]! & 1) << i;
+    // Vertical (col 8): bit (14-i) at row size-1-i for i=0..6
+    // (i=7 is dark module at row size-8, skipped)
+    for (let i = 0; i < 7; i++) info |= (matrix[size - 1 - i]![8]! & 1) << (14 - i);
+  }
+  return info;
+}
+
 describe('format info reference', () => {
-  /**
-   * Format information BCH encoding for EC level M should match known
-   * reference values from ISO 18004 Table C.1.
-   *
-   * We verify indirectly: the horizontal and vertical strips must carry
-   * identical 15-bit values, which we already test in cross-scan.
-   * Here we also check that the dark module percentage is reasonable
-   * (mask selection produces ~50%, implying correct format info → correct mask).
-   */
+  // ISO 18004:2015 Table C.1 — EC level M, masks 0-7
+  const ISO_FORMAT_INFO: Record<number, number> = {
+    0: 0b101010000010010,
+    1: 0b101000100100101,
+    2: 0b101111001111100,
+    3: 0b101101101001011,
+    4: 0b100010111111001,
+    5: 0b100000011001110,
+    6: 0b100111110010111,
+    7: 0b100101010100000,
+  };
+
+  it.each([0, 1, 2, 3, 4, 5, 6, 7])(
+    'mask %i format info matches ISO Table C.1',
+    (mask) => {
+      const { matrix, size } = generateQR('format-ref', { forceMask: mask });
+      const copy1 = readFormatCopy(matrix as unknown as number[][], size, 1);
+      const copy2 = readFormatCopy(matrix as unknown as number[][], size, 2);
+      expect(copy1).toBe(ISO_FORMAT_INFO[mask]);
+      expect(copy2).toBe(ISO_FORMAT_INFO[mask]);
+    },
+  );
+
   it('dark module proportion is between 35% and 65%', () => {
-    // Good masking keeps proportion near 50%.
-    // A broken format info or mask would produce extreme ratios.
     for (const text of ['1', 'AB', 'Hello, world!', 'https://example.com/test']) {
       const { matrix, size } = generateQR(text);
       let dark = 0;
@@ -237,42 +278,86 @@ describe('format info reference', () => {
 });
 
 /* ------------------------------------------------------------------ */
+/* Frozen reference vectors (cross-validated via zxing-cpp decode)      */
+/* ------------------------------------------------------------------ */
+
+describe('frozen reference vectors', () => {
+  /** SHA-256 of the matrix rows concatenated as 0/1 digit strings. */
+  function matrixHash(matrix: number[][]): string {
+    const flat = matrix.map(r => r.join('')).join('');
+    return createHash('sha256').update(flat).digest('hex');
+  }
+
+  const VECTORS: Array<{
+    text: string;
+    forceMask: number;
+    version: number;
+    hash: string;
+  }> = [
+    {
+      text: 'Hello!',
+      forceMask: 2,
+      version: 1,
+      hash: 'f551e1a3cb08ceb8fb8092718af02baee37a08e83ac9daf6357197e16f8d554a',
+    },
+    {
+      text: '01234567',
+      forceMask: 6,
+      version: 1,
+      hash: 'a877e1e974c3102d80a74f396a6235a22303be74c04bb5450ff9701d48be0d45',
+    },
+    {
+      text: 'exactly14bytes',
+      forceMask: 0,
+      version: 1,
+      hash: '373f570ae2e6137a256092c5bcd6daeb92e78843922366cb4ca0d30e91628493',
+    },
+    {
+      text: 'https://example.org/i/ABCD2345',
+      forceMask: 3,
+      version: 3,
+      hash: '30a5f33e343b4876802a2eba9ee63d11ab2789bc3753bd043afe3761bc08e83a',
+    },
+    {
+      text: 'A'.repeat(120),
+      forceMask: 3,
+      version: 7,
+      hash: '5e49a5a8e357d681dc888aa476dcf289172028fb33ac4fd9a1f53915b80d9a7c',
+    },
+    {
+      text: '你好世界',
+      forceMask: 6,
+      version: 1,
+      hash: '2e64033d026864f34322bfe3abd8181af97f11789f0b44162a056bf364398383',
+    },
+  ];
+
+  it.each(VECTORS.map(v => [v.text.length > 30 ? v.text.slice(0, 30) + '...' : v.text, v] as const))(
+    '%s matrix matches frozen snapshot',
+    (_label, { text, forceMask, version, hash }) => {
+      const result = generateQR(text, { forceMask });
+      expect(result.version).toBe(version);
+      expect(matrixHash(result.matrix as unknown as number[][])).toBe(hash);
+    },
+  );
+});
+
+/* ------------------------------------------------------------------ */
 /* Cross-scan validation                                               */
 /* ------------------------------------------------------------------ */
 
 describe('cross-scan validation', () => {
   /**
-   * A QR code must be scannable. While we cannot run a decoder here,
-   * we verify structural properties that a decoder relies on:
-   * 1. Three finder patterns
-   * 2. Timing pattern alternation
-   * 3. Format information consistency (both copies should match)
+   * Both copies of the 15-bit format information must carry the same value.
+   * Reads each copy from the correct ISO 18004 positions and compares.
    */
-  it('has consistent format info in both horizontal and vertical strips', () => {
-    const { matrix, size } = generateQR('format-check');
-
-    // Read horizontal format info (row 8)
-    const hCols = [0, 1, 2, 3, 4, 5, 7, 8,
-      size - 8, size - 7, size - 6, size - 5,
-      size - 4, size - 3, size - 2];
-    const hBits: number[] = [];
-    for (const c of hCols) {
-      hBits.push(matrix[8]![c]!);
+  it('has consistent format info in both copies', () => {
+    for (const text of ['format-check', 'Hello!', 'https://example.org/i/ABCD2345']) {
+      const { matrix, size } = generateQR(text);
+      const copy1 = readFormatCopy(matrix as unknown as number[][], size, 1);
+      const copy2 = readFormatCopy(matrix as unknown as number[][], size, 2);
+      expect(copy1).toBe(copy2);
     }
-
-    // Read vertical format info (col 8)
-    const vRows = [
-      size - 1, size - 2, size - 3, size - 4,
-      size - 5, size - 6, size - 7,
-      8, 7, 5, 4, 3, 2, 1, 0,
-    ];
-    const vBits: number[] = [];
-    for (const r of vRows) {
-      vBits.push(matrix[r]![8]!);
-    }
-
-    // Both strips should carry the same 15-bit format information
-    expect(hBits).toEqual(vBits);
   });
 
   /**
