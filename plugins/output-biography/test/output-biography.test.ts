@@ -19,14 +19,22 @@ import {
   removeConfidentialContent,
   checkUnsupportedDetails,
   removeUnsupportedSentences,
+  computeQuoteRatio,
+  countConsecutivePatterns,
+  countJuxtapositions,
+  computeChapterConsistency,
+  applyPolishPatches,
+  generateArcProfile,
   BIOGRAPHY_STYLES,
   CONFIDENTIAL_MARKERS,
   type Biography,
   type BiographyParagraph,
+  type BiographySection,
   type QuotableEntry,
   type MaterialBucket,
-  type BiographySection,
   type UnsupportedDetail,
+  type PolishPatch,
+  type ArcProfile,
 } from '../src/index';
 
 /* ------------------------------------------------------------------ */
@@ -953,5 +961,389 @@ describe('output-biography plugin', () => {
 
     // Overall scores should differ
     expect(r1.score).not.toBe(r2.score);
+  });
+
+  /* ================================================================ */
+  /* v2 narrative weaving: structural quality metrics                  */
+  /* ================================================================ */
+
+  /* --- Quote ratio --- */
+
+  it('computeQuoteRatio returns correct percentage for text with quotes', () => {
+    // ~30 chars body, 10 chars quoted -> ~33%
+    const text = '他很大方。发小说,"他花钱从不犹豫。"';
+    const ratio = computeQuoteRatio(text);
+    expect(ratio).toBeGreaterThan(15);
+    expect(ratio).toBeLessThanOrEqual(60);
+  });
+
+  it('computeQuoteRatio returns 0 for text without quotes', () => {
+    const text = '他对钱不敏感。团队都知道这一点。';
+    const ratio = computeQuoteRatio(text);
+    expect(ratio).toBe(0);
+  });
+
+  it('reviewQuality flags quote ratio below 15%', () => {
+    // Narrative with no quotes at all
+    const body = '朋友们都说他很大方。他对钱不敏感。团队买东西从不犹豫。报销单算得很清。大方和精打细算两面都有。';
+    const result = reviewQuality(body, [{ witnessId: 'w1' }], {
+      materialExcerpts: ['他很大方', '对钱不敏感'],
+      validationFailureCount: 0,
+    });
+    const qr = result.dimensions.find((d) => d.key === 'quoteRatio');
+    expect(qr).toBeDefined();
+    expect(qr!.issues.length).toBeGreaterThan(0);
+    expect(qr!.issues[0]).toContain('quote_ratio_low');
+  });
+
+  it('reviewQuality flags quote ratio above 35%', () => {
+    // Text that is almost entirely quotes (quote stacking)
+    const body = '发小说,"他花钱分裂。"前上司说,"对钱不敏感。"前任说,"AA精确到小数点。"';
+    const result = reviewQuality(body, [{ witnessId: 'w1' }], {
+      materialExcerpts: ['花钱分裂', '对钱不敏感', 'AA精确到小数点'],
+      validationFailureCount: 0,
+    });
+    const qr = result.dimensions.find((d) => d.key === 'quoteRatio');
+    expect(qr).toBeDefined();
+    expect(qr!.issues.length).toBeGreaterThan(0);
+    expect(qr!.issues[0]).toContain('quote_ratio_high');
+  });
+
+  /* --- Consecutive pattern detection --- */
+
+  it('countConsecutivePatterns detects "X说" runs', () => {
+    const body = [
+      '发小说,他很大方。',
+      '前上司说,他不大方。',
+      '前任说,他AA。',
+      '同事记得,他请客。',
+    ].join('\n');
+    const maxRun = countConsecutivePatterns(body);
+    expect(maxRun).toBeGreaterThanOrEqual(3);
+  });
+
+  it('countConsecutivePatterns returns 0 for narrative text', () => {
+    const body = [
+      '几个人不约而同提到他对钱的态度。',
+      '在发小眼里,这种分裂始终存在。',
+      '前上司的说法不同。',
+    ].join('\n');
+    const maxRun = countConsecutivePatterns(body);
+    expect(maxRun).toBeLessThanOrEqual(1);
+  });
+
+  it('reviewQuality penalizes consecutive "X说" pattern', () => {
+    const stackedBody = [
+      '发小说,他很大方。他花钱分裂。',
+      '前上司说,他不大方。报销很精确。',
+      '前任说,他AA到小数点。',
+      '同事提到,他请客从不犹豫。',
+    ].join('\n');
+    const result = reviewQuality(stackedBody, [{ witnessId: 'w1' }], {
+      materialExcerpts: ['大方', '不大方', 'AA'],
+      validationFailureCount: 0,
+    });
+    const cp = result.dimensions.find((d) => d.key === 'consecutivePatterns');
+    expect(cp).toBeDefined();
+    expect(cp!.score).toBeLessThan(80);
+  });
+
+  /* --- Whole-testimony pasting detection --- */
+
+  it('whole-testimony verbatim paste is flagged via high quote ratio', () => {
+    // Simulate a chapter that pastes entire testimony blocks
+    const body = '发小说了很多:"他花钱这事特别分裂。跟我吃饭从来没让我买过单,有一回我抢着付,他脸都拉下来了,说你少来这套。他平时那副我不缺钱的样子,现在想想全是撑的。上周我约他吃饭,又推了,说在忙。他最近联系确实少了。"';
+    const ratio = computeQuoteRatio(body);
+    // The quote takes up most of the text
+    expect(ratio).toBeGreaterThan(60);
+    const result = reviewQuality(body, [{ witnessId: 'w1' }], {
+      materialExcerpts: ['花钱分裂'],
+      validationFailureCount: 0,
+    });
+    const qr = result.dimensions.find((d) => d.key === 'quoteRatio');
+    expect(qr!.score).toBeLessThan(50);
+  });
+
+  /* --- Juxtaposition detection --- */
+
+  it('countJuxtapositions detects parallel views', () => {
+    const body = '发小看到的是一面,前任看到的是另一面。前上司的说法不同。但前任记得的完全相反。';
+    const count = countJuxtapositions(body);
+    expect(count).toBeGreaterThanOrEqual(2);
+  });
+
+  it('countJuxtapositions returns 0 when no contrasting phrases', () => {
+    const body = '他每天上班。他很勤快。他从不迟到。';
+    const count = countJuxtapositions(body);
+    expect(count).toBe(0);
+  });
+
+  /* --- Chapter consistency --- */
+
+  it('computeChapterConsistency returns 1 for identical structures', () => {
+    const bodies = [
+      '几个人提到他的慷慨。\n发小说他请客。\n前上司确认这一点。\n这件事没有定论。',
+      '花钱方式引起关注。\n发小的描述生动。\n前任有不同看法。\n双方各执一词。',
+    ];
+    const score = computeChapterConsistency(bodies);
+    expect(score).toBeGreaterThan(0.5);
+  });
+
+  it('computeChapterConsistency detects structural mismatch', () => {
+    const bodies = [
+      // One-liner vs multi-paragraph
+      '"他很好。"',
+      '几个人提到他的慷慨。\n发小说他请客。\n前上司确认这一点。\n前任有不同看法。\n这件事没有定论。',
+    ];
+    const score = computeChapterConsistency(bodies);
+    expect(score).toBeLessThan(1);
+  });
+
+  /* --- Polish patches --- */
+
+  it('applyPolishPatches applies find/replace correctly', () => {
+    const sections: BiographySection[] = [{
+      id: 'sec1', chapterNo: 1, title: 'test',
+      paragraphs: [
+        { text: '林默的发小说了一件事。', attribution: null, sourceRefs: [], conflict: false },
+      ],
+      removed: false, removalNote: null, qualityScore: null, qualityPass: null, qualityIssues: [],
+    }];
+    const patches: PolishPatch[] = [
+      { chapterNo: 1, find: '林默的发小说了一件事', replace: '发小提起一件事', reason: '简化' },
+    ];
+    const applied = applyPolishPatches(sections, patches);
+    expect(applied).toBe(1);
+    expect(sections[0].paragraphs[0].text).toContain('发小提起一件事');
+    expect(sections[0].paragraphs[0].text).not.toContain('林默的发小说了');
+  });
+
+  it('applyPolishPatches skips patches where find not found', () => {
+    const sections: BiographySection[] = [{
+      id: 'sec1', chapterNo: 1, title: 'test',
+      paragraphs: [
+        { text: '这是一段文字。', attribution: null, sourceRefs: [], conflict: false },
+      ],
+      removed: false, removalNote: null, qualityScore: null, qualityPass: null, qualityIssues: [],
+    }];
+    const patches: PolishPatch[] = [
+      { chapterNo: 1, find: '不存在的文字', replace: '替换', reason: '测试' },
+    ];
+    const applied = applyPolishPatches(sections, patches);
+    expect(applied).toBe(0);
+    expect(sections[0].paragraphs[0].text).toBe('这是一段文字。');
+  });
+
+  /* --- Three styles produce different voice instructions --- */
+
+  it('three styles produce different voice instructions in prompts', () => {
+    store = new Store();
+    seedBasicData(store);
+    const witnesses = store.listWitnessesBySubject('s1');
+    const testimonies = store.listBySubject('s1');
+    const { buckets, quotableIndex } = buildMaterialBuckets(witnesses, testimonies, [], []);
+    const outline = buildOutline(buckets, quotableIndex, 'Alice', { minWitnesses: 3 });
+    const ch = outline.chapters[0];
+    const chapterBuckets = buckets.filter((b) =>
+      ch.bucketKeys.includes(`${b.witnessId}::${b.topicDimension}`),
+    );
+    const chapterQuotable = quotableIndex.filter((q) =>
+      ch.quotableTexts.includes(q.text),
+    );
+
+    const prompt1 = buildChapterPrompt(ch, chapterBuckets, chapterQuotable, [], 'Alice', BIOGRAPHY_STYLES[0]);
+    const prompt2 = buildChapterPrompt(ch, chapterBuckets, chapterQuotable, [], 'Alice', BIOGRAPHY_STYLES[1]);
+    const prompt3 = buildChapterPrompt(ch, chapterBuckets, chapterQuotable, [], 'Alice', BIOGRAPHY_STYLES[2]);
+
+    // Each style must produce a different system prompt
+    expect(prompt1.system).not.toBe(prompt2.system);
+    expect(prompt2.system).not.toBe(prompt3.system);
+
+    // Verify style-specific keywords
+    expect(prompt1.system).toContain('第三人称');
+    expect(prompt2.system).toContain('你');
+    expect(prompt3.system).toContain('采访实录');
+  });
+
+  /* --- Arc profile in chapter prompt --- */
+
+  it('buildChapterPrompt includes arc profile when provided', () => {
+    store = new Store();
+    seedBasicData(store);
+    const witnesses = store.listWitnessesBySubject('s1');
+    const testimonies = store.listBySubject('s1');
+    const { buckets, quotableIndex } = buildMaterialBuckets(witnesses, testimonies, [], []);
+    const outline = buildOutline(buckets, quotableIndex, 'Alice', { minWitnesses: 3 });
+    const ch = outline.chapters[0];
+    const chapterBuckets = buckets.filter((b) =>
+      ch.bucketKeys.includes(`${b.witnessId}::${b.topicDimension}`),
+    );
+    const chapterQuotable = quotableIndex.filter((q) =>
+      ch.quotableTexts.includes(q.text),
+    );
+
+    const arcProfile: ArcProfile = {
+      threads: ['对钱的态度分裂', '社交中的两面性'],
+      speechPatterns: ['冷幽默', '轻描淡写'],
+    };
+
+    const { system } = buildChapterPrompt(
+      ch, chapterBuckets, chapterQuotable, [], 'Alice', BIOGRAPHY_STYLES[0], arcProfile,
+    );
+    expect(system).toContain('对钱的态度分裂');
+    expect(system).toContain('冷幽默');
+    expect(system).toContain('人物参照');
+  });
+
+  it('buildChapterPrompt works without arc profile', () => {
+    store = new Store();
+    seedBasicData(store);
+    const witnesses = store.listWitnessesBySubject('s1');
+    const testimonies = store.listBySubject('s1');
+    const { buckets, quotableIndex } = buildMaterialBuckets(witnesses, testimonies, [], []);
+    const outline = buildOutline(buckets, quotableIndex, 'Alice', { minWitnesses: 3 });
+    const ch = outline.chapters[0];
+    const chapterBuckets = buckets.filter((b) =>
+      ch.bucketKeys.includes(`${b.witnessId}::${b.topicDimension}`),
+    );
+    const chapterQuotable = quotableIndex.filter((q) =>
+      ch.quotableTexts.includes(q.text),
+    );
+
+    // null arc profile should not crash
+    const { system } = buildChapterPrompt(
+      ch, chapterBuckets, chapterQuotable, [], 'Alice', BIOGRAPHY_STYLES[0], null,
+    );
+    expect(system).not.toContain('人物参照');
+    expect(system).toContain('第三人称');
+  });
+
+  /* --- Arc profile generation with FakeLLM --- */
+
+  it('generateArcProfile returns valid structure from FakeLLM', async () => {
+    const fakeLLM: LLMClient = {
+      async complete(): Promise<string> {
+        return JSON.stringify({
+          threads: ['对钱的态度分裂', '说话轻描淡写'],
+          speechPatterns: ['冷幽默', '直接'],
+        });
+      },
+    };
+    const profile = await generateArcProfile(fakeLLM, [], [], '林默');
+    expect(profile.threads).toHaveLength(2);
+    expect(profile.speechPatterns).toHaveLength(2);
+    expect(profile.threads[0]).toContain('钱');
+  });
+
+  it('generateArcProfile returns empty on LLM failure', async () => {
+    const fakeLLM: LLMClient = {
+      async complete(): Promise<string> {
+        throw new Error('LLM error');
+      },
+    };
+    const profile = await generateArcProfile(fakeLLM, [], [], '林默');
+    expect(profile.threads).toHaveLength(0);
+    expect(profile.speechPatterns).toHaveLength(0);
+  });
+
+  /* --- Narrative sentence detail check --- */
+
+  it('unsupported detail check covers narrative sentences not just quotes', async () => {
+    const fakeLLM: LLMClient = {
+      async complete(): Promise<string> {
+        return JSON.stringify({ unsupportedDetails: [
+          { sentence: '那天下着大雨,三个人在咖啡馆坐了一下午', detail: '大雨、咖啡馆', reason: '素材中没有天气和地点描写' },
+        ] });
+      },
+    };
+    // A narrative sentence (not a quote) with unsupported detail
+    const body = '那天下着大雨,三个人在咖啡馆坐了一下午。发小说他看起来很累。';
+    const material = ['发小说他看起来很累'];
+    const details = await checkUnsupportedDetails(fakeLLM, body, material);
+    expect(details.length).toBe(1);
+    expect(details[0].detail).toContain('大雨');
+  });
+
+  /* --- Structural metrics differentiation --- */
+
+  it('structural metrics produce different scores for narrative vs quote-stacked text', () => {
+    const material = ['他花钱大方', '对钱不敏感', '报销精确'];
+
+    // Narrative text with embedded quotes (well-woven)
+    const narrativeText = '几个人不约而同提到他对钱的态度分裂。发小的说法最直接,但前上司看到的是另一面——在公司里他"对钱不敏感",给团队买东西从不犹豫。';
+    const r1 = reviewQuality(narrativeText, [{ witnessId: 'w1' }, { witnessId: 'w2' }], {
+      materialExcerpts: material,
+      validationFailureCount: 0,
+    });
+
+    // Quote-stacked text (the old problem)
+    const stackedText = '发小说,"他花钱大方。"\n前上司说,"对钱不敏感。"\n前任说,"报销精确。"\n同事说,"请客大方。"';
+    const r2 = reviewQuality(stackedText, [{ witnessId: 'w1' }], {
+      materialExcerpts: material,
+      validationFailureCount: 0,
+    });
+
+    // Narrative should score better on consecutive patterns
+    const cp1 = r1.dimensions.find((d) => d.key === 'consecutivePatterns');
+    const cp2 = r2.dimensions.find((d) => d.key === 'consecutivePatterns');
+    expect(cp1!.score).toBeGreaterThan(cp2!.score);
+
+    // Narrative should score better on juxtapositions
+    const jx1 = r1.dimensions.find((d) => d.key === 'juxtapositions');
+    const jx2 = r2.dimensions.find((d) => d.key === 'juxtapositions');
+    expect(jx1!.score).toBeGreaterThanOrEqual(jx2!.score);
+  });
+
+  /* --- Chapter prompt contains narrative weaving instructions --- */
+
+  it('chapter system prompt instructs narrative weaving', () => {
+    store = new Store();
+    seedBasicData(store);
+    const witnesses = store.listWitnessesBySubject('s1');
+    const testimonies = store.listBySubject('s1');
+    const { buckets, quotableIndex } = buildMaterialBuckets(witnesses, testimonies, [], []);
+    const outline = buildOutline(buckets, quotableIndex, 'Alice', { minWitnesses: 3 });
+    const ch = outline.chapters[0];
+    const chapterBuckets = buckets.filter((b) =>
+      ch.bucketKeys.includes(`${b.witnessId}::${b.topicDimension}`),
+    );
+    const chapterQuotable = quotableIndex.filter((q) =>
+      ch.quotableTexts.includes(q.text),
+    );
+
+    const { system, user } = buildChapterPrompt(
+      ch, chapterBuckets, chapterQuotable, [], 'Alice', BIOGRAPHY_STYLES[0],
+    );
+
+    // Must instruct narrative weaving, not per-paragraph attribution
+    expect(system).toContain('叙述');
+    expect(system).toContain('引语');
+    expect(system).toContain('并置');
+    expect(system).toContain('视角差');
+    expect(system).toContain('章内结构');
+    // User prompt must mention quote ratio control
+    expect(user).toContain('15%-35%');
+  });
+
+  /* --- Silence note and final chapter preserved --- */
+
+  it('silence note still works after v2 changes', () => {
+    const signal = {
+      id: 's1', subjectId: 's1', qid: 'q5',
+      skipperIds: ['w1', 'w2', 'w3'],
+      totalWitnesses: 4, skipRatio: 0.75,
+      createdAt: new Date().toISOString(),
+    };
+    const note = buildSilenceNote([signal]);
+    expect(note).toContain('有意留下');
+  });
+
+  it('final chapter still uses corpus verbatim after v2 changes', () => {
+    const section = buildFinalChapter(
+      [{ id: 'c1', subjectId: 's1', text: '我自己的话。', source: 'pasted', createdAt: new Date().toISOString() }],
+      'TestSubject',
+    );
+    expect(section.paragraphs[0].text).toBe('我自己的话。');
+    expect(section.title).toBe('他们不知道的');
   });
 });

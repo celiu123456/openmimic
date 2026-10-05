@@ -658,3 +658,134 @@ Purposes: {"biography-chapter":5,"biography-detail-check":5}
 - **Quality scores**: All 95 -- graduated scoring active, all dimensions pass because the text is well-formed Chinese with no speculative/omniscient/sensitive patterns
 - **LLM calls**: 10 (5 chapter + 5 detail-check), within budget of 20
 - **Known issues**: Ch4/Ch5 titles still have "第四章:"/"第五章 " prefix (model artifact, not code bug); duplication dimension scores same across chapters because no chapter pair has high trigram overlap
+
+---
+
+## 第四次:叙述编织改造(v0.2.0)
+
+> 真模型运行因项目指令跳过。本节记录写法改造的设计与 FakeLLM 测试验证。
+
+### 改造内容
+
+#### 1. 叙述与引语分层
+
+**问题**:第三次输出是"引语堆叠"——每段以"X说,"起头,然后大段引语,全篇读起来像证言的拼贴而非小传。
+
+**修改**:重写章节生成 prompt,从"每个段落必须注明是谁说的"改为:
+- 叙述用第三人称旁观,做"转述+组织",可概括、并置、标注视角差
+- 引语只用于证人原话,一段至多一两处,不许整段贴原文
+- 一个段落可以综合多个证人的观察(attribution 可以为 null)
+- 输出 JSON 示例改为包含叙述段落(attribution: null)和归属段落两种
+
+**预期效果**(待真模型验证):
+
+```
+几个人不约而同提到林默花钱这件事的分裂。发小的说法最直接:"他花钱这事特别分裂。"
+前上司看到的是另一面——在公司里,林默对钱不敏感,给团队买东西从不犹豫;可他自己
+的报销单一分钱都算得清清楚楚。前任的观察又加了一层:三年的账是 AA 的,"精确到小
+数点"。
+```
+
+对比第三次同一段:
+
+```
+*发小:*
+关于林默花钱这件事,他的发小是这样说的:"他花钱这事特别分裂。"发小还提到,"他平时
+那副'我不缺钱'的样子,现在想想全是撑的。"
+*前上司:*
+林默的前上司说,"林默对钱不敏感,但这不代表他大方。"这位前上司提到,"他给团队买
+下午茶、给实习生报销打车费,从来不卡。"
+```
+
+#### 2. 人物弧线与声音档案 (S1)
+
+新增 `generateArcProfile` 函数:生成前用一次 LLM 调用从全部素材提炼"这个人在不同人眼里的几条主线"与"他本人的说话特点"。结果作为 arcProfile 注入各章 prompt 的"人物参照"区,统一各章对人物的理解。
+
+#### 3. 统稿 (S4)
+
+新增 `generatePolishPatches` 函数:全部章节生成后,一次 LLM 调用检查跨章重复的转述句式、称呼不统一、开头句式雷同。只输出局部 find/replace patch,不重写内容。`applyPolishPatches` 函数逐条应用。
+
+#### 4. 文体选项
+
+三种:
+- `third_person_observer` (默认):第三人称旁观,叙述为主线,引语点缀
+- `letter_to_friends`:写给他的信(第二人称),引语仍逐字照搬
+- `documentary`:采访实录体,引语为主,每段明确标注说话人
+
+FakeLLM 测试验证三种风格的 prompt 互不相同,各含风格关键词。
+
+#### 5. 质检结构性指标
+
+**问题**:第三次所有章节质检分数恒为 95,没有区分度。
+
+**修改**:保留原有守卫维度(omniscient narrator、speculative language 等)作为 pass/fail 哨兵;新增四个结构性维度,分数随内容变化:
+
+| 指标 | 键 | 目标 | 得分逻辑 |
+|------|-----|------|----------|
+| 引语占比 | quoteRatio | 15-35% | <15 扣分, >60 重扣 |
+| 连续句式重复 | consecutivePatterns | 连续 <=2 | 3=70, 4+=40 |
+| 证人覆盖 | witnessCoverage | >=2 | 1=60, 0=30 |
+| 并排写法 | juxtapositions | >=1 | 0=70, 1=85, 2+=95 |
+
+另有 `computeChapterConsistency` 函数检测章间体例一致性(首段是否叙述、末段是否简短)。
+
+每章质检输出:pass/fail + 各维度得分 + 问题清单。
+
+#### 6. 无据细节检查扩展到叙述句
+
+detail-check prompt 明确要求"检查范围包括叙述句和引语——叙述句中的每个具体事实也必须有素材依据"。FakeLLM 测试验证叙述句中的无据细节(如编造的天气、地点)能被检出。
+
+#### 7. 底线保留验证
+
+FakeLLM 测试覆盖:
+- 引号逐字溯源:untraceable quote 仍被拒(已有测试不变)
+- 不编造:unsupported detail 检查不变
+- 保密过滤:extractConfidentialSentences 不变
+- 留白:buildSilenceNote 不变
+- 末章:buildFinalChapter 不变
+- 否决:removeSection 不变
+- synthesis_only 泄漏检查不变
+
+### FakeLLM 测试结果
+
+```
+Test Files  1 passed (1)
+     Tests  71 passed (71)  -- 47 original + 24 new
+```
+
+新增 24 个测试:
+- computeQuoteRatio: 正确计算、无引号时返回 0
+- reviewQuality: 引语过低/过高告警、连续"X说"惩罚
+- whole-testimony paste: 超高引语占比被判不合格
+- countConsecutivePatterns: 检测"X说"连续出现、叙述文本不误报
+- countJuxtapositions: 检测并排写法、无对比时返回 0
+- computeChapterConsistency: 结构一致得分高、结构不一致得分低
+- applyPolishPatches: 正确替换、find 不存在时跳过
+- 三种风格 prompt 互不相同
+- buildChapterPrompt 含/不含 arcProfile
+- generateArcProfile: FakeLLM 返回合法结构、LLM 失败时返回空
+- unsupported detail check 覆盖叙述句
+- structural metrics: 叙述文本 vs 引语堆叠产生不同得分
+- chapter prompt 含叙述编织指令
+- silence note / final chapter 保留
+
+### 自评
+
+**做到的**:
+- 写法从"每段必须归属一个证人"改为"叙述段可综合多证人,引语点缀"
+- 质检从恒定 95 改为结构性指标,引语占比/句式重复/并排写法各维度分数随内容变化
+- S1 人物弧线 + S4 统稿管线就位
+- 所有底线(引号溯源、无据检查、保密、留白、否决)保留且有测试
+- 三种文体选项各有独立 prompt
+
+**仍需真模型验证的**:
+- 模型是否真的按新 prompt 产出叙述编织的文本(而非继续堆叠)
+- 引语占比是否落入 15-35% 区间
+- S1 arcProfile 的主线提炼质量
+- S4 polish patches 是否合理(不乱改)
+- 章间体例是否真的统一
+
+**可能仍假/仍像堆砌的风险**:
+- 如果模型惯性强,仍可能产出"发小说,...前上司说,..."结构,需要多轮 prompt 迭代
+- 叙述段的"概括"可能过于笼统,不如原始引语生动——这是叙述感与原汁原味之间的权衡
+- 并排写法的计数基于模式匹配,实际文本中模型可能用不同表述来对比而不触发检测

@@ -220,9 +220,27 @@ against a whitelist of verbatim excerpts.
   silence paragraph is appended (fixed text, no model involved).
 - The final chapter contains only the subject's own words from the corpus.
   If no corpus exists, a fixed placeholder is shown.
-- Quality review checks five dimensions: omniscient narrator language,
-  speculative language, sensitive diagnostic terms, over-praise, and
-  cross-chapter duplication.
+
+**Writing approach (v0.2.0):**
+
+- **Narrative weaving**: chapters use third-person observer narration that
+  summarizes, juxtaposes, and organizes testimony. Direct quotes are used
+  sparingly (target 15-35% of text), embedded naturally in narrative paragraphs.
+- **S1 arc profile**: before chapter generation, one LLM call extracts
+  character threads and speech patterns as a unified reference.
+- **S4 polish**: after all chapters, one LLM call produces local find/replace
+  patches (unified phrasing, de-duplicated sentence patterns).
+- **Three styles**: third-person observer (default), letter to subject
+  (second person, requires authorization), interview transcript (quotes primary).
+
+**Quality review** checks guard-rail dimensions (omniscient narrator, speculative
+language, sensitive terms, over-praise, duplication, language match, material
+overlap) plus structural metrics with pass/fail + issue list:
+- Quote ratio (target 15-35%)
+- Consecutive "X said" pattern runs (max 2 consecutive)
+- Witness coverage per chapter
+- Juxtaposition count (side-by-side differing views)
+- Unsupported detail count (must be 0, checked for narrative sentences too)
 
 **Config (in `openmimic.yml`):**
 
