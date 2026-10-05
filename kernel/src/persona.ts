@@ -676,7 +676,7 @@ function extractPrivateSentences(text: string): string[] {
  * from private sentences — never do substring containment, which over-matches
  * when an unrelated episode happens to be a substring of a captured sentence.
  */
-function buildPrivacyFilter(store: Store, subjectId: string): (text: string) => boolean {
+export function buildPrivacyFilter(store: Store, subjectId: string): (text: string) => boolean {
   const testimonies = store.listBySubject(subjectId);
   const markerSentences: string[] = [];  // only the sentence that contains the marker
   for (const t of testimonies) {

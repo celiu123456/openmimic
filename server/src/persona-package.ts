@@ -16,7 +16,7 @@ import {
   type StyleSample,
   type Subject,
 } from '@openmimic/shared';
-import { type Store } from '@openmimic/kernel';
+import { buildPrivacyFilter, type Store } from '@openmimic/kernel';
 
 /**
  * The `.persona` single-file package: one subject's adjudicated persona,
@@ -28,11 +28,18 @@ import { type Store } from '@openmimic/kernel';
  * and witnesses travel as metadata plus testimony **ids only** — never an
  * answer. The only raw words that leave the building are the `quotable` style
  * samples, which is exactly what those witnesses authorized.
+ *
+ * Privacy filtering: the same `buildPrivacyFilter` used by persona assembly
+ * is applied at export time. Claims, episodes, divergences, corpus items,
+ * and style samples that match private content markers are excluded.
+ * Divergence position summaries are stripped entirely (only topic and party
+ * count are retained). Contested claims are excluded.
  */
 
 export const PERSONA_FORMAT = 'openmimic.persona' as const;
 export const PERSONA_VERSION = 2 as const;
-export const PERSONA_NOTICE = '原始证言不随包分发;本包内容已按证言人授权过滤' as const;
+// eslint-disable-next-line max-len
+export const PERSONA_NOTICE = '原始证言不随包分发;已过滤:被嘱托保密内容、被本人否决的论断、分歧各方具体立场;未过滤:法庭裁定存活的论断文本、可引用证人的事例' as const;
 
 /**
  * The `freeText` written on every import receipt.
@@ -112,6 +119,12 @@ export const PersonaPackageSchema = z.object({
 export interface BuildPersonaPackageOptions {
   /** Injectable clock, for deterministic tests. */
   now?: () => Date;
+  /**
+   * Required for non-imported (real-person) subjects. Mirrors the character
+   * card export gate: the caller must explicitly acknowledge they have
+   * authorization to distribute this person's personality data.
+   */
+  acknowledgeRealPerson?: boolean;
 }
 
 /** Compute a health report when the subject has never been to court. */
@@ -149,6 +162,16 @@ export function isImportedSubject(store: Store, subjectId: string): boolean {
 /**
  * Build the export payload for one subject, or `undefined` if it does not
  * exist. The subject's own `selfReport` never enters the package.
+ *
+ * Privacy filtering (same as persona assembly):
+ * - Claims, episodes, corpus items, and style samples that match private
+ *   content markers (testimony a witness asked to keep secret) are excluded.
+ * - Divergence position summaries are stripped entirely; only topic and the
+ *   number of differing parties are retained.
+ * - Contested claims are excluded (the status filter covers this).
+ *
+ * Real-person gate: exporting a native (non-imported) subject requires
+ * `acknowledgeRealPerson: true`, matching the character card export gate.
  */
 export function buildPersonaPackage(
   subjectId: string,
@@ -158,11 +181,26 @@ export function buildPersonaPackage(
   const subject = store.getSubject(subjectId);
   if (!subject) return undefined;
 
+  // Real-person gate: non-imported subjects require explicit acknowledgment
+  if (!isImportedSubject(store, subjectId) && !options.acknowledgeRealPerson) {
+    // Check if there are any claims at all (skip gate for empty subjects)
+    if (store.listClaimsBySubject(subjectId).length > 0) {
+      throw new Error(
+        'This persona depicts a real person. Pass acknowledgeRealPerson=true ' +
+        'to confirm you have authorization to distribute this personality package.',
+      );
+    }
+  }
+
+  // Build the privacy filter (same as persona assembly)
+  const isPrivate = buildPrivacyFilter(store, subjectId);
+
   // "surviving + qualified": a qualified claim is a surviving claim carrying
-  // qualifiers, so the status filter covers both.
+  // qualifiers, so the status filter covers both. Contested claims are excluded.
   const claims = store
     .listClaimsBySubject(subjectId)
     .filter((claim) => claim.status === 'surviving')
+    .filter((claim) => !isPrivate(claim.text))
     .map((claim) => ({ ...claim }));
 
   const testimonies = store.listBySubject(subjectId);
@@ -188,13 +226,15 @@ export function buildPersonaPackage(
       : baseReport;
 
   // v2: styleSamples come from corpus (subject's own words)
-  const corpusItems = store.listCorpusItemsBySubject(subjectId);
+  // Apply privacy filter: exclude items that contain private content
+  const corpusItems = store.listCorpusItemsBySubject(subjectId)
+    .filter((ci) => !isPrivate(ci.text));
   const styleSamples: StyleSample[] = corpusItems.map((item) => ({
     relation: '本人',
     text: item.text,
   }));
 
-  // Quotable episodes only
+  // Quotable episodes only, privacy-filtered
   const quotableWitnessIds = new Set(
     store.listWitnessesBySubject(subjectId)
       .filter((w) => w.consentLevel === 'quotable')
@@ -202,9 +242,21 @@ export function buildPersonaPackage(
   );
   const episodes = store.listEpisodesBySubject(subjectId)
     .filter((ep) => quotableWitnessIds.has(ep.witnessId))
+    .filter((ep) => !isPrivate(ep.text))
     .map((ep) => ({ ...ep }));
-  const divergences = store.listDivergencesBySubject(subjectId)
-    .map((d) => ({ ...d }));
+
+  // Divergences: strip position summaries (only topic + party count travel)
+  // Also exclude divergences where any position summary contains private content
+  const rawDivergences = store.listDivergencesBySubject(subjectId);
+  const divergences = rawDivergences
+    .filter((d) => !d.positions.some((p) => isPrivate(p.summary)))
+    .map((d) => ({
+      ...d,
+      positions: d.positions.map((p) => ({
+        ...p,
+        summary: '[redacted]', // Strip specific stance summaries for privacy
+      })),
+    }));
 
   return {
     format: PERSONA_FORMAT,

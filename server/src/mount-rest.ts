@@ -528,7 +528,19 @@ export const mountRestPlugin: Plugin<MountRestConfig> = {
       const subjectId = context.params.id ?? '';
       const subject = store.getSubject(subjectId);
       if (!subject) throw new HttpError(404, 'subject_not_found', 'Subject not found');
-      const pkg = buildPersonaPackage(subjectId, store);
+      const ack = context.query.get('acknowledgeRealPerson') === 'true';
+      let pkg: ReturnType<typeof buildPersonaPackage>;
+      try {
+        pkg = buildPersonaPackage(subjectId, store, { acknowledgeRealPerson: ack });
+      } catch (err: unknown) {
+        if (err instanceof Error && err.message.includes('acknowledgeRealPerson')) {
+          throw new HttpError(403, 'real_person_gate',
+            'This persona depicts a real person. Pass acknowledgeRealPerson=true ' +
+            'to confirm you have authorization to distribute this personality package.',
+          );
+        }
+        throw err;
+      }
       if (!pkg) throw new HttpError(404, 'subject_not_found', 'Subject not found');
       const body = withholdSynthesisOnly(store, subjectId, pkg);
       return {

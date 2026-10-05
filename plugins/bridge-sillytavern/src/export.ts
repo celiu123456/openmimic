@@ -134,8 +134,11 @@ export function exportCharacterCard(
     );
   }
 
-  // Build persona package
-  const rawPkg = buildPersonaPackage(subjectId, store, { now });
+  // Build persona package (gate already enforced above, pass through)
+  const rawPkg = buildPersonaPackage(subjectId, store, {
+    now,
+    acknowledgeRealPerson: options.acknowledgeRealPerson ?? isImported,
+  });
   if (!rawPkg) {
     throw new Error(`Subject ${subjectId} not found`);
   }

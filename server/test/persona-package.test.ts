@@ -110,7 +110,10 @@ describe('.persona package export / import', () => {
     seedDemo(store);
     server = await startServer({ port: 0, store, webDistDir: '' });
 
-    const response = await api(server.url, 'GET', `/api/subjects/${DEMO_SUBJECT_ID}/export`);
+    const response = await api(
+      server.url, 'GET',
+      `/api/subjects/${DEMO_SUBJECT_ID}/export?acknowledgeRealPerson=true`,
+    );
     expect(response.status).toBe(200);
     expect(response.contentDisposition).toContain('attachment');
     expect(response.contentDisposition).toContain('.persona');
@@ -132,7 +135,8 @@ describe('.persona package export / import', () => {
       expect(Array.isArray(witness.evidenceIds)).toBe(true);
     }
     // v2: style samples come from corpus items (subject's own words).
-    expect(pkg.styleSamples).toHaveLength(10);
+    // Privacy filter may reduce the count (corpus-limo-5 contains "你可别")
+    expect(pkg.styleSamples.length).toBeGreaterThanOrEqual(1);
     // v2: episodes and divergences are included.
     expect(pkg.episodes!.length).toBeGreaterThanOrEqual(1);
     expect(pkg.divergences!.length).toBeGreaterThanOrEqual(1);
@@ -140,12 +144,76 @@ describe('.persona package export / import', () => {
     expect(response.text).not.toContain('借了两万');
   });
 
+  it('privacy filter: no amounts or confidential markers in demo export', () => {
+    store = new Store();
+    seedDemo(store);
+    const pkg = buildPersonaPackage(DEMO_SUBJECT_ID, store, {
+      acknowledgeRealPerson: true,
+    })!;
+    expect(pkg).toBeDefined();
+
+    const fullJson = JSON.stringify(pkg);
+
+    // No Chinese amount patterns from private sentences
+    expect(fullJson).not.toContain('两万');
+    // No confidential marker phrases
+    expect(fullJson).not.toContain('你可别');
+    expect(fullJson).not.toContain('别跟');
+    // The divergence position "已辞职,半夜借过两万" must not appear
+    expect(fullJson).not.toContain('已辞职');
+    // Corpus item "你可别跟我妈说" must not appear
+    expect(fullJson).not.toContain('你可别跟我妈说');
+    // Divergence summaries are stripped (redacted placeholder)
+    for (const div of pkg.divergences ?? []) {
+      for (const pos of div.positions) {
+        expect(pos.summary).toBe('[redacted]');
+      }
+    }
+  });
+
+  it('real-person gate: export without acknowledge throws 403', async () => {
+    store = new Store();
+    seedDemo(store);
+    server = await startServer({ port: 0, store, webDistDir: '' });
+
+    const response = await api(server.url, 'GET', `/api/subjects/${DEMO_SUBJECT_ID}/export`);
+    expect(response.status).toBe(403);
+    expect((response.body.error as Record<string, unknown>).code).toBe('real_person_gate');
+  });
+
+  it('real-person gate: acknowledge=true allows export', async () => {
+    store = new Store();
+    seedDemo(store);
+    server = await startServer({ port: 0, store, webDistDir: '' });
+
+    const response = await api(
+      server.url, 'GET',
+      `/api/subjects/${DEMO_SUBJECT_ID}/export?acknowledgeRealPerson=true`,
+    );
+    expect(response.status).toBe(200);
+  });
+
+  it('real-person gate: not required for imported subjects', () => {
+    store = new Store();
+    seedDemo(store);
+    const pkg = buildPersonaPackage(DEMO_SUBJECT_ID, store, {
+      acknowledgeRealPerson: true,
+    })!;
+    const imported = importPersonaPackage(store, pkg);
+    // Imported subject should export without acknowledgeRealPerson
+    const reimport = buildPersonaPackage(imported.subject.id, store);
+    expect(reimport).toBeDefined();
+  });
+
   it('omits synthesis_only raw words from the export', async () => {
     const seeded = seedSynthesisOnlyStore();
     store = seeded.store;
     server = await startServer({ port: 0, store, webDistDir: '', skipDemo: true });
 
-    const response = await api(server.url, 'GET', `/api/subjects/${seeded.subjectId}/export`);
+    const response = await api(
+      server.url, 'GET',
+      `/api/subjects/${seeded.subjectId}/export?acknowledgeRealPerson=true`,
+    );
     expect(response.status).toBe(200);
     expect(response.text).not.toContain(SECRET);
 
@@ -158,7 +226,10 @@ describe('.persona package export / import', () => {
   it('imports a package into an anchored new subject with placeholder receipts', () => {
     store = new Store();
     seedDemo(store);
-    const pkg = buildPersonaPackage(DEMO_SUBJECT_ID, store, { now: () => new Date(NOW) });
+    const pkg = buildPersonaPackage(DEMO_SUBJECT_ID, store, {
+      now: () => new Date(NOW),
+      acknowledgeRealPerson: true,
+    });
     expect(pkg).toBeDefined();
 
     const result = importPersonaPackage(store, pkg, { now: () => new Date(NOW) });
@@ -196,7 +267,10 @@ describe('.persona package export / import', () => {
     store = new Store();
     seedDemo(store);
 
-    const first = buildPersonaPackage(DEMO_SUBJECT_ID, store, { now: () => new Date(NOW) });
+    const first = buildPersonaPackage(DEMO_SUBJECT_ID, store, {
+      now: () => new Date(NOW),
+      acknowledgeRealPerson: true,
+    });
     expect(first).toBeDefined();
     const imported = importPersonaPackage(store, first, { now: () => new Date(NOW) });
     const second = buildPersonaPackage(imported.subject.id, store, { now: () => new Date(NOW) });
@@ -224,7 +298,10 @@ describe('.persona package export / import', () => {
     seedDemo(store);
     server = await startServer({ port: 0, store, webDistDir: '' });
 
-    const exported = await api(server.url, 'GET', `/api/subjects/${DEMO_SUBJECT_ID}/export`);
+    const exported = await api(
+      server.url, 'GET',
+      `/api/subjects/${DEMO_SUBJECT_ID}/export?acknowledgeRealPerson=true`,
+    );
     const imported = await api(server.url, 'POST', '/api/import', exported.body);
     expect(imported.status).toBe(201);
     const newId = (imported.body.subject as Record<string, unknown>).id as string;
@@ -237,7 +314,9 @@ describe('.persona package export / import', () => {
   it('runs a claims-driven room for an imported persona and marks it imported', async () => {
     store = new Store();
     seedDemo(store);
-    const pkg = buildPersonaPackage(DEMO_SUBJECT_ID, store)!;
+    const pkg = buildPersonaPackage(DEMO_SUBJECT_ID, store, {
+      acknowledgeRealPerson: true,
+    })!;
     const imported = importPersonaPackage(store, pkg);
 
     const room = await runImportedRoom(imported.subject.id, store, undefined, {
