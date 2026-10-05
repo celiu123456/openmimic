@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref } from 'vue';
 import { useRouter } from 'vue-router';
+import { qrToSvg } from '@openmimic/shared';
 import {
   ApiError,
   api,
@@ -55,6 +56,42 @@ const link = computed(() =>
 const shortLink = computed(() =>
   shortCode.value === '' ? '' : `${window.location.origin}/i/${shortCode.value}`,
 );
+/** Inline SVG for the invite link QR code — empty when no link exists. */
+const qrSvgHtml = computed(() => {
+  const url = shortLink.value || link.value;
+  if (url === '') return '';
+  return qrToSvg(url, {
+    moduleSize: 4,
+    quietZone: 4,
+    foreground: '#111',
+    background: '#fff',
+  });
+});
+
+/** Save the QR code as a PNG via an offscreen canvas. */
+function saveQrAsPng(): void {
+  const url = shortLink.value || link.value;
+  if (url === '') return;
+  const svg = qrToSvg(url, { moduleSize: 10, quietZone: 4, foreground: '#111', background: '#fff' });
+  const blob = new Blob([svg], { type: 'image/svg+xml;charset=utf-8' });
+  const svgUrl = URL.createObjectURL(blob);
+  const img = new Image();
+  img.onload = () => {
+    const canvas = document.createElement('canvas');
+    canvas.width = img.width;
+    canvas.height = img.height;
+    const ctx = canvas.getContext('2d');
+    if (!ctx) return;
+    ctx.drawImage(img, 0, 0);
+    URL.revokeObjectURL(svgUrl);
+    const dataUrl = canvas.toDataURL('image/png');
+    const a = document.createElement('a');
+    a.href = dataUrl;
+    a.download = `openmimic-invite-${shortCode.value || token.value.slice(0, 8)}.png`;
+    a.click();
+  };
+  img.src = svgUrl;
+}
 const canOpenRoom = computed(
   () => subjectId.value !== '' && testimonyCount.value >= ROOM_THRESHOLD,
 );
@@ -330,6 +367,12 @@ onBeforeUnmount(stopPolling);
         <div class="row" style="margin-top: 0.4rem">
           <button type="button" class="btn" @click="copyShort">{{ copiedShort ? '已复制' : '复制短链' }}</button>
         </div>
+      </div>
+      <div v-if="qrSvgHtml" class="qr-section">
+        <span class="label">扫码打开</span>
+        <!-- eslint-disable-next-line vue/no-v-html -->
+        <div class="qr-container" v-html="qrSvgHtml" />
+        <button type="button" class="btn qr-save-btn" @click="saveQrAsPng">保存二维码图片</button>
       </div>
       <p class="progress-line" style="margin-top: 1.6rem">已收到 {{ testimonyCount }} 份讲述</p>
       <p class="muted small">每 10 秒自动刷新一次。</p>

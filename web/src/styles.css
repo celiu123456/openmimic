@@ -547,3 +547,27 @@ html, body {
 .state-covered { background: rgba(134, 196, 173, 0.18); color: #86c4ad; }
 .state-cautious { background: rgba(217, 139, 122, 0.18); color: var(--danger); }
 .coverage-meta { color: var(--muted); font-size: 0.76rem; white-space: nowrap; }
+
+/* QR code section on the inviter page */
+.qr-section {
+  margin-top: 1.4rem;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+}
+.qr-container {
+  display: inline-block;
+  border-radius: var(--radius);
+  overflow: hidden;
+  /* keep the QR at a comfortable scan size on all screens */
+  max-width: min(100%, 220px);
+}
+.qr-container svg {
+  display: block;
+  width: 100%;
+  height: auto;
+}
+.qr-save-btn {
+  margin-top: 0.5rem;
+  font-size: 0.82rem;
+}
