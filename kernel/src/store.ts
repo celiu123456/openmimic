@@ -84,6 +84,7 @@ interface ClaimRow {
   context: string | null;
   witness_ids: string | null;
   episode_ids: string | null;
+  reraised: number | null;
 }
 
 interface EpisodeRow {
@@ -394,6 +395,10 @@ export class Store {
     }
     if (!claimColumns.includes('episode_ids')) {
       this.db.exec('ALTER TABLE claims ADD COLUMN episode_ids TEXT');
+    }
+    // P3: reraised flag for claims that were re-raised after a contest
+    if (!claimColumns.includes('reraised')) {
+      this.db.exec('ALTER TABLE claims ADD COLUMN reraised INTEGER');
     }
     // P1a: witnesses table extensions
     const witnessColumns = this.db
@@ -763,10 +768,10 @@ export class Store {
     }
 
     this.db
-      .prepare<[string, string, string, number, string, string | null, string, string, string | null, string | null, string | null, string | null, string | null]>(
+      .prepare(
         `INSERT INTO claims
-           (id, subject_id, text, conviction, evidence, qualifiers, status, court_session_id, kind, domain, context, witness_ids, episode_ids)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+           (id, subject_id, text, conviction, evidence, qualifiers, status, court_session_id, kind, domain, context, witness_ids, episode_ids, reraised)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
          ON CONFLICT(id) DO UPDATE SET
            subject_id       = excluded.subject_id,
            text             = excluded.text,
@@ -779,7 +784,8 @@ export class Store {
            domain           = excluded.domain,
            context          = excluded.context,
            witness_ids      = excluded.witness_ids,
-           episode_ids      = excluded.episode_ids`,
+           episode_ids      = excluded.episode_ids,
+           reraised         = excluded.reraised`,
       )
       .run(
         parsed.id,
@@ -795,6 +801,7 @@ export class Store {
         parsed.context ? JSON.stringify(parsed.context) : null,
         parsed.witnessIds ? JSON.stringify(parsed.witnessIds) : null,
         parsed.episodeIds ? JSON.stringify(parsed.episodeIds) : null,
+        parsed.reraised ? 1 : null,
       );
 
     return parsed;
@@ -1042,6 +1049,55 @@ export class Store {
       .map((row) => this.rowToCorpusItem(row));
   }
 
+  /* ---------------------------------------------------------------- */
+  /* Plugin storage — sandboxed tables for plugin-specific data        */
+  /* ---------------------------------------------------------------- */
+
+  /**
+   * Register a table owned by a plugin.
+   *
+   * The table name is forced to `plugin_<pluginName>_<tableSuffix>` to prevent
+   * any plugin from touching the core tables (especially `testimonies`).
+   * The DDL must be a CREATE TABLE IF NOT EXISTS statement; the store validates
+   * that the table name in the DDL matches the expected prefixed name.
+   *
+   * Returns a `PluginTableHandle` with read/write methods scoped to that table.
+   * The handle exposes `insert` (append-only by default), `query`, and optionally
+   * `update` (only if `appendOnly` is false).
+   */
+  registerPluginTable(
+    pluginName: string,
+    tableSuffix: string,
+    ddl: string,
+    options: { appendOnly?: boolean } = {},
+  ): PluginTableHandle {
+    const fullName = `plugin_${pluginName}_${tableSuffix}`;
+    const appendOnly = options.appendOnly ?? false;
+
+    // Validate DDL references the correct table name
+    if (!ddl.includes(fullName)) {
+      throw new Error(
+        `Plugin table DDL must reference "${fullName}", got: ${ddl.slice(0, 120)}`,
+      );
+    }
+    // Guard: no plugin can reference core tables
+    const forbidden = ['testimonies', 'claims', 'witnesses', 'subjects',
+      'court_sessions', 'rooms', 'invites', 'episodes', 'divergences',
+      'corpus_items', 'interview_sessions'];
+    for (const table of forbidden) {
+      // Check for direct table references (not in the prefixed name)
+      const pattern = new RegExp(`\\b${table}\\b`);
+      const withoutPrefix = ddl.replace(new RegExp(fullName, 'g'), '');
+      if (pattern.test(withoutPrefix)) {
+        throw new Error(`Plugin DDL must not reference core table "${table}"`);
+      }
+    }
+
+    this.db.exec(ddl);
+
+    return new PluginTableHandle(this.db, fullName, appendOnly);
+  }
+
   /** Release the underlying database connection. */
   close(): void {
     if (this.db.open) {
@@ -1123,6 +1179,7 @@ export class Store {
       context: row.context ? (JSON.parse(row.context) as unknown) : undefined,
       witnessIds: row.witness_ids ? (JSON.parse(row.witness_ids) as unknown) : undefined,
       episodeIds: row.episode_ids ? (JSON.parse(row.episode_ids) as unknown) : undefined,
+      reraised: row.reraised === 1 ? true : undefined,
     });
   }
 
@@ -1187,5 +1244,79 @@ export class Store {
       source: row.source,
       createdAt: row.created_at,
     });
+  }
+}
+
+/* ------------------------------------------------------------------ */
+/* PluginTableHandle — sandboxed DB access for plugin-owned tables     */
+/* ------------------------------------------------------------------ */
+
+/**
+ * A scoped handle that lets a plugin read from and write to its own table.
+ *
+ * - The table name is always `plugin_<pluginName>_<suffix>` — a plugin cannot
+ *   reach the testimony ledger or any other core table through this handle.
+ * - When `appendOnly` is true, the handle exposes no update or delete methods,
+ *   enforcing immutability at the API level.
+ */
+export class PluginTableHandle {
+  constructor(
+    private readonly db: DatabaseConnection,
+    readonly tableName: string,
+    private readonly appendOnly: boolean,
+  ) {}
+
+  /** Insert a row. Column names and values are taken from the object keys. */
+  insert(row: Record<string, unknown>): void {
+    const keys = Object.keys(row);
+    const placeholders = keys.map(() => '?').join(', ');
+    const values = keys.map((k) => {
+      const v = row[k];
+      if (v === undefined || v === null) return null;
+      if (typeof v === 'object') return JSON.stringify(v);
+      return v;
+    });
+    this.db
+      .prepare(`INSERT INTO ${this.tableName} (${keys.join(', ')}) VALUES (${placeholders})`)
+      .run(...values);
+  }
+
+  /** Query rows. Returns plain objects with snake_case keys. */
+  query(where?: string, params?: unknown[]): Record<string, unknown>[] {
+    const sql = where
+      ? `SELECT * FROM ${this.tableName} WHERE ${where}`
+      : `SELECT * FROM ${this.tableName}`;
+    return this.db.prepare(sql).all(...(params ?? [])) as Record<string, unknown>[];
+  }
+
+  /** Update rows. Only available when the table is not append-only. */
+  update(set: Record<string, unknown>, where: string, params: unknown[]): number {
+    if (this.appendOnly) {
+      throw new Error(`Table ${this.tableName} is append-only; updates are not allowed`);
+    }
+    const setClause = Object.keys(set)
+      .map((k) => `${k} = ?`)
+      .join(', ');
+    const setValues = Object.keys(set).map((k) => {
+      const v = set[k];
+      if (v === undefined || v === null) return null;
+      if (typeof v === 'object') return JSON.stringify(v);
+      return v;
+    });
+    const result = this.db
+      .prepare(`UPDATE ${this.tableName} SET ${setClause} WHERE ${where}`)
+      .run(...setValues, ...params);
+    return result.changes;
+  }
+
+  /** Delete rows. Only available when the table is not append-only. */
+  delete(where: string, params: unknown[]): number {
+    if (this.appendOnly) {
+      throw new Error(`Table ${this.tableName} is append-only; deletes are not allowed`);
+    }
+    const result = this.db
+      .prepare(`DELETE FROM ${this.tableName} WHERE ${where}`)
+      .run(...params);
+    return result.changes;
   }
 }

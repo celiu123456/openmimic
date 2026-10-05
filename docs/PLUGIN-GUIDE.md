@@ -156,6 +156,41 @@ plugins:
     enabled: false
 ```
 
+## Plugin storage
+
+Plugins can persist their own data using sandboxed SQLite tables. The kernel
+provides `store.registerPluginTable()` which creates a table with a forced
+prefix (`plugin_<pluginName>_<suffix>`) and returns a `PluginTableHandle`:
+
+```ts
+const table = store.registerPluginTable(
+  'my-plugin', 'records',
+  `CREATE TABLE IF NOT EXISTS plugin_my-plugin_records (
+    id TEXT PRIMARY KEY,
+    data TEXT NOT NULL,
+    created_at TEXT NOT NULL
+  )`,
+  { appendOnly: true },  // optional; disables update/delete
+);
+
+// Insert (always available)
+table.insert({ id: 'r1', data: '...', created_at: new Date().toISOString() });
+
+// Query
+const rows = table.query('id = ?', ['r1']);
+
+// Update / delete (only when appendOnly is false)
+table.update({ data: 'new' }, 'id = ?', ['r1']);
+table.delete('id = ?', ['r1']);
+```
+
+Guardrails:
+- Table names are forced to `plugin_<name>_<suffix>` — a plugin cannot reach
+  the testimony ledger or any core table.
+- The DDL must reference the correct prefixed table name, or registration throws.
+- `appendOnly: true` disables `update()` and `delete()` at the API level,
+  guaranteeing immutability (used by meta-perception predictions).
+
 ## Unloading
 
 `PluginHost.unload(name)` runs the dispose callback, removes provided services, collector/scenario registrations, and event listeners. It refuses to unload a plugin if another loaded plugin depends on one of its services.

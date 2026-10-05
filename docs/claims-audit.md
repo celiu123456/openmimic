@@ -1,6 +1,6 @@
 # README 声明逐条审计
 
-> 生成时间:2026-10-05 · 基线:main(226 测试)
+> 生成时间:2026-10-05 · 基线:main(350 测试)
 
 状态说明:
 - **已实现**:有代码路径,有测试覆盖
@@ -64,7 +64,7 @@
 | CourtEngine | 已实现 | `engines/court/src/court.ts` · `engines/court/src/conflict.ts` · `engines/court/src/plugin.ts` · `engines/court/test/court.test.ts` | v2 管线:filing(提取论断+事例,per-item lenient parsing) → pairing(LLMClaimPairFinder/EmbeddingClaimPairFinder/KeywordClaimPairFinder 三级回落) → relation judgment(要求同一行为维度) → confrontation → conviction computation;divergence map 保留视角差异;仍为多步 LLM 调用而非独立智能体进程 |
 | GraphEngine | 计划 | `engines/graph/` 只有 .gitkeep | 无代码;README 声称"人格是图的实时派生物……改一条证言自动重算"无实现 |
 | RoomEngine | 已实现 | `engines/room/src/room.ts` · `engines/room/src/plugin.ts` · `engines/room/test/room.test.ts` | 背后/当面双模式,round-robin 调度,consent overlap 防护,crisis/diagnosis 词表 |
-| GateEngine(独立引擎) | 计划 | `engines/gate/` 只有 .gitkeep | 授权逻辑在 `kernel/src/gate.ts`,但未封装为独立引擎插件;否决流 / contested 流程 / 论断权限墙均无实现 |
+| GateEngine(独立引擎) | 已实现 | `engines/gate/src/gate.ts` · `engines/gate/src/plugin.ts` · `engines/gate/test/gate.test.ts` | 论断否决(contest/uncontest)、诊断词/危机词权限墙(filterSessionClaims)、re-raise 机制(canReraise + checkReraiseAfterCourt)、reraised 结构化字段。contest 记录持久化于插件表(append-only)。前端 CourtReportView 提供否决按钮 |
 
 ## CourtEngine 细项
 
@@ -77,9 +77,9 @@
 | 冲突检索(用于找质询材料) | 已实现 | `engines/court/src/conflict.ts` | v2: LLMClaimPairFinder(一次 LLM 调用找语义相关对,无 embedding 时的默认)、EmbeddingClaimPairFinder(余弦相似度,threshold 0.55)和 KeywordClaimPairFinder(关键词重叠,minimumOverlap 2)三级实现;跳过同证人和共享证据的论断对 |
 | 分歧图(divergence map) | 已实现 | `engines/court/src/court.ts` · `shared/src/schemas.ts`(DivergenceSchema) · `server/src/server.ts`(GET /api/subjects/:id/divergences) · `web/src/views/CourtReportView.vue` | 视角差异生成 divergence 记录(type=perspective/factual,resolution=kept_both/contested),前端 /court/:id 页面展示(红=事实冲突,蓝=视角差异) |
 | GraphEngine 实时重算 | 计划 | — | 无代码 |
-| contested 否决流 | 部分 | `engines/court/src/court.ts`(confrontation) · `shared/src/schemas.ts` | v2: 事实冲突经 confrontation 对质后,unresolved 的论断自动标 contested(conviction=0);本人手动否决流程仍无代码 |
-| 论断权限墙(心理健康主题只记事实不生成准诊断) | 部分 | `engines/room/src/wordlist.ts` · `engines/room/src/room.ts` | 危机词拒绝开房间;诊断词触发重写/降级;但这是 RoomEngine 的行为,不是独立的 GateEngine 权限墙 |
-| 集体沉默检测 | 部分 | `shared/src/schemas.ts` · `web/src/answers.ts` | avoidedQids 在证言上记录跳过的问题 id;前端采集并传入;但无消费端 |
+| contested 否决流 | 已实现 | `engines/gate/src/gate.ts`(contestClaim/uncontestClaim) · `engines/gate/src/plugin.ts`(路由) · `web/src/views/CourtReportView.vue` | 本人在前端点击"我不同意"→POST /api/claims/:id/contest→claim.status='contested'(退出人格);可撤回;re-raise:contested 论断在新证据(>=2 新证人)后自动恢复(reraised=true) |
+| 论断权限墙(心理健康主题只记事实不生成准诊断) | 已实现 | `engines/gate/src/gate.ts`(filterSessionClaims/validateClaimText) · `engines/room/src/wordlist.ts` | GateEngine 独立权限墙:论断文本含诊断词/危机词(>=20 个)→自动 retired;RoomEngine 危机词拒绝开房间;诊断词触发重写/降级 |
+| 集体沉默检测 | 已实现 | `plugins/silence-signal/src/index.ts` · `shared/src/schemas.ts`(SilenceSignalSchema) | avoidedQids >= half 且 >= 3 → SilenceSignal 存入插件表;人格组装加集体沉默纪律行;前端展示"无人谈及的话题"段落 |
 
 ## .persona 人格包
 
@@ -108,7 +108,7 @@
 | 分歧保留不裁决谁对 | 已实现 | `engines/court/src/court.ts`(relation judgment) · `shared/src/schemas.ts`(DivergenceSchema) | v2: perspective_difference 生成 divergence 记录保留双方观点(resolution=kept_both);factual_conflict 经对质后 qualified 或 contested;引擎不替用户裁决事实 |
 | AI 生成内容与原始证言物理隔离 | 已实现 | `kernel/src/store.ts:184-195`(append-only triggers) · `shared/src/schemas.ts:104-105`(correctionOf 链) | 证言表有 DELETE/UPDATE 触发器;room transcript 是独立表;AI 产物不回灌证言 |
 | 复刻在世他人用于私人预演;公开分发需本人授权 | 部分 | — | 无技术措施强制"公开分发需本人授权"——这是文字声明,不是代码强制 |
-| 本人可否决关于自己的论断→降级 contested 态 | 部分 | `shared/src/schemas.ts`(ClaimStatusSchema) · `engines/court/src/court.ts`(confrontation) | v2: 事实冲突经 confrontation 对质后 unresolved 的论断自动标 contested(conviction=0);本人手动否决流程尚无代码 |
+| 本人可否决关于自己的论断→降级 contested 态 | 已实现 | `engines/gate/src/gate.ts`(contestClaim) · `engines/gate/src/plugin.ts`(POST /api/claims/:id/contest) · `web/src/views/CourtReportView.vue` | GateEngine: contest→contested 态(退出人格);uncontest 撤回;re-raise 在新证据充足时自动恢复(reraised=true);前端有"我不同意"按钮+确认对话框+撤回 |
 | 危机词命中即切危机模式 | 已实现 | `engines/room/src/wordlist.ts:18-43` · `engines/room/src/room.ts:365-370` | 话题种子含危机词则拒绝开房间 |
 
 ## 借鉴与致谢
@@ -119,8 +119,8 @@
 | contested 状态命名(借鉴衔枝) | 已实现 | `shared/src/schemas.ts`(ClaimStatusSchema) · `engines/court/src/court.ts` | v2: 事实冲突对质后 unresolved→contested(conviction=0) |
 | 反证搜索(借鉴衔枝) | 已实现 | `engines/court/src/conflict.ts` | v2: EmbeddingClaimPairFinder + KeywordClaimPairFinder 双实现 |
 | 盲推导审计(借鉴衔枝) | 计划 | — | 无代码 |
-| contested 否决流(借鉴衔枝) | 计划 | — | 枚举值有,流程无 |
-| 论断权限墙(借鉴衔枝) | 计划 | — | 危机词在 RoomEngine 中,但非独立权限墙 |
+| contested 否决流(借鉴衔枝) | 已实现 | `engines/gate/src/gate.ts` · `engines/gate/src/plugin.ts` | contest/uncontest 完整流程 + re-raise 机制 |
+| 论断权限墙(借鉴衔枝) | 已实现 | `engines/gate/src/gate.ts`(validateClaimText/filterSessionClaims) | 独立 GateEngine:诊断词/危机词(>=20 个)命中→论断自动 retired |
 | 危机协议三原则(借鉴衔枝) | 部分 | `engines/room/src/wordlist.ts` · `engines/room/src/room.ts:365-370` | 危机词拒绝开房;诊断词重写/降级;但"三原则"整体未完整体现 |
 | 过程评测三指标(证据覆盖/矛盾响应/记忆修复)(借鉴衔枝) | 部分 | `shared/src/schemas.ts:162-172`(CourtReport.evidenceCoverage 等) | evidenceCoverage 在 CourtReport 中;challengeCount 可视为矛盾响应代理指标;但"记忆修复"无对应 |
 | DEPLOY-FOR-AI 做法(借鉴衔枝) | 计划 | — | 仓库中不存在 docs/DEPLOY-FOR-AI.md |
@@ -146,10 +146,55 @@
 
 ---
 
+## BUG: 人格装配 episodeCount 恒为 0
+
+> 发现:2026-10-05 · 修复:同日
+
+### 现象
+
+`assemblePersonaContext` 的 `meta.episodeCount` 在真实场景下恒为 0,即使法庭
+提取了 91/65 条事例(见 `docs/p1a-real-run-2.md` 和 `docs/p1a-real-run-3.md`)。
+人格 prompt 中没有"别人讲过的事"段落,角色失去所有第一手叙事材料。
+
+### 根因
+
+`kernel/src/persona.ts` 的裁剪循环 Phase 顺序为:
+
+1. Phase 1: drop episodes (先砍事例)
+2. Phase 2: drop low-conviction claims
+3. Phase 3: drop corpus
+4. Phase 4: clip self-report
+
+当法庭产出的论断数量较多(林默有 69 条 surviving claims),claims + identity +
+divergences 段落已占满 6000 字符预算,episodes 是第一个被砍的段落,因此在所有
+有意义的真实场景中 `includeEpisodes` 都被设为 false,导致 `episodeCount: 0`。
+
+这是单纯的 Phase 排列错误——事例应当是最后被砍的内容(它们是最有价值的第一手
+叙事材料),而低置信论断、语料样本、自述应先被裁剪。
+
+### 修复
+
+将裁剪顺序改为:
+
+1. Phase 1: drop low-conviction claims (从最低置信开始)
+2. Phase 2: drop corpus
+3. Phase 3: clip self-report
+4. Phase 4: drop episodes (最后手段)
+
+身份声明行(identity)始终保留,不参与裁剪(原有不变量,已有测试保护)。
+
+新增 4 条测试:
+- episodes 正常进入 prompt 且 episodeCount 计数准确
+- 裁剪顺序验证:预算不足时 claims 先被裁、episodes 存活
+- synthesis_only 证人的事例原文不进入 prompt
+- meta.episodeCount 与 prompt 中实际出现的事例数一致
+
+---
+
 ## 汇总
 
 | 状态 | 条数 |
 |---|---|
-| 已实现 | 37 |
-| 部分 | 8 |
-| 计划 | 12 |
+| 已实现 | 42 |
+| 部分 | 4 |
+| 计划 | 10 |

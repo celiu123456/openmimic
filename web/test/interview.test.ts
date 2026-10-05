@@ -20,7 +20,7 @@ import {
 const questionnaire: Questionnaire = {
   id: 'friend-v1',
   title: '朋友版问卷 v1',
-  frontPrompt: '这话你会当他面说吗？会怎么说？',
+  frontPrompt: '如果他就坐在你对面,这话你会怎么对他说？',
   questions: [
     { qid: 'q1', prompt: '第一个问题', followupHint: '提示一' },
     { qid: 'q2', prompt: '第二个问题', followupHint: '提示二' },

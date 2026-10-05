@@ -218,17 +218,14 @@ export function filterSessionClaims(
 
 /**
  * Check re-raise conditions for contested claims after a new court session.
- * Claims that can be re-raised get status 'surviving' with reraised marker.
- *
- * NOTE: We cannot add 'reraised' to the Claim schema without modifying shared/.
- * Instead, we track reraised claims in gateState and communicate via qualifiers.
+ * Claims that can be re-raised get status 'surviving' with `reraised: true`.
  */
 export function checkReraiseAfterCourt(
   session: CourtSession,
   store: Store,
   gateState: GateState,
 ): string[] {
-  const reraised: string[] = [];
+  const reraisedIds: string[] = [];
   const allClaims = store.listClaimsBySubject(session.subjectId);
   const contestedClaims = allClaims.filter((c) => c.status === 'contested');
   const currentTestimonies = store.listBySubject(session.subjectId);
@@ -238,12 +235,10 @@ export function checkReraiseAfterCourt(
     if (!records || records.length === 0) continue;
 
     if (canReraise(claim, records, currentTestimonies, store)) {
-      // Re-raise: set back to surviving with a qualifier marking it as reraised
-      const qualifiers = [...(claim.qualifiers ?? []), '重新提出:又有人提到类似的事'];
-      store.putClaim({ ...claim, status: 'surviving', qualifiers });
-      reraised.push(claim.id);
+      store.putClaim({ ...claim, status: 'surviving', reraised: true });
+      reraisedIds.push(claim.id);
     }
   }
 
-  return reraised;
+  return reraisedIds;
 }

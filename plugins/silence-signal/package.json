@@ -1,0 +1,14 @@
+{
+  "name": "@openmimic/silence-signal",
+  "version": "0.0.1",
+  "private": true,
+  "description": "Collective silence detection: questions skipped by >=half and >=3 witnesses.",
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "dependencies": {
+    "@openmimic/kernel": "*",
+    "@openmimic/shared": "*"
+  }
+}

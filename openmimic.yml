@@ -19,3 +19,4 @@ plugins:
   - use: "./plugins/scenario-review"
   - use: "./plugins/meta-perception"
   - use: "./engines/gate"
+  - use: "./plugins/silence-signal"

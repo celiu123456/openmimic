@@ -169,6 +169,8 @@ export const ClaimSchema = z.object({
   witnessIds: z.array(z.string().min(1)).optional(),
   /** Episode ids that support this claim. */
   episodeIds: z.array(z.string().min(1)).optional(),
+  /** True when this claim was re-raised after a contest, not its first time through court. */
+  reraised: z.boolean().optional(),
 });
 export type Claim = z.infer<typeof ClaimSchema>;
 
@@ -232,6 +234,27 @@ export const CorpusItemSchema = z.object({
   createdAt: z.string().min(1),
 });
 export type CorpusItem = z.infer<typeof CorpusItemSchema>;
+
+/**
+ * A silence signal: a question that was skipped by a significant fraction
+ * of witnesses, indicating a collectively avoided topic.
+ *
+ * Not a claim — silence is not an assertion. Stored in a separate table
+ * and excluded from the persona assertion zone.
+ */
+export const SilenceSignalSchema = z.object({
+  id: z.string().min(1),
+  subjectId: z.string().min(1),
+  qid: z.string().min(1),
+  /** Witness ids who skipped this question. */
+  skipperIds: z.array(z.string().min(1)).min(3),
+  /** Total witnesses who had a chance to answer. */
+  totalWitnesses: z.number().int().min(1),
+  /** Fraction of witnesses who skipped (>= 0.5). */
+  skipRatio: z.number().min(0).max(1),
+  createdAt: z.string().min(1),
+});
+export type SilenceSignal = z.infer<typeof SilenceSignalSchema>;
 
 /** Event kinds recorded on a court transcript. */
 export const CourtEventTypeSchema = z.enum([

@@ -1,4 +1,8 @@
 import { describe, expect, it, afterEach } from 'vitest';
+import { existsSync, unlinkSync } from 'node:fs';
+import { join } from 'node:path';
+import { tmpdir } from 'node:os';
+import { randomUUID } from 'node:crypto';
 import { EventBus, PluginHost, Store } from '@openmimic/kernel';
 import { Router, type RouteContext } from '@openmimic/server';
 import {
@@ -236,6 +240,101 @@ describe('meta-perception plugin', () => {
     expect(w2Item.cue).toBe('该证人未授权展示原文');
   });
 
+  it('anonymous witnesses excluded from byWitness but contribute to total', async () => {
+    store = new Store();
+    seedTestData(store);
+
+    // Add an anonymous witness w3
+    store.putWitness({
+      id: 'w3', subjectId: 's1', relation: '网友',
+      consentLevel: 'quotable',
+      anonymousInRoom: true,
+    });
+    store.addTestimony({
+      id: 't3', witnessId: 'w3', subjectId: 's1',
+      answers: [
+        { qid: 'q1', behindText: '他心思很细腻' },
+      ],
+    });
+
+    const { host, router } = await setupHost(store);
+    const state = host.getService<MetaPerceptionState>('meta-perception');
+
+    // Submit predictions
+    const predMatch = router.match('POST', '/api/subjects/s1/meta/predictions');
+    await predMatch!.handler(makeCtx({
+      predictions: [
+        { witnessId: 'w1', qid: 'meta_overall_impression', predictedText: '觉得不错' },
+        { witnessId: 'w3', qid: 'meta_overall_impression', predictedText: '觉得不错' },
+      ],
+    }, { id: 's1' }));
+
+    // Manually set result items so we don't need LLM
+    state.results.set('s1', {
+      subjectId: 's1',
+      totalScore: 0.5,
+      items: [
+        { witnessId: 'w1', qid: 'q1', match: 'hit', cue: '匹配' },
+        { witnessId: 'w3', qid: 'q1', match: 'hit', cue: '匹配' },
+      ],
+      byWitness: [
+        { witnessId: 'w1', relation: '发小', score: 1, itemCount: 1 },
+        { witnessId: 'w3', relation: '网友', score: 1, itemCount: 1 },
+      ],
+      scoredAt: new Date().toISOString(),
+    });
+
+    const resMatch = router.match('GET', '/api/subjects/s1/meta/result');
+    const result = await resMatch!.handler(makeCtx(undefined, { id: 's1' }));
+    const body = (result as { body: Record<string, unknown> }).body;
+
+    // byWitness should NOT include w3 (anonymous)
+    const byWitness = body.byWitness as Array<{ witnessId: string }>;
+    expect(byWitness.length).toBe(1);
+    expect(byWitness[0]!.witnessId).toBe('w1');
+
+    // items should still include w3's data (contributes to total)
+    const items = body.items as Array<{ witnessId: string }>;
+    expect(items.length).toBe(2);
+    expect(items.some((i) => i.witnessId === 'w3')).toBe(true);
+  });
+
+  it('non-anonymous witnesses appear in byWitness breakdown', async () => {
+    store = new Store();
+    seedTestData(store);
+
+    const { host, router } = await setupHost(store);
+    const state = host.getService<MetaPerceptionState>('meta-perception');
+
+    // Submit predictions (just w1 and w2, neither anonymous)
+    const predMatch = router.match('POST', '/api/subjects/s1/meta/predictions');
+    await predMatch!.handler(makeCtx({
+      predictions: [
+        { witnessId: 'w1', qid: 'meta_overall_impression', predictedText: '觉得不错' },
+      ],
+    }, { id: 's1' }));
+
+    state.results.set('s1', {
+      subjectId: 's1',
+      totalScore: 1,
+      items: [
+        { witnessId: 'w1', qid: 'q1', match: 'hit', cue: '匹配' },
+      ],
+      byWitness: [
+        { witnessId: 'w1', relation: '发小', score: 1, itemCount: 1 },
+      ],
+      scoredAt: new Date().toISOString(),
+    });
+
+    const resMatch = router.match('GET', '/api/subjects/s1/meta/result');
+    const result = await resMatch!.handler(makeCtx(undefined, { id: 's1' }));
+    const body = (result as { body: Record<string, unknown> }).body;
+
+    const byWitness = body.byWitness as Array<{ witnessId: string }>;
+    expect(byWitness.length).toBe(1);
+    expect(byWitness[0]!.witnessId).toBe('w1');
+  });
+
   it('plugin disabled -> routes not registered -> 404', async () => {
     store = new Store();
     const events = new EventBus();
@@ -295,5 +394,127 @@ describe('computeByWitness', () => {
     expect(result[0]!.score).toBe(1);
     expect(result[1]!.witnessId).toBe('w1');
     expect(result[1]!.score).toBe(0);
+  });
+});
+
+/* ---------------------------------------------------------------- */
+/* Persistence: predictions survive a store restart                  */
+/* ---------------------------------------------------------------- */
+
+describe('plugin persistence', () => {
+  const dbFiles: string[] = [];
+
+  afterEach(() => {
+    for (const f of dbFiles) {
+      try { unlinkSync(f); } catch { /* ignore */ }
+    }
+    dbFiles.length = 0;
+  });
+
+  function makeDbPath(): string {
+    const p = join(tmpdir(), `openmimic-meta-test-${randomUUID()}.db`);
+    dbFiles.push(p);
+    return p;
+  }
+
+  function setupWithFile(dbPath: string): { store: Store; host: PluginHost; router: Router } {
+    const store = new Store({ path: dbPath });
+    const bus = new EventBus();
+    const host = new PluginHost(bus);
+    const router = new Router();
+    host.providePreset('store', store);
+    host.providePreset('router', router);
+    return { store, host, router };
+  }
+
+  it('predictions survive store close and reopen', () => {
+    const dbPath = makeDbPath();
+
+    // Session 1: create subject, witness, testimony, then submit predictions
+    {
+      const { store, host, router } = setupWithFile(dbPath);
+      store.putSubject({ id: 's1', displayName: '测试' });
+      store.putWitness({ id: 'w1', subjectId: 's1', relation: '朋友', consentLevel: 'quotable' });
+      store.addTestimony({
+        id: 't1', subjectId: 's1', witnessId: 'w1',
+        answers: [{ qid: 'meta_overall_impression', behindText: '非常聪明' }],
+        createdAt: new Date().toISOString(),
+      });
+
+      host.load(metaPerceptionPlugin);
+
+      const match = router.match('POST', '/api/subjects/s1/meta/predictions');
+      expect(match).toBeTruthy();
+      const result = match!.handler({
+        params: { id: 's1' },
+        query: new URLSearchParams(),
+        body: {
+          predictions: [
+            { witnessId: 'w1', qid: 'meta_overall_impression', predictedText: '应该觉得聪明' },
+          ],
+        },
+      } as RouteContext);
+      expect((result as { status: number }).status).toBe(201);
+
+      store.close();
+    }
+
+    // Session 2: reopen — predictions must still be there, and submit must be 409
+    {
+      const { store, host, router } = setupWithFile(dbPath);
+      host.load(metaPerceptionPlugin);
+
+      const state = host.getService<MetaPerceptionState>('meta-perception');
+      expect(state.predictions.has('s1')).toBe(true);
+      expect(state.predictions.get('s1')!.items.length).toBe(1);
+      expect(state.predictions.get('s1')!.items[0]!.predictedText).toBe('应该觉得聪明');
+
+      // Submitting again should be 409
+      const match = router.match('POST', '/api/subjects/s1/meta/predictions');
+      const result = match!.handler({
+        params: { id: 's1' },
+        query: new URLSearchParams(),
+        body: {
+          predictions: [
+            { witnessId: 'w1', qid: 'meta_overall_impression', predictedText: '新预测' },
+          ],
+        },
+      } as RouteContext);
+      expect((result as { status: number }).status).toBe(409);
+
+      store.close();
+    }
+  });
+
+  it('predictions are append-only — PluginTableHandle rejects update', () => {
+    const dbPath = makeDbPath();
+    const store = new Store({ path: dbPath });
+
+    const table = store.registerPluginTable(
+      'meta_perception', 'predictions',
+      `CREATE TABLE IF NOT EXISTS plugin_meta_perception_predictions (
+        id TEXT PRIMARY KEY,
+        subject_id TEXT NOT NULL,
+        witness_id TEXT NOT NULL,
+        qid TEXT NOT NULL,
+        predicted_text TEXT NOT NULL,
+        locked_at TEXT NOT NULL
+      )`,
+      { appendOnly: true },
+    );
+
+    table.insert({
+      id: 'p1', subject_id: 's1', witness_id: 'w1',
+      qid: 'q1', predicted_text: '预测', locked_at: new Date().toISOString(),
+    });
+
+    expect(() => table.update({ predicted_text: '改掉' }, 'id = ?', ['p1'])).toThrow(/append-only/);
+    expect(() => table.delete('id = ?', ['p1'])).toThrow(/append-only/);
+
+    const rows = table.query('id = ?', ['p1']);
+    expect(rows.length).toBe(1);
+    expect(rows[0]!.predicted_text).toBe('预测');
+
+    store.close();
   });
 });

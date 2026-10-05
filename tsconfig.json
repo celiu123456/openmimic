@@ -14,7 +14,10 @@
       "@openmimic/scenario-review": ["./plugins/scenario-review/src/index.ts"],
       "@openmimic/example-bridge": ["./plugins/example-bridge/src/index.ts"],
       "@openmimic/core": ["./packages/core/src/index.ts"],
-      "@openmimic/eval": ["./eval/src/index.ts"]
+      "@openmimic/eval": ["./eval/src/index.ts"],
+      "@openmimic/engine-gate": ["./engines/gate/src/index.ts"],
+      "@openmimic/meta-perception": ["./plugins/meta-perception/src/index.ts"],
+      "@openmimic/silence-signal": ["./plugins/silence-signal/src/index.ts"]
     }
   },
   "include": [
@@ -22,12 +25,8 @@
     "kernel/src/**/*.ts",
     "kernel/test/**/*.ts",
     "kernel/types/**/*.d.ts",
-    "engines/court/src/**/*.ts",
-    "engines/court/test/**/*.ts",
-    "engines/room/src/**/*.ts",
-    "engines/room/test/**/*.ts",
-    "engines/witness/src/**/*.ts",
-    "engines/witness/test/**/*.ts",
+    "engines/*/src/**/*.ts",
+    "engines/*/test/**/*.ts",
     "fixtures/**/*.ts",
     "server/src/**/*.ts",
     "server/test/**/*.ts",

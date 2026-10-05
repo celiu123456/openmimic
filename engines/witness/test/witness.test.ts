@@ -15,7 +15,7 @@ describe('friend questionnaire v1', () => {
   it('ships ten questions, each demanding one concrete incident', () => {
     expect(FRIEND_V1.id).toBe('friend-v1');
     expect(FRIEND_V1.questions).toHaveLength(10);
-    expect(FRIEND_V1.frontPrompt).toContain('当他面说');
+    expect(FRIEND_V1.frontPrompt).toContain('坐在你对面');
 
     const qids = FRIEND_V1.questions.map((question) => question.qid);
     expect(new Set(qids).size).toBe(10);

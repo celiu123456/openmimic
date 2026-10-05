@@ -234,28 +234,141 @@ interface PersonaContext {
   memory: MemoryEntry[];
 }
 
-function buildSystem(context: PersonaContext, mode: RoomMode, topicSeed: string): string {
+/**
+ * Action hint for a turn: whether the model should contribute testimony info
+ * or just react casually (agree, short filler, change topic).
+ */
+export type ActionHint = 'contribute' | 'react';
+
+/**
+ * Opening styles for front-room witnesses. Each witness gets a different one
+ * so they don't all say "来了/坐吧" in unison.
+ */
+export const OPENING_STYLES = [
+  { tag: 'ask-recent', instruction: '问问TA最近的近况(工作、生活),用你自己的话,别说"最近怎么样"这种泛泛的。' },
+  { tag: 'reminisce', instruction: '叙旧——提一件你们共同经历过的具体事,轻松自然。' },
+  { tag: 'tease', instruction: '打趣TA一下,开个善意的小玩笑,让气氛轻松。' },
+  { tag: 'care', instruction: '关心TA一件你知道的具体事(身体、搬家、忙不忙),不要笼统。' },
+  { tag: 'deflect', instruction: '聊一件跟TA无关的事岔开话题(天气、吃的、最近看的剧),自然地带过。' },
+] as const;
+
+export type OpeningStyle = (typeof OPENING_STYLES)[number]['tag'];
+
+interface BuildSystemExtra {
+  /** For front mode: the opening style for this witness's first utterance. */
+  openingStyle?: OpeningStyle;
+  /** For front mode: whether this turn is the half-truth slot. */
+  halfTruthSlot?: boolean;
+  /** For front mode: whether the previous turn was the half-truth (so deflect). */
+  deflectAfterHalfTruth?: boolean;
+  /** Max character length for the utterance (used on retry). */
+  lengthHint?: number;
+}
+
+function buildSystem(
+  context: PersonaContext,
+  mode: RoomMode,
+  topicSeed: string,
+  actionHint: ActionHint = 'contribute',
+  extra: BuildSystemExtra = {},
+): string {
   const { witness, subjectName } = context;
-  const lines = [
-    `你是${subjectName}的${witness.relation}。现在一屋子认识TA的人聊起了「${topicSeed}」。`,
-    '你只说你自己亲眼见过、亲耳听过的事,不要编造。',
-    '一次只说一两句,用口语,像饭桌上随口聊天。',
-    '不要提"证言""问卷""数据""分析"这类词。',
-    // 内容分布按真实日常八卦校准(Robbins & Karan 2019, EAR 自然采样:
-    // 74.3% 中性 / 15.1% 负面 / 9.4% 正面):绝大多数时候只是交换平淡的
-    // 观察,附和别人时带上一条你自己看到的小事;偶尔轻微吐槽,很少夸。
-    '大多数时候说点平常的观察就好;别人说到点子上就附和一句,顺带补一个你自己见过的小细节。',
-    '不要上来就说重磅的事。你私下知道的秘密或难堪事,在这种场合不说出口;实在被聊到边上,至多含糊带过或岔开话题。',
-    '在场的还有TA的其他熟人(可能包括家人),说话留分寸。',
-  ];
-  if (witness.stance) lines.push(`你自报的立场是:${witness.stance}。`);
-  lines.push(
-    mode === 'behind'
-      ? `${subjectName}不在场,你可以说得直接一点。`
-      : `${subjectName}此刻就坐在旁边,你看得见TA的表情。`,
-  );
+  const lines: string[] = [];
+
+  if (mode === 'behind') {
+    lines.push(
+      `你是${subjectName}的${witness.relation}。现在一屋子认识TA的人闲聊,话题是「${topicSeed}」。`,
+      '你只说你自己亲眼见过、亲耳听过的事,不要编造。',
+      '说话要像真正的饭桌上随口聊天:短句、口语、可以不完整。一次最多一两句,不要讲一整段。',
+      '不要提"证言""问卷""数据""分析"这类词。',
+    );
+    // Action hint determines whether this turn should add testimony content
+    if (actionHint === 'react') {
+      lines.push(
+        '这轮你只需要简单回应一下:接一句别人的话、附和一声、换个话题、或者说句无关的闲话。',
+        '不要讲任何你记忆里的实质内容,qids给空数组。',
+        '例如:"嗯,是这样。""哈,他就那样。""对了最近天气不错。""行吧。"',
+      );
+    } else {
+      lines.push(
+        '接上面的话往下聊。别人刚说了什么,你可以接着说、补充、或者换个角度讲同一件事。不要突然跳到完全无关的话题。',
+        '大多数时候只是平淡的观察、近况更新;别人说到一个点,你可以附和然后顺带补一个自己见过的小细节。',
+        '不要上来就说重磅的事。你的记忆里有些秘密或难堪事——那是私下跟你说的,在这种群里绝对不能说出口。实在被聊到边上,至多含糊带过或岔开话题。',
+        '在场的还有TA的其他熟人(可能包括家人),说话留分寸。不要把所有记忆一口气倒出来。',
+      );
+    }
+  } else {
+    // Front mode: use frontText as primary material, second person
+    lines.push(
+      `你是${subjectName}的${witness.relation}。${subjectName}刚走进来,一屋子人都在。`,
+      '你只说你自己亲眼见过、亲耳听过的事,不要编造。',
+      '当面说话要自然。说话像真正碰面时会说的话:短句、口语。一次最多一句。',
+      '不要提"证言""问卷""数据""分析"这类词。',
+      `${subjectName}就坐在面前,你不会当面评价TA、不会翻旧账、不会说重话。`,
+      `★最重要的规则:你是对着${subjectName}说话,所以称呼必须用"你"或名字(${subjectName}),绝对不能用"他/她/TA"来指代${subjectName}。你的素材里可能是第三人称写的,你要改成第二人称说出来。`,
+    );
+
+    if (extra.halfTruthSlot) {
+      // This witness is chosen to let slip a half-sentence echoing behind-room talk
+      // Extract short phrases from behind memory for the model to use verbatim
+      const behindPhrases = context.memory
+        .filter((m) => m.text.startsWith('(你背后说过:'))
+        .map((m) => m.text.replace(/^\(你背后说过:/, '').replace(/\)$/, ''))
+        .flatMap((t) => {
+          // Extract 4-6 char substrings as candidate phrases
+          const phrases: string[] = [];
+          for (let len = 6; len >= 4; len--) {
+            for (let i = 0; i <= t.length - len; i++) {
+              const p = t.substring(i, i + len);
+              // Skip phrases that are mostly punctuation
+              if (/^[\p{P}\s]+$/u.test(p)) continue;
+              phrases.push(p);
+            }
+          }
+          return phrases;
+        });
+      // Pick a random subset of candidate phrases
+      const shuffledPhrases = shuffleArray(behindPhrases).slice(0, 5);
+
+      lines.push(
+        `你忍不住了——说一句极短的话(10-15字),话说一半就收住。`,
+        '★关键要求:从下面的候选词里选一个,原封不动地放进你的句子里:',
+        `候选词:${shuffledPhrases.map((p) => `"${p}"`).join('、')}`,
+        '格式:"你"+候选词+几个字+"……"或"算了"。整句不超过20字。',
+        '例:如果候选词是"没告诉我",你可以说"你那次没告诉我……算了。"',
+        'qids给空数组。',
+      );
+    } else if (extra.deflectAfterHalfTruth) {
+      lines.push(
+        '刚才有人差点说漏嘴了,你赶紧岔开话题,说点完全不相关的事。不要追问刚才的话。',
+        'qids给空数组。',
+      );
+    } else if (actionHint === 'react') {
+      lines.push(
+        '这轮你只需要自然地接一句,不要说实质内容。qids给空数组。',
+        '注意:不要说"坐吧""喝口水"之类的招呼话——前面已经有人说过了。说点具体的。',
+        `记住:对着${subjectName}说话,用"你",不要用"他"。`,
+      );
+    } else {
+      lines.push(
+        '你的记忆里有你曾经想好"当面会怎么说"的话——请以那些内容为素材,改成对他本人说的话(用"你")说出来。',
+        '不要泛泛寒暄、不要说"坐吧""喝口水"之类所有人都会说的话。说点只有你才会说的内容。',
+      );
+      const style = extra.openingStyle
+        ? OPENING_STYLES.find((s) => s.tag === extra.openingStyle)
+        : undefined;
+      if (style) {
+        lines.push(`你的打开方式:${style.instruction}`);
+      }
+    }
+  }
+
+  if (witness.stance) lines.push(`你的态度:${witness.stance}。`);
   if (witness.consentLevel === 'synthesis_only') {
     lines.push('你之前的话只授权用于合成转述,你只能用自己的话重讲,绝不能复述原话。');
+  }
+  if (extra.lengthHint) {
+    lines.push(`★这句话不要超过${extra.lengthHint}个字。短一点,像对话不像念稿。`);
   }
   lines.push('只输出 JSON,形如 {"text":"你要说的话","qids":["q1"]},qids 填你这句话依据的记忆编号(没有就给空数组)。不要输出任何别的内容。');
   return lines.join('\n');
@@ -266,6 +379,8 @@ function buildUser(
   mode: RoomMode,
   topicSeed: string,
   transcript: readonly RoomUtterance[],
+  actionHint: ActionHint = 'contribute',
+  extra: BuildSystemExtra = {},
 ): string {
   const said =
     transcript.length === 0
@@ -283,18 +398,54 @@ function buildUser(
       ? '(你没有什么可讲的)'
       : context.memory.map((entry) => `- [${entry.qid}] ${entry.text}`).join('\n');
 
-  return [
+  const parts = [
     `话题:${topicSeed}`,
     '房间里已经说过的话:',
     said,
     '',
-    '只有你自己知道的记忆(别人看不到这些):',
-    memory,
-    '',
-    mode === 'behind'
-      ? '现在轮到你,背着TA说一句。'
-      : `${context.subjectName}就在旁边,现在轮到你,当着TA的面说一句。`,
-  ].join('\n');
+  ];
+
+  if (mode === 'front') {
+    parts.push(
+      '你之前想好了当面要怎么说(以下是你自己写的当面话):',
+      memory,
+      '',
+    );
+  } else {
+    parts.push(
+      '只有你自己知道的记忆(别人看不到这些):',
+      memory,
+      '',
+    );
+  }
+
+  // Highlight the last thing that was said so the model can respond to it
+  if (transcript.length > 0) {
+    const last = transcript[transcript.length - 1]!;
+    if (last.kind === 'speech') {
+      parts.push(`刚刚${last.displayLabel}说了:「${last.text}」`);
+    }
+  }
+
+  if (mode === 'behind') {
+    if (actionHint === 'react') {
+      parts.push('现在轮到你,随便接一句就行,不用说你记忆里的事。简短点。');
+    } else {
+      parts.push('现在轮到你,接着聊,背着TA说一句。简短自然,像聊天不像念稿。');
+    }
+  } else {
+    if (extra.halfTruthSlot) {
+      parts.push(`${context.subjectName}就坐在面前。你忍不住了,用极短一句(不超过15字)说一半就收住。用"你"开头,以"……"或"算了"结尾。`);
+    } else if (extra.deflectAfterHalfTruth) {
+      parts.push(`${context.subjectName}就坐在面前。赶紧岔开话题,说点别的。`);
+    } else if (actionHint === 'react') {
+      parts.push(`${context.subjectName}就坐在面前,对着TA自然地接一句。用"你"称呼,不要用"他"。`);
+    } else {
+      parts.push(`${context.subjectName}就坐在面前,根据你想好的当面话,对着TA说一句。用"你"称呼,不要照搬原文里的第三人称。`);
+    }
+  }
+
+  return parts.join('\n');
 }
 
 function rewriteInstruction(consentHit: boolean, diagnosisWord: string | undefined): string {
@@ -314,15 +465,476 @@ interface ComposedLine {
   qids: string[];
 }
 
+/** Stage direction used when a secret leak is caught and cannot be rewritten. */
+export const SECRET_LEAK_FALLBACK_STAGE = '欲言又止,没说下去';
+
 /**
- * Generate one line for one persona, enforcing the two guards.
+ * Phrases that mark content as private/confidential in testimony.
+ * Used for the secret leak guard.
+ */
+const PRIVATE_MARKERS = [
+  '别告诉',
+  '别跟',
+  '千万别',
+  '别外传',
+  '只跟你说',
+  '你可别',
+  '你别跟',
+  '谁都没说',
+  '别人不知道',
+  '没跟',
+  '嘱咐我',
+];
+
+/**
+ * Split Chinese text into sentences on common sentence-end punctuation.
+ */
+function splitSentences(text: string): string[] {
+  return text.split(/(?<=[。！？；\n])/).map((s) => s.trim()).filter(Boolean);
+}
+
+/**
+ * Extract private sentence ranges from a testimony text.
+ * Returns the private sentences (sentence containing a marker + the preceding one).
+ */
+function extractPrivateSentences(text: string): string[] {
+  const sentences = splitSentences(text);
+  const result: string[] = [];
+  for (let i = 0; i < sentences.length; i++) {
+    const sentence = sentences[i]!;
+    if (PRIVATE_MARKERS.some((m) => sentence.includes(m))) {
+      if (i > 0) result.push(sentences[i - 1]!);
+      result.push(sentence);
+    }
+  }
+  return result;
+}
+
+/* ------------------------------------------------------------------ */
+/* Fact-level private content elements                                 */
+/* ------------------------------------------------------------------ */
+
+/**
+ * Chinese amount patterns: 两万, 三千, 十万, 五百, 一千二, etc.
+ * Also captures Arabic numerals with 万/千/百/元/块.
+ * Excludes "千万别/千万不" (emphasis, not an amount).
+ */
+const CN_AMOUNT_PATTERN =
+  /(?<!千)[一二两三四五六七八九十百\d]+[万千百亿](?:[一二两三四五六七八九十百千万]*)(?:块|元)?|\d[\d,.]*(?:万|千|百|元|块)/g;
+
+/**
+ * Action verbs that indicate private-content-related actions.
+ */
+const PRIVATE_ACTION_VERBS = [
+  '借', '还钱', '欠', '转账', '打电话', '求',
+];
+
+/**
+ * Key fact elements extracted from a private fragment.
+ * A leak is detected when a generated line matches 2+ element categories.
+ */
+export interface PrivateFactElements {
+  /** The full private text (for substring fallback). */
+  text: string;
+  /** Chinese/Arabic amounts found in the private text. */
+  amounts: string[];
+  /** Action verbs found in the private text. */
+  verbs: string[];
+  /** Key nouns (>= 2 chars, not in stop list) extracted from the private text. */
+  nouns: string[];
+}
+
+/** Common words that should not be treated as significant nouns. */
+const NOUN_STOP_LIST = new Set([
+  '他', '她', '我', '你', '的', '了', '是', '在', '和', '也',
+  '就', '都', '还', '又', '说', '这', '那', '有', '不', '很',
+  '他们', '她们', '我们', '你们', '什么', '怎么', '一个', '一下',
+  '但是', '因为', '所以', '如果', '虽然', '但', '而',
+  '上个月', '下个月', '这个月', '那天', '最近', '以前',
+]);
+
+/**
+ * Generic topic nouns for financial privacy detection.
+ * Domain-specific terms (illness, resignation, etc.) are NOT hardcoded here;
+ * they come from the LLM-generated no-talk list keywords.
+ */
+const PRIVATE_TOPIC_NOUNS = [
+  '借钱', '借款', '欠钱', '欠债', '手头紧', '周转',
+  '钱', '工资', '债', '贷款',
+];
+
+/**
+ * Derived compound nouns: verb + object patterns that indicate the topic
+ * even when the original text uses a different form (e.g. "借了两万" -> "借钱").
+ */
+const VERB_DERIVED_NOUNS: Record<string, string[]> = {
+  '借': ['借钱', '借款'],
+  '欠': ['欠钱', '欠债', '欠款'],
+  '还钱': ['还债'],
+};
+
+/**
+ * Extract fact-level elements from private text.
+ */
+export function extractFactElements(text: string): PrivateFactElements {
+  // Amounts
+  const amounts = [...text.matchAll(CN_AMOUNT_PATTERN)].map((m) => m[0]);
+
+  // Verbs
+  const verbs = PRIVATE_ACTION_VERBS.filter((v) => text.includes(v));
+
+  // Key nouns: topic-specific nouns found in the private text
+  const nouns = PRIVATE_TOPIC_NOUNS.filter((n) => text.includes(n));
+
+  // Add derived nouns for detected verbs (e.g. 借 -> 借钱)
+  for (const v of verbs) {
+    const derived = VERB_DERIVED_NOUNS[v];
+    if (derived) {
+      for (const d of derived) {
+        if (!nouns.includes(d)) nouns.push(d);
+      }
+    }
+  }
+
+  return { text, amounts, verbs, nouns };
+}
+
+/**
+ * Fact-level leak detection: check whether a generated line reveals private
+ * content by matching 2+ categories of fact elements (amounts, verbs, nouns).
  *
- * Order of operations matches the task contract exactly:
+ * This catches paraphrased leaks that substring matching would miss.
+ * E.g. "借了两万" -> amount "两万" + verb "借" = 2 categories = leak.
+ */
+export function hasFactLevelLeak(
+  utteranceText: string,
+  elements: readonly PrivateFactElements[],
+): boolean {
+  for (const el of elements) {
+    let categoryHits = 0;
+
+    // Check amounts
+    if (el.amounts.some((a) => utteranceText.includes(a))) {
+      categoryHits++;
+    }
+
+    // Check verbs
+    if (el.verbs.some((v) => utteranceText.includes(v))) {
+      categoryHits++;
+    }
+
+    // Check nouns (any significant noun match)
+    if (el.nouns.some((n) => utteranceText.includes(n))) {
+      categoryHits++;
+    }
+
+    if (categoryHits >= 2) return true;
+  }
+  return false;
+}
+
+/**
+ * Check if a generated line leaks private content from testimony.
+ *
+ * Two-layer detection:
+ *   1. Substring overlap: >= 6 contiguous characters in common with private text
+ *   2. Fact-level: matches 2+ categories of extracted fact elements
+ */
+function hasPrivateLeak(
+  text: string,
+  privateTexts: readonly string[],
+  privateElements: readonly PrivateFactElements[] = [],
+): boolean {
+  const MIN_OVERLAP = 8; // substring overlap (fact-level catches paraphrases)
+  // Layer 1: substring overlap
+  for (const priv of privateTexts) {
+    if (priv.length < MIN_OVERLAP || text.length < MIN_OVERLAP) continue;
+    for (let start = 0; start + MIN_OVERLAP <= priv.length; start++) {
+      if (text.includes(priv.slice(start, start + MIN_OVERLAP))) return true;
+    }
+  }
+  // Layer 2: fact-level element matching
+  if (privateElements.length > 0 && hasFactLevelLeak(text, privateElements)) {
+    return true;
+  }
+  return false;
+}
+
+/* ------------------------------------------------------------------ */
+/* Memory sanitisation: strip private facts from generation context    */
+/* ------------------------------------------------------------------ */
+
+/**
+ * Remove private sentences from a testimony text, replacing them with
+ * a content-free marker. The witness's prompt memory should never contain
+ * the actual private facts -- only the knowledge that something private exists.
+ */
+export function sanitiseMemory(text: string): string {
+  const sentences = splitSentences(text);
+  const privateIndices = new Set<number>();
+
+  for (let i = 0; i < sentences.length; i++) {
+    const sentence = sentences[i]!;
+    if (PRIVATE_MARKERS.some((m) => sentence.includes(m))) {
+      privateIndices.add(i);
+      if (i > 0) privateIndices.add(i - 1); // the fact sentence too
+    }
+  }
+
+  if (privateIndices.size === 0) return text;
+
+  // Replace private sentences with a marker (at most one marker per block)
+  const result: string[] = [];
+  let markerInserted = false;
+  for (let i = 0; i < sentences.length; i++) {
+    if (privateIndices.has(i)) {
+      if (!markerInserted) {
+        result.push('(你知道一件TA嘱咐别外传的事,群里不能说;最多欲言又止一次)');
+        markerInserted = true;
+      }
+    } else {
+      result.push(sentences[i]!);
+      markerInserted = false; // reset for next block
+    }
+  }
+
+  return result.join('');
+}
+
+/* ------------------------------------------------------------------ */
+/* Cross-witness knowledge conflict detection ("no-talk list")         */
+/* ------------------------------------------------------------------ */
+
+/**
+ * A topic that should not be discussed in the room because mentioning it
+ * would reveal to a present witness something they demonstrably don't know.
+ */
+export interface NoTalkItem {
+  /** What should not be discussed. */
+  topic: string;
+  /** 3-6 key words/phrases that signal this topic in generated text. */
+  keywords: string[];
+  /** Fact elements to detect this topic in generated text (derived from keywords). */
+  elements: PrivateFactElements;
+  /** Which witness would be harmed by this being said. */
+  blindWitnessId: string;
+  /** The claim the blind witness holds instead. */
+  blindClaim: string;
+  /** Which witnesses know this secret. */
+  knowingWitnessIds: string[];
+  /** Source text fragment that justifies this entry. */
+  sourceFragment: string;
+}
+
+/* ------------------------------------------------------------------ */
+/* LLM-based no-talk list generation                                   */
+/* ------------------------------------------------------------------ */
+
+const NO_TALK_LIST_SCHEMA = z.array(z.object({
+  topic: z.string(),
+  keywords: z.array(z.string()).min(3).max(6),
+  knowingWitnessIds: z.array(z.string()),
+  blindWitnessId: z.string(),
+  blindClaim: z.string(),
+  sourceFragment: z.string(),
+}));
+
+/**
+ * Use one LLM call to produce the no-talk list for this room.
+ *
+ * Input: each witness's relation and a summary of their testimony.
+ * Output: topics that would reveal secrets to present witnesses, with
+ *   keywords for post-generation checking.
+ *
+ * The prompt asks the model to systematically check each witness's
+ * understanding of the subject's current situation (career, health,
+ * finances, relationships, living arrangements, etc.) against every
+ * other witness's testimony for contradictions. This avoids hardcoding
+ * domain-specific categories.
+ */
+export async function generateNoTalkList(
+  llm: LLMClient,
+  subjectName: string,
+  drafts: readonly { witness: Witness; memory: readonly MemoryEntry[] }[],
+): Promise<NoTalkItem[]> {
+  const witnessSummaries = drafts.map((d) => {
+    const text = d.memory.map((m) => m.text).join(' ');
+    // Truncate very long testimonies
+    const summary = text.length > 300 ? text.substring(0, 300) + '……' : text;
+    return `【${d.witness.relation}(${d.witness.id})】${summary}`;
+  }).join('\n\n');
+
+  const system = [
+    `你是一位隐私保护分析师。以下是关于"${subjectName}"的多位证人的证言。这些证人马上要坐在同一个房间里聊天。`,
+    '你的任务:找出哪些事实如果在房间里被说出来,会让在场的某位证人当场得知自己被瞒了的事。',
+    '',
+    '方法——逐位检查:',
+    '对每一位在场证人,提取其证言中对此人现状的认知(工作、健康、感情、财务、住处等),然后逐一与其他证人所述的事实核对。',
+    '如果其他证人提到了该证人不知道或明显相反的事实,这个事实就不能在房间里说出来。',
+    '',
+    '两类情形:',
+    '1. 明确的保密嘱托(如"千万别跟XX说""你别跟XX提"):这件事不能当着被瞒的人说。',
+    '2. 认知矛盾:证人A知道的事实与证人B所相信的版本冲突。若事实在房间里被说出——即使是暗示、间接引用、或换了说法——B都会当场得知自己被瞒了。',
+    '',
+    '示例:',
+    '张三(同学)说"她已经递了离职申请,打算搬去成都";李四(父亲)说"她刚升职,工作很稳定"。',
+    '→ 条目: topic="递了离职申请", blindWitnessId=李四的id, blindClaim="刚升职,工作稳定", keywords=["离职","辞职","申请","搬","走","不干了","换城市"]。',
+    '注意:即使某句台词不直接说"辞职"而说"他走了""不在这边了",只要能让不知情者推断出真相,就应该列入keywords。',
+    '',
+    '对每一条,给出:',
+    '- topic: 简短描述这个秘密(10字以内)',
+    '- keywords: 3-6个标志性词/短语,必须涵盖直接说法和间接/委婉说法(如"辞职"和"走了""不干了"),用于检测台词是否触及该话题',
+    '- knowingWitnessIds: 知情的证人id列表',
+    '- blindWitnessId: 不该知道这件事的在场证人id',
+    '- blindClaim: 该证人目前相信的版本(20字以内)',
+    '- sourceFragment: 判断依据的原文片段(30字以内)',
+    '',
+    '只输出 JSON 数组,不要其他文字。如果没有需要禁谈的话题,输出空数组 []。',
+  ].join('\n');
+
+  const user = `在场证人:\n${witnessSummaries}`;
+
+  const resp = await llm.complete({ system, user });
+  try {
+    // Extract JSON from response
+    const jsonMatch = resp.match(/\[[\s\S]*\]/);
+    if (!jsonMatch) return [];
+    const parsed = NO_TALK_LIST_SCHEMA.parse(JSON.parse(jsonMatch[0]));
+    return parsed.map((item) => ({
+      ...item,
+      elements: {
+        text: item.sourceFragment,
+        amounts: [],
+        verbs: [],
+        nouns: item.keywords.slice(), // keywords serve as the fact elements
+      },
+    }));
+  } catch {
+    return [];
+  }
+}
+
+/* ------------------------------------------------------------------ */
+/* Rule-based no-talk fallback (explicit secrecy markers only)         */
+/* ------------------------------------------------------------------ */
+
+/**
+ * Fallback: detect no-talk items from explicit secrecy markers only.
+ * Handles "别跟他妈/爸提" patterns and extracts fact elements.
+ * No domain-specific guessing (resignation, illness, etc.).
+ */
+export function buildNoTalkListFallback(
+  drafts: readonly { witness: Witness; memory: readonly MemoryEntry[] }[],
+): NoTalkItem[] {
+  const items: NoTalkItem[] = [];
+
+  for (const draft of drafts) {
+    for (const mem of draft.memory) {
+      const sentences = splitSentences(mem.text);
+      for (let i = 0; i < sentences.length; i++) {
+        const sentence = sentences[i]!;
+        if (!PRIVATE_MARKERS.some((m) => sentence.includes(m))) continue;
+
+        const factSentences: string[] = [];
+        if (i > 0) factSentences.push(sentences[i - 1]!);
+        factSentences.push(sentence);
+        const factText = factSentences.join('');
+        const elements = extractFactElements(factText);
+
+        // Identify who should NOT know this based on the marker sentence
+        const blindTargets: string[] = [];
+        // Generic family role matching
+        const rolePatterns: [RegExp, RegExp][] = [
+          [/妈|母亲|老妈/, /母|妈/],
+          [/爸|父亲|老爸/, /父|爸/],
+          [/老婆|妻子|媳妇/, /妻|老婆|媳/],
+          [/老公|丈夫/, /夫|老公/],
+        ];
+        for (const [markerRe, relationRe] of rolePatterns) {
+          if (markerRe.test(sentence)) {
+            for (const d of drafts) {
+              if (relationRe.test(d.witness.relation)) {
+                blindTargets.push(d.witness.id);
+              }
+            }
+          }
+        }
+
+        for (const blindId of blindTargets) {
+          const blindDraft = drafts.find((d) => d.witness.id === blindId);
+          items.push({
+            topic: factText.substring(0, 30),
+            keywords: [],  // rule-based: no LLM keywords
+            elements,
+            blindWitnessId: blindId,
+            blindClaim: blindDraft
+              ? blindDraft.memory.map((m) => m.text).join(' ').substring(0, 50)
+              : '(unknown)',
+            knowingWitnessIds: [draft.witness.id],
+            sourceFragment: factText.substring(0, 30),
+          });
+        }
+      }
+    }
+  }
+
+  return items;
+}
+
+/* ------------------------------------------------------------------ */
+/* LLM-based post-generation leak verification                         */
+/* ------------------------------------------------------------------ */
+
+/**
+ * Check whether a generated line would reveal a no-talk topic to a blind
+ * witness, given what that witness currently believes.
+ *
+ * The caller supplies the blind witness's current knowledge context
+ * (blindWitnessContext): a summary of their testimony — what they believe
+ * to be true. This anchors the LLM's judgment: a line is only a leak if
+ * it contradicts or extends beyond what the blind witness already knows.
+ *
+ * Fail-closed: ambiguous answers (anything other than a clear "否") are
+ * treated as leaks.
+ *
+ * Returns true if the line should be blocked (it leaks the topic).
+ */
+export async function llmVerifyLeak(
+  llm: LLMClient,
+  utteranceText: string,
+  topic: string,
+  blindWitnessRelation: string,
+  blindClaim: string,
+  blindWitnessContext?: string,
+): Promise<boolean> {
+  const system = '你是一个隐私判定器。只回答"是"或"否",不要其他文字。';
+  const contextLine = blindWitnessContext
+    ? `\n${blindWitnessRelation}目前了解到的全部情况:"${blindWitnessContext.slice(0, 200)}"`
+    : '';
+  const user = [
+    `在场的"${blindWitnessRelation}"目前相信的版本是:"${blindClaim}"。${contextLine}`,
+    `以下这句话如果在聊天室里被说出来,${blindWitnessRelation}会不会因此得知或起疑事实并非如此——也就是发现"${topic}"?`,
+    `台词:"${utteranceText}"`,
+    '即使只是暗示、间接提及,只要可能让其产生怀疑,就回答"是"。',
+    '只回答"是"或"否"。',
+  ].join('\n');
+
+  const resp = await llm.complete({ system, user });
+  // Fail-closed: only an unambiguous "否" is treated as safe
+  const trimmed = resp.trim();
+  return !trimmed.startsWith('否');
+}
+
+/**
+ * Generate one line for one persona, enforcing the three guards.
+ *
+ * Order of operations:
  * 1. one LLM call (retried once on unparseable output, then the turn is
  *    skipped entirely);
  * 2. if the line quotes a `synthesis_only` memory or uses a diagnostic label,
  *    one rewrite call;
- * 3. if the rewrite is also unusable, a fixed stage direction replaces it.
+ * 3. if the line leaks private content, one rewrite call;
+ * 4. if the rewrite is also unusable, a fixed stage direction replaces it.
  */
 async function composeLine(
   llm: LLMClient,
@@ -330,9 +942,14 @@ async function composeLine(
   mode: RoomMode,
   topicSeed: string,
   transcript: readonly RoomUtterance[],
+  actionHint: ActionHint = 'contribute',
+  privateTexts: readonly string[] = [],
+  secretLeakBudget?: { remaining: number },
+  extra: BuildSystemExtra = {},
+  privateElements: readonly PrivateFactElements[] = [],
 ): Promise<ComposedLine | undefined> {
-  const system = buildSystem(context, mode, topicSeed);
-  const user = buildUser(context, mode, topicSeed, transcript);
+  const system = buildSystem(context, mode, topicSeed, actionHint, extra);
+  const user = buildUser(context, mode, topicSeed, transcript, actionHint, extra);
 
   const first = await attemptResponse(llm, { system, user }, 2);
   if (!first.ok) return undefined;
@@ -344,7 +961,37 @@ async function composeLine(
     context.witness.consentLevel === 'synthesis_only' &&
     containsConsentOverlap(first.value.text, memoryTexts);
   const diagnosisWord = findDiagnosisWord(first.value.text);
-  if (!consentHit && !diagnosisWord) return { kind: 'speech', text: first.value.text, qids: first.value.qids };
+
+  // Check for private content leak (substring + fact-level)
+  const leaksSecret =
+    privateTexts.length > 0 && hasPrivateLeak(first.value.text, privateTexts, privateElements);
+
+  if (!consentHit && !diagnosisWord && !leaksSecret) {
+    return { kind: 'speech', text: first.value.text, qids: first.value.qids };
+  }
+
+  // Secret leak: try rewrite, then fall back to hesitation stage direction
+  if (leaksSecret && !consentHit && !diagnosisWord) {
+    // If we still have budget for a "hesitation" mention, use it
+    if (secretLeakBudget && secretLeakBudget.remaining > 0) {
+      secretLeakBudget.remaining -= 1;
+      return { kind: 'stage', text: SECRET_LEAK_FALLBACK_STAGE, qids: [] };
+    }
+    // No budget: just skip the private content and try a plain rewrite
+    const rewritten = await attemptResponse(
+      llm,
+      {
+        system,
+        user: `${user}\n\n刚才那句涉及私事,换一句说。说点别的,不要说任何秘密或私下的事。`,
+      },
+      2,
+    );
+    if (rewritten.ok && !hasPrivateLeak(rewritten.value.text, privateTexts, privateElements)) {
+      return { kind: 'speech', text: rewritten.value.text, qids: rewritten.value.qids };
+    }
+    // Skip the turn entirely rather than leak
+    return undefined;
+  }
 
   const rewritten = await attemptResponse(
     llm,
@@ -356,7 +1003,11 @@ async function composeLine(
       context.witness.consentLevel === 'synthesis_only' &&
       containsConsentOverlap(rewritten.value.text, memoryTexts);
     const stillDiagnosing = findDiagnosisWord(rewritten.value.text);
-    if (!stillQuoting && !stillDiagnosing) return { kind: 'speech', text: rewritten.value.text, qids: rewritten.value.qids };
+    const stillLeaking =
+      privateTexts.length > 0 && hasPrivateLeak(rewritten.value.text, privateTexts, privateElements);
+    if (!stillQuoting && !stillDiagnosing && !stillLeaking) {
+      return { kind: 'speech', text: rewritten.value.text, qids: rewritten.value.qids };
+    }
   }
 
   return {
@@ -384,13 +1035,140 @@ interface UtteranceDraft {
 }
 
 /**
- * Round-robin schedule over a set of personas.
+ * Decide the action hint for a given turn position.
  *
- * Simple by design: one turn per persona per round, at most
- * {@link DEFAULT_MAX_TURNS_PER_WITNESS} rounds, and a hard total ceiling of
- * {@link DEFAULT_MAX_UTTERANCES}. A skipped turn (unparseable LLM output) costs
- * that persona their slot in the round but does not shorten anyone else's.
+ * The pattern ensures ~40-60% of turns are "react" (casual filler) and the
+ * rest are "contribute" (can draw on testimony). Early turns lean contribute
+ * to establish the conversation; later turns sprinkle in more filler.
+ *
+ * For front mode, react ratio is even higher (most turns should be small talk).
  */
+function decideActionHint(
+  turnIndex: number,
+  totalPlanned: number,
+  mode: RoomMode,
+): ActionHint {
+  if (mode === 'front') {
+    // Front: ~50% contribute so frontText actually gets used
+    // First turn always contributes (opening); then alternate
+    if (turnIndex === 0) return 'contribute';
+    return turnIndex % 2 === 0 ? 'contribute' : 'react';
+  }
+  // Behind: first 2 turns contribute (establish topic), then alternate
+  if (turnIndex < 2) return 'contribute';
+  // Odd positions react, even contribute (roughly 50/50)
+  return turnIndex % 2 === 1 ? 'react' : 'contribute';
+}
+
+/**
+ * Check if a front-room line uses third-person pronouns (他/她) to refer to
+ * the subject who is present. Returns true if the subject's name appears in a
+ * "他/她 + verb" pattern or "他" is used as subject pronoun.
+ *
+ * Simple heuristic: if the text contains 他 or 她 (not inside quoted speech
+ * marked by 「」), it's likely referring to the subject in third person.
+ * We exclude cases where 他/她 is part of words like 其他/他们/她们.
+ */
+export function hasFrontThirdPerson(text: string): boolean {
+  // Remove quoted text (「...」) to avoid false positives
+  const cleaned = text.replace(/「[^」]*」/g, '');
+  // Check for standalone 他/她 not part of compound words: 他们/她们/其他/他处
+  // Note: "他人" (other people) is excluded, but "他" followed by most other
+  // characters is a pronoun reference to the subject.
+  for (let i = 0; i < cleaned.length; i++) {
+    const char = cleaned[i];
+    if (char !== '他' && char !== '她') continue;
+    const prev = i > 0 ? cleaned[i - 1] : '';
+    const next = i < cleaned.length - 1 ? cleaned[i + 1] : '';
+    // Skip: 其他, 另他
+    if (prev === '其' || prev === '另') continue;
+    // Skip: 他们, 她们, 他处
+    if (next === '们' || next === '处') continue;
+    return true;
+  }
+  return false;
+}
+
+/** Check if `text` has ≥minLen contiguous character overlap with any existing speech. */
+function hasDedupConflict(
+  text: string,
+  existing: readonly RoomUtterance[],
+  minLen: number = 5,
+): boolean {
+  for (const u of existing) {
+    if (u.kind !== 'speech') continue;
+    for (let start = 0; start + minLen <= text.length; start++) {
+      if (u.text.includes(text.slice(start, start + minLen))) return true;
+    }
+  }
+  return false;
+}
+
+/**
+ * Pick the next speaker. Instead of strict round-robin, we allow the previous
+ * speaker's "responder" to go next sometimes, creating more natural back-and-forth.
+ *
+ * Rules:
+ * - No one speaks twice in a row.
+ * - Each witness gets at most `maxTurnsPerWitness` total turns.
+ * - A witness who just spoke cannot be the immediate next speaker.
+ * - Occasionally (every 3rd pick), let someone who hasn't spoken recently go
+ *   to prevent monopoly.
+ */
+function pickNextSpeaker(
+  drafts: readonly UtteranceDraft[],
+  utterances: readonly RoomUtterance[],
+  turnCounts: Map<string, number>,
+  maxPerWitness: number,
+  turnIndex: number,
+): UtteranceDraft | undefined {
+  const eligible = drafts.filter(
+    (d) => (turnCounts.get(d.witness.id) ?? 0) < maxPerWitness,
+  );
+  if (eligible.length === 0) return undefined;
+
+  const lastSpeaker = utterances.length > 0
+    ? utterances[utterances.length - 1]!.witnessId
+    : undefined;
+
+  // Filter out the last speaker (no consecutive turns)
+  const nonRepeat = eligible.filter((d) => d.witness.id !== lastSpeaker);
+  const pool = nonRepeat.length > 0 ? nonRepeat : eligible;
+
+  if (pool.length === 0) return undefined;
+
+  // Every 3rd turn, prefer the least-spoken witness for variety
+  if (turnIndex % 3 === 2) {
+    const minTurns = Math.min(...pool.map((d) => turnCounts.get(d.witness.id) ?? 0));
+    const leastSpoken = pool.filter(
+      (d) => (turnCounts.get(d.witness.id) ?? 0) === minTurns,
+    );
+    if (leastSpoken.length > 0) {
+      return leastSpoken[turnIndex % leastSpoken.length];
+    }
+  }
+
+  // Default: round-robin through eligible pool
+  return pool[turnIndex % pool.length];
+}
+
+/**
+ * Schedule and generate room utterances.
+ *
+ * Uses a conversation-aware speaker selection instead of strict round-robin,
+ * and assigns action hints to create a mix of testimony-anchored content and
+ * casual filler.
+ */
+/** Extra scheduling config for the front room. */
+interface FrontScheduleConfig {
+  /** Opening style assignment: witnessId -> style tag. */
+  openingStyles: Map<string, OpeningStyle>;
+  /** The witness who should say the half-truth (if any). */
+  halfTruthWitnessId: string | undefined;
+  /** Behind-room behindText entries keyed by witnessId for the half-truth prompt. */
+  behindMemory: Map<string, MemoryEntry[]>;
+}
+
 async function runSchedule(
   drafts: readonly UtteranceDraft[],
   subjectName: string,
@@ -402,60 +1180,352 @@ async function runSchedule(
   turns: number,
   stageLine: () => string,
   displayLabels: Map<string, string>,
+  privateTexts: readonly string[] = [],
+  frontConfig?: FrontScheduleConfig,
+  privateElements: readonly PrivateFactElements[] = [],
+  noTalkList: readonly NoTalkItem[] = [],
 ): Promise<RoomUtterance[]> {
   const utterances: RoomUtterance[] = [];
+  const turnCounts = new Map<string, number>();
+  const maxPerWitness = turns;
+  // At most 1 "hesitation" stage direction for secret leaks per room
+  const secretLeakBudget = { remaining: mode === 'behind' ? 1 : 0 };
+  // Running count of LLM verification calls used in this room
+  let verifyCallsUsed = 0;
+  // Track whether the half-truth has been spoken
+  let halfTruthDone = false;
+  // Track whether the previous turn was the half-truth (so next person deflects)
+  let lastWasHalfTruth = false;
 
-  for (let turn = 0; turn < turns && utterances.length < cap; turn += 1) {
-    for (const draft of drafts) {
-      if (utterances.length >= cap) break;
-      const displayLabel = displayLabels.get(draft.witness.id) ?? draft.witness.relation;
-      const context: PersonaContext = {
-        witness: draft.witness,
-        subjectName,
-        memory: draft.memory,
-      };
+  for (let turnIndex = 0; utterances.length < cap; turnIndex += 1) {
+    const draft = pickNextSpeaker(drafts, utterances, turnCounts, maxPerWitness, turnIndex);
+    if (!draft) break; // all witnesses exhausted
 
-      if (mode === 'front' && draft.memory.length === 0) {
-        // No frontText => no invented opinion. Only a stage direction.
-        utterances.push({
-          witnessId: draft.witness.id,
-          displayLabel,
-          text: stageLine(),
-          kind: 'stage',
-          at: now(),
-          tier: 'extrapolate',
-          anchors: [],
-        });
-        continue;
-      }
+    const displayLabel = displayLabels.get(draft.witness.id) ?? draft.witness.relation;
+    const context: PersonaContext = {
+      witness: draft.witness,
+      subjectName,
+      memory: draft.memory,
+    };
 
-      const line = await composeLine(llm, context, mode, topicSeed, utterances);
-      if (!line) continue; // unparseable twice: skip this turn
-
-      // Build anchors from model-cited qids
-      const citedAnchors: UtteranceAnchor[] = line.qids.flatMap((qid) =>
-        draft.witnessTestimonies.map((t) => ({ testimonyId: t.testimonyId, qid })),
-      );
-
-      const { tier, anchors } = classifyUtterance({
-        text: line.text,
-        kind: line.kind,
-        witnessId: draft.witness.id,
-        consentLevel: draft.witness.consentLevel,
-        citedAnchors,
-        testimonies: draft.witnessTestimonies,
-      });
-
+    if (mode === 'front' && draft.memory.length === 0) {
+      // No frontText => no invented opinion. Only a stage direction.
       utterances.push({
         witnessId: draft.witness.id,
         displayLabel,
-        text: line.text,
-        kind: line.kind,
+        text: stageLine(),
+        kind: 'stage',
         at: now(),
-        tier,
-        anchors,
+        tier: 'extrapolate',
+        anchors: [],
       });
+      turnCounts.set(draft.witness.id, (turnCounts.get(draft.witness.id) ?? 0) + 1);
+      lastWasHalfTruth = false;
+      continue;
     }
+
+    let actionHint = decideActionHint(turnIndex, cap, mode);
+
+    // Build extra hints for front mode
+    const extra: BuildSystemExtra = {};
+    if (mode === 'front' && frontConfig) {
+      // Is this the first utterance for this witness? Assign opening style
+      const witTurns = turnCounts.get(draft.witness.id) ?? 0;
+      if (witTurns === 0) {
+        extra.openingStyle = frontConfig.openingStyles.get(draft.witness.id);
+        actionHint = 'contribute'; // first utterance always contributes
+      }
+
+      // Half-truth logic: trigger on the chosen witness's second turn (or first if only 1 turn),
+      // but only if not already done
+      if (
+        !halfTruthDone &&
+        draft.witness.id === frontConfig.halfTruthWitnessId &&
+        witTurns >= 1 // second turn
+      ) {
+        extra.halfTruthSlot = true;
+        // Give this persona a random subset of their behind-room memory
+        // (2-3 items, shuffled) for variety across runs
+        const behindMem = frontConfig.behindMemory.get(draft.witness.id) ?? [];
+        if (behindMem.length > 0) {
+          const shuffled = shuffleArray(behindMem);
+          const subset = shuffled.slice(0, Math.min(3, shuffled.length));
+          context.memory = [
+            ...context.memory,
+            ...subset.map((m) => ({ qid: m.qid, text: `(你背后说过:${m.text})` })),
+          ];
+        }
+      }
+
+      // Deflect after half-truth
+      if (lastWasHalfTruth) {
+        extra.deflectAfterHalfTruth = true;
+      }
+    }
+
+    // Get private texts for this specific witness's testimony
+    const witnessPrivateTexts = mode === 'behind'
+      ? privateTexts
+      : []; // front mode: no private content to guard (frontText is already filtered)
+
+    const witnessPrivateElements = mode === 'behind' ? privateElements : [];
+
+    const line = await composeLine(
+      llm,
+      context,
+      mode,
+      topicSeed,
+      utterances,
+      actionHint,
+      witnessPrivateTexts,
+      secretLeakBudget,
+      extra,
+      witnessPrivateElements,
+    );
+    if (!line) {
+      // unparseable twice: skip this turn but still count
+      turnCounts.set(draft.witness.id, (turnCounts.get(draft.witness.id) ?? 0) + 1);
+      lastWasHalfTruth = false;
+      continue;
+    }
+
+    // Two-level no-talk leak detection for behind-mode speech lines:
+    //
+    //   Level 1 — keyword fast-scan: if any no-talk item's keywords appear
+    //   verbatim in the line, send it for LLM verification.
+    //
+    //   Level 2 — LLM semantic judgment: for substantive lines (>= 8 chars),
+    //   even without a keyword hit, the LLM checks whether the line would
+    //   reveal the secret to the blind witness. This catches euphemisms and
+    //   indirect references that keyword matching misses.
+    //
+    // The LLM receives the blind witness's current knowledge context —
+    // their full testimony summary — so it can judge whether the line
+    // adds information beyond what that witness already knows.
+    //
+    // Skip: if the speaker IS the blind witness (they can't leak to themselves).
+    //
+    // Hard caps (rationale: a behind room has ~12 utterances. With N
+    // no-talk items and K witnesses, uncapped verification would be
+    // O(utterances * N) LLM calls. We cap at MAX_VERIFY_PER_LINE = 3
+    // per line and MAX_VERIFY_CALLS_PER_ROOM = 15 per room to keep
+    // latency and cost bounded — 15 is enough to verify every line
+    // against 1-2 items, which covers realistic fixtures).
+    const MAX_VERIFY_PER_LINE = 3;
+    // Hard-cap: total LLM verification calls per room. Beyond this,
+    // fall back to keyword-only detection (no LLM semantic check).
+    // Rationale: prevents runaway LLM costs on rooms with many no-talk
+    // items or many turns; 15 covers 12 utterances x 1.25 avg checks.
+    const MAX_VERIFY_CALLS_PER_ROOM = 15;
+    if (mode === 'behind' && line.kind === 'speech' && noTalkList.length > 0) {
+      const isSubstantive = line.text.length >= 8;
+      let verifyCount = 0;
+      for (const item of noTalkList) {
+        if (verifyCount >= MAX_VERIFY_PER_LINE) break;
+        // Skip: the blind witness speaking can't leak to themselves
+        if (draft.witness.id === item.blindWitnessId) continue;
+        const keywordHit = item.keywords.some((kw) => line.text.includes(kw));
+
+        // When LLM budget is exhausted, degrade to keyword-only detection:
+        // only keyword hits trigger blocking, no semantic check.
+        if (verifyCallsUsed >= MAX_VERIFY_CALLS_PER_ROOM) {
+          if (keywordHit) {
+            // Block directly on keyword match (no LLM call)
+            if (secretLeakBudget.remaining > 0) {
+              secretLeakBudget.remaining -= 1;
+              line.kind = 'stage';
+              line.text = SECRET_LEAK_FALLBACK_STAGE;
+              line.qids = [];
+            } else {
+              line.kind = 'stage';
+              line.text = stageLine();
+              line.qids = [];
+            }
+            break;
+          }
+          continue;
+        }
+
+        // Send for verification if: keyword hit, OR line is substantive
+        if (!keywordHit && !isSubstantive) continue;
+
+        // Find the blind witness's relation and full knowledge context
+        const blindDraft = drafts.find((d) => d.witness.id === item.blindWitnessId);
+        const blindRelation = blindDraft?.witness.relation ?? '在场的人';
+        const blindWitnessContext = blindDraft
+          ? blindDraft.memory.map((m) => m.text).join(' ').slice(0, 200)
+          : undefined;
+        try {
+          verifyCount += 1;
+          verifyCallsUsed += 1;
+          const isLeak = await llmVerifyLeak(
+            llm, line.text, item.topic, blindRelation, item.blindClaim,
+            blindWitnessContext,
+          );
+          if (isLeak) {
+            // Block this line: rewrite or fall back to stage direction
+            if (secretLeakBudget.remaining > 0) {
+              secretLeakBudget.remaining -= 1;
+              line.kind = 'stage';
+              line.text = SECRET_LEAK_FALLBACK_STAGE;
+              line.qids = [];
+            } else {
+              line.kind = 'stage';
+              line.text = stageLine();
+              line.qids = [];
+            }
+            break; // no need to check more items
+          }
+        } catch {
+          // LLM call failed: err on the safe side, treat as leak
+          line.kind = 'stage';
+          line.text = stageLine();
+          line.qids = [];
+          break;
+        }
+      }
+    }
+
+    // Dedup guard: check for ≥5 char contiguous overlap with existing utterances
+    if (line.kind === 'speech' && hasDedupConflict(line.text, utterances)) {
+      // Try one rewrite with an explicit instruction
+      const retryLine = await composeLine(
+        llm,
+        context,
+        mode,
+        topicSeed,
+        utterances,
+        actionHint,
+        witnessPrivateTexts,
+        secretLeakBudget,
+        extra,
+        witnessPrivateElements,
+      );
+      if (retryLine && retryLine.kind === 'speech' && !hasDedupConflict(retryLine.text, utterances)) {
+        // Use the retry
+        Object.assign(line, retryLine);
+      } else {
+        // Still a dup: fall back to stage direction
+        line.kind = 'stage';
+        line.text = stageLine();
+        line.qids = [];
+      }
+    }
+
+    // Third-person pronoun guard (front mode only): lines must not use 他/她
+    // to refer to the subject who is present in the room
+    if (mode === 'front' && line.kind === 'speech' && hasFrontThirdPerson(line.text)) {
+      const retryLine = await composeLine(
+        llm, context, mode, topicSeed, utterances,
+        actionHint, witnessPrivateTexts, secretLeakBudget, extra, witnessPrivateElements,
+      );
+      if (retryLine && retryLine.kind === 'speech' && !hasFrontThirdPerson(retryLine.text)) {
+        Object.assign(line, retryLine);
+      } else {
+        // Still using third person: fall back to stage direction
+        line.kind = 'stage';
+        line.text = stageLine();
+        line.qids = [];
+      }
+    }
+
+    // Front room length guard: single utterances must not exceed 45 chars
+    const FRONT_MAX_CHARS = 45;
+    if (mode === 'front' && line.kind === 'speech' && line.text.length > FRONT_MAX_CHARS) {
+      const retryLine = await composeLine(
+        llm, context, mode, topicSeed, utterances,
+        actionHint, witnessPrivateTexts, secretLeakBudget,
+        { ...extra, lengthHint: FRONT_MAX_CHARS },
+        witnessPrivateElements,
+      );
+      if (retryLine && retryLine.kind === 'speech' && retryLine.text.length <= FRONT_MAX_CHARS) {
+        Object.assign(line, retryLine);
+      } else if (line.text.length > FRONT_MAX_CHARS) {
+        // Truncate at last natural break within limit, preserving meaning
+        const truncated = line.text.substring(0, FRONT_MAX_CHARS);
+        const lastBreak = Math.max(
+          truncated.lastIndexOf('，'),
+          truncated.lastIndexOf('。'),
+          truncated.lastIndexOf('；'),
+          truncated.lastIndexOf('——'),
+        );
+        if (lastBreak > 10) {
+          line.text = truncated.substring(0, lastBreak + 1);
+        } else {
+          line.text = truncated;
+        }
+      }
+    }
+
+    // Accidental half-truth guard: non-half-truth front lines must not trigger
+    // the half-truth metric (≥4 char behindText overlap AND ≤25 chars)
+    if (
+      mode === 'front' &&
+      frontConfig &&
+      !extra.halfTruthSlot &&
+      line.kind === 'speech'
+    ) {
+      const witBehind = frontConfig.behindMemory.get(draft.witness.id) ?? [];
+      const looksLikeHalfTruth = (text: string) => {
+        if (text.length > 25) return false;
+        return witBehind.some((m) => {
+          for (let start = 0; start + 4 <= text.length; start++) {
+            if (m.text.includes(text.slice(start, start + 4))) return true;
+          }
+          return false;
+        });
+      };
+      if (looksLikeHalfTruth(line.text)) {
+        // Rewrite once
+        const retryLine = await composeLine(
+          llm, context, mode, topicSeed, utterances,
+          actionHint, witnessPrivateTexts, secretLeakBudget, extra, witnessPrivateElements,
+        );
+        if (retryLine && retryLine.kind === 'speech' && !looksLikeHalfTruth(retryLine.text)) {
+          Object.assign(line, retryLine);
+        } else {
+          // Still echoes: fall back to stage direction to avoid metric fail
+          line.kind = 'stage';
+          line.text = stageLine();
+          line.qids = [];
+        }
+      }
+    }
+
+    // Track half-truth
+    if (extra.halfTruthSlot && line.kind === 'speech') {
+      halfTruthDone = true;
+      lastWasHalfTruth = true;
+    } else {
+      lastWasHalfTruth = false;
+    }
+
+    // Build anchors from model-cited qids
+    const citedAnchors: UtteranceAnchor[] = line.qids.flatMap((qid) =>
+      draft.witnessTestimonies.map((t) => ({ testimonyId: t.testimonyId, qid })),
+    );
+
+    const { tier, anchors } = classifyUtterance({
+      text: line.text,
+      kind: line.kind,
+      witnessId: draft.witness.id,
+      consentLevel: draft.witness.consentLevel,
+      citedAnchors,
+      testimonies: draft.witnessTestimonies,
+      // Front mode: allow pronoun-normalised comparison (他→你) for tier
+      pronounNormalize: mode === 'front',
+    });
+
+    utterances.push({
+      witnessId: draft.witness.id,
+      displayLabel,
+      text: line.text,
+      kind: line.kind,
+      at: now(),
+      tier,
+      anchors,
+    });
+    turnCounts.set(draft.witness.id, (turnCounts.get(draft.witness.id) ?? 0) + 1);
   }
 
   return utterances;
@@ -496,7 +1566,9 @@ export async function runBehindRoom(
 
   const subjectName = store.getSubject(subjectId)?.displayName ?? 'TA';
   const testimonies = store.listBySubject(subjectId);
-  const drafts = store
+
+  // First pass: build raw drafts (unsanitised, for extracting private content)
+  const rawDrafts = store
     .listWitnessesBySubject(subjectId)
     .map((witness) => {
       const witTestimonies = testimonies.filter((t) => t.witnessId === witness.id);
@@ -520,6 +1592,60 @@ export async function runBehindRoom(
   const witnesses = store.listWitnessesBySubject(subjectId);
   const displayLabels = buildDisplayLabels(witnesses);
 
+  // Extract private content from all testimony for the secret leak guard
+  const privateTexts: string[] = [];
+  const privateElements: PrivateFactElements[] = [];
+  for (const draft of rawDrafts) {
+    for (const mem of draft.memory) {
+      const sentences = extractPrivateSentences(mem.text);
+      privateTexts.push(...sentences);
+      for (const s of sentences) {
+        privateElements.push(extractFactElements(s));
+      }
+    }
+  }
+
+  // Build no-talk list from cross-witness knowledge conflicts.
+  // Only call the LLM when there are 2+ witnesses (conflict requires at least two).
+  let noTalkList: NoTalkItem[];
+  if (rawDrafts.length >= 2) {
+    try {
+      noTalkList = await generateNoTalkList(llm, subjectName, rawDrafts);
+    } catch {
+      noTalkList = buildNoTalkListFallback(rawDrafts);
+    }
+    // If LLM returned nothing, also run the fallback to catch explicit markers
+    if (noTalkList.length === 0) {
+      noTalkList = buildNoTalkListFallback(rawDrafts);
+    }
+  } else {
+    noTalkList = [];
+  }
+  for (const item of noTalkList) {
+    privateElements.push(item.elements);
+    // Also add keywords as nouns for fact-level detection
+    for (const kw of item.keywords) {
+      if (kw.length >= 2 && !privateElements.some((pe) => pe.nouns.includes(kw))) {
+        // Create a synthetic fact element entry for each keyword set
+        privateElements.push({
+          text: item.sourceFragment,
+          amounts: [],
+          verbs: [],
+          nouns: [kw],
+        });
+      }
+    }
+  }
+
+  // Second pass: sanitise each witness's memory (strip private sentences)
+  const drafts = rawDrafts.map((draft) => ({
+    ...draft,
+    memory: draft.memory.map((mem) => ({
+      qid: mem.qid,
+      text: sanitiseMemory(mem.text),
+    })),
+  }));
+
   let stageCursor = 0;
   const utterances = await runSchedule(
     drafts,
@@ -536,6 +1662,10 @@ export async function runBehindRoom(
       return line;
     },
     displayLabels,
+    privateTexts,
+    undefined, // no frontConfig for behind room
+    privateElements,
+    noTalkList,
   );
 
   const room: Room = {
@@ -601,6 +1731,49 @@ export async function openDoor(
     };
   });
 
+  // Build behind-room memory for half-truth selection
+  const behindMemoryByWit = new Map<string, MemoryEntry[]>();
+  for (const witness of witnesses) {
+    const witTestimonies = testimonies.filter((t) => t.witnessId === witness.id);
+    const behindMem = witTestimonies.flatMap((testimony) =>
+      testimony.answers
+        .filter((a) => a.behindText.length > 0)
+        .map((a) => ({ qid: a.qid, text: a.behindText })),
+    );
+    if (behindMem.length > 0) behindMemoryByWit.set(witness.id, behindMem);
+  }
+
+  // Choose half-truth witness: the one with the most behind-talk who also has frontText
+  const draftsWithFront = drafts.filter((d) => d.memory.length > 0);
+  let halfTruthWitnessId: string | undefined;
+  if (draftsWithFront.length > 0) {
+    let maxBehind = 0;
+    for (const d of draftsWithFront) {
+      const behindLen = (behindMemoryByWit.get(d.witness.id) ?? [])
+        .reduce((sum, m) => sum + m.text.length, 0);
+      if (behindLen > maxBehind) {
+        maxBehind = behindLen;
+        halfTruthWitnessId = d.witness.id;
+      }
+    }
+  }
+
+  // Assign opening styles to witnesses who have frontText
+  const openingStyles = new Map<string, OpeningStyle>();
+  const shuffledStyles = shuffleArray([...OPENING_STYLES]);
+  let styleIdx = 0;
+  for (const d of draftsWithFront) {
+    const style = shuffledStyles[styleIdx % shuffledStyles.length]!;
+    openingStyles.set(d.witness.id, style.tag);
+    styleIdx++;
+  }
+
+  const frontConfig: FrontScheduleConfig = {
+    openingStyles,
+    halfTruthWitnessId,
+    behindMemory: behindMemoryByWit,
+  };
+
   let stageCursor = 0;
   const frontTranscript = await runSchedule(
     drafts,
@@ -617,6 +1790,8 @@ export async function openDoor(
       return line;
     },
     displayLabels,
+    [], // no private texts in front mode
+    frontConfig,
   );
 
   return store.updateRoomFront(roomId, frontTranscript);

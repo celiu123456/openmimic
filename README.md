@@ -1,6 +1,6 @@
 # OpenMimic
 
-> **状态:早期开发中(v0.0.2-p1a),下表为逐项实现状态** — 详见 [docs/claims-audit.md](docs/claims-audit.md)
+> **状态:早期开发中(v0.0.2-p3),下表为逐项实现状态** — 详见 [docs/claims-audit.md](docs/claims-audit.md)
 
 **通用人格仿真引擎:复刻任何人,预演万局。**
 
@@ -87,7 +87,10 @@ resp = client.chat.completions.create(
 | CourtEngine(v2: filing with episodes + LLM/embedding/keyword pairing + relation judgment + confrontation + divergence map + conviction computation) | 已实现 |
 | RoomEngine(背后/当面双模式 + 危机词 + 诊断词防护) | 已实现 |
 | GraphEngine(证言图谱,改一条证言自动重算关联人格) | 计划 |
-| GateEngine 独立引擎(contested 否决流 + 论断权限墙) | 计划 |
+| GateEngine(contested 否决流 + 论断权限墙 + re-raise 机制) | 已实现 |
+| 元知觉(meta-perception: 主体预测证人作答,LLM 评分,per-witness breakdown) | 已实现 |
+| 集体沉默信号(silence-signal: avoidedQids 统计,>= half 且 >= 3 → SilenceSignal) | 已实现 |
+| 插件持久化(registerPluginTable: 沙箱表 + append-only 可选) | 已实现 |
 | 第三方插件位(社区采集器、剧本、桥接器) | 已实现(三个示例插件) |
 
 ### 引擎表
@@ -98,7 +101,7 @@ resp = client.chat.completions.create(
 | **CourtEngine** | v2 对抗式质询管线:4 阶段——(1) filing: 从每位证人的证言中提取候选论断和 episode(具体事例,必须是证言原文的逐字子串),per-item lenient parsing(单条无效不废弃全部);(2) pairing: 首选 LLMClaimPairFinder(一次 LLM 调用找语义相关对),次选 embedding 余弦,末选关键词重叠;(3) relation judgment: LLM 判定论断对关系(agreement / perspective_difference / factual_conflict / unrelated),perspective_difference 要求同一行为维度且方向不同,事实冲突进入 confrontation 对质;(4) conviction computation: 纯函数,base 0.5,按证人数/episode/配对状态计算置信分。视角差异生成 divergence 记录保留双方观点;一致论断合并证据。体检报告(CourtReport)含存活/限定/争议/退役论断数、episode 数、divergence 数 |
 | **GraphEngine** | 计划:证言图谱,使人格成为图的实时派生物(改一条证言自动重算关联人格)。当前无代码 |
 | **RoomEngine** | 房间模拟:背后/当面双模式群体对话;危机词命中拒绝开房间,诊断词触发重写或降级为舞台指令 |
-| **GateEngine** | 计划:独立引擎形式的授权与溯源门。当前授权逻辑在内核 `kernel/src/gate.ts` 中(synthesis_only 遮蔽已实现);本人否决论断→降级 contested 态、论断权限墙等流程尚无代码 |
+| **GateEngine** | 论断否决(contest/uncontest)、诊断词/危机词权限墙、re-raise 机制(contested 论断在新证据充足时自动恢复)。contest 记录持久化于插件表(append-only)。前端 CourtReportView 提供 "我不同意" 按钮与撤回功能 |
 
 ## .persona 人格包
 
@@ -127,10 +130,14 @@ resp = client.chat.completions.create(
 - synthesis_only 遮蔽:外部 scope 下 synthesis_only 证人的原话被替换为 `[withheld]`;
 - AI 产物不入证言表:房间 transcript 存独立表,不回灌 append-only 证言账本。
 
+以下条目由 GateEngine 实现:
+
+- 本人否决关于自己的论断→降级 contested 态,从人格画像中移除(可撤回);
+- 诊断词/危机词命中的论断自动退役(retired),不进入人格画像。
+
 以下条目为设计意图,尚无技术措施强制:
 
-- 复刻在世他人用于私人预演场景;公开分发他人人格包需获本人授权;
-- 本人否决关于自己的论断→降级 contested 态(见 Roadmap)。
+- 复刻在世他人用于私人预演场景;公开分发他人人格包需获本人授权。
 
 ## 借鉴与致谢
 
@@ -163,15 +170,15 @@ resp = client.chat.completions.create(
 - 内置演示(虚构人物林默,18 episodes + 5 divergences + 10 corpus items,无 API Key 可体验)
 - 三个示例插件:collector-freetext(自由文本证言)、scenario-review(评审会剧本)、example-bridge(法庭完成→webhook)
 - YAML 配置树:openmimic.yml → openmimic.local.yml → OPENMIMIC_CONFIG 三层合并
-
-### 进行中
-
-- avoidedQids 集体沉默信号消费端(采集侧已就绪)
+- P3a:房间发言三档分类(quote / paraphrase / extrapolate),匿名证人(anonymousInRoom)显示脱敏
+- P3b:元知觉插件(meta-perception),预测→LLM 评分→per-witness 分项,synthesis_only 证人脱敏
+- P3c-c1:集体沉默信号(silence-signal),avoidedQids >= half 且 >= 3 → SilenceSignal,人格纪律一行
+- GateEngine:论断否决(contest/uncontest) + 诊断词/危机词权限墙 + re-raise + reraised 结构化字段
+- 插件持久化:store.registerPluginTable(沙箱表,表名强制前缀,无法触及证言表,可选 append-only)
 
 ### 计划
 
 - GraphEngine:证言图谱,人格作为图的实时派生物
-- GateEngine 独立引擎:contested 否决流(本人否决论断→降级 contested 态)、论断权限墙
 - 平行组织:多房间级联,组织级并行法庭
 - 插件市场
 - OpenClaw skill、dsh bundle

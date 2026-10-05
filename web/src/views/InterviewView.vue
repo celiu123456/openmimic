@@ -472,7 +472,7 @@ onMounted(() => {
           class="textarea"
           :value="currentAnswer.frontText"
           :disabled="currentAnswer.frontSkipped"
-          placeholder="当面说，你会怎么开口？"
+          placeholder="如果他就坐在你对面,你会怎么对他说？"
           @input="setFront(($event.target as HTMLTextAreaElement).value)"
         />
         <MicButton

@@ -26,7 +26,7 @@ export interface Questionnaire {
 export const FRIEND_V1: Questionnaire = {
   id: 'friend-v1',
   title: '朋友版问卷 v1',
-  frontPrompt: '这话你会当他面说吗？会怎么说？',
+  frontPrompt: '如果他就坐在你对面,这话你会怎么对他说？',
   questions: [
     {
       qid: 'q1',
