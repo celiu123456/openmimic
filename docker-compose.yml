@@ -1,0 +1,34 @@
+# OpenMimic — single-container deployment.
+#
+# Copy .env.example to .env and fill in:
+#   OPENMIMIC_ADMIN_TOKEN — required for public-facing deployments
+#   LLM_BASE_URL, LLM_API_KEY, LLM_MODEL — any OpenAI-compatible provider
+#   OPENMIMIC_PUBLIC_URL — full URL for invite links (e.g. https://your.domain)
+#
+# Start:  docker compose up -d
+# Logs:   docker compose logs -f
+# Stop:   docker compose down
+
+services:
+  openmimic:
+    build: .
+    ports:
+      - "${PORT:-7860}:7860"
+    volumes:
+      - openmimic-data:/app/data
+    environment:
+      - PORT=7860
+      - OPENMIMIC_ADMIN_TOKEN=${OPENMIMIC_ADMIN_TOKEN:-}
+      - LLM_BASE_URL=${LLM_BASE_URL:-}
+      - LLM_API_KEY=${LLM_API_KEY:-}
+      - LLM_MODEL=${LLM_MODEL:-}
+      - OPENMIMIC_PUBLIC_URL=${OPENMIMIC_PUBLIC_URL:-}
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:7860/api/health').then(r=>{if(!r.ok)throw 1})"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+
+volumes:
+  openmimic-data:
