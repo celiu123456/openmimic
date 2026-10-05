@@ -253,6 +253,7 @@ describe('front room constraints', () => {
     ]);
 
     const llm = new FakeLLM([
+      '[]', // no-talk list call
       line('第一句话'),
       line('第二句话'),
       line('第三句话'),
@@ -261,10 +262,11 @@ describe('front room constraints', () => {
 
     await runBehindRoom('s1', store, llm);
 
-    // The second call should include "刚刚...说了" to highlight the last speaker
-    const secondCall = llm.calls[1];
-    expect(secondCall).toBeDefined();
-    expect(secondCall!.user).toContain('刚刚');
-    expect(secondCall!.user).toContain('第一句话');
+    // calls[0] = no-talk list, calls[1] = first composeLine, calls[2] = second composeLine
+    // The second composeLine call should include "刚刚...说了" to highlight the last speaker
+    const secondComposeCall = llm.calls[2];
+    expect(secondComposeCall).toBeDefined();
+    expect(secondComposeCall!.user).toContain('刚刚');
+    expect(secondComposeCall!.user).toContain('第一句话');
   });
 });

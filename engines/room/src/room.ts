@@ -554,12 +554,12 @@ const NOUN_STOP_LIST = new Set([
 ]);
 
 /**
- * Key topic nouns that are specific enough to identify private content
- * when combined with a verb or amount.
+ * Generic topic nouns for financial privacy detection.
+ * Domain-specific terms (illness, resignation, etc.) are NOT hardcoded here;
+ * they come from the LLM-generated no-talk list keywords.
  */
 const PRIVATE_TOPIC_NOUNS = [
   '借钱', '借款', '欠钱', '欠债', '手头紧', '周转',
-  '辞职', '辞了', '裸辞', '离职',
   '钱', '工资', '债', '贷款',
 ];
 
@@ -712,34 +712,106 @@ export function sanitiseMemory(text: string): string {
 export interface NoTalkItem {
   /** What should not be discussed. */
   topic: string;
-  /** Fact elements to detect this topic in generated text. */
+  /** 3-6 key words/phrases that signal this topic in generated text. */
+  keywords: string[];
+  /** Fact elements to detect this topic in generated text (derived from keywords). */
   elements: PrivateFactElements;
   /** Which witness would be harmed by this being said. */
   blindWitnessId: string;
   /** The claim the blind witness holds instead. */
   blindClaim: string;
+  /** Which witnesses know this secret. */
+  knowingWitnessIds: string[];
+  /** Source text fragment that justifies this entry. */
+  sourceFragment: string;
 }
 
+/* ------------------------------------------------------------------ */
+/* LLM-based no-talk list generation                                   */
+/* ------------------------------------------------------------------ */
+
+const NO_TALK_LIST_SCHEMA = z.array(z.object({
+  topic: z.string(),
+  keywords: z.array(z.string()).min(3).max(6),
+  knowingWitnessIds: z.array(z.string()),
+  blindWitnessId: z.string(),
+  blindClaim: z.string(),
+  sourceFragment: z.string(),
+}));
+
 /**
- * Build a no-talk list from cross-witness knowledge conflicts.
+ * Use one LLM call to produce the no-talk list for this room.
  *
- * When one witness's testimony contradicts another's understanding
- * (e.g., faxiao knows he resigned, mother thinks he's still employed),
- * the contradicting facts are treated as private in the behind room --
- * saying them would let the uninformed witness discover they've been deceived.
- *
- * This uses the testimony data directly (no LLM call):
- *   - Detect explicit secrecy markers ("千万别跟XX提")
- *   - Look for key contradictions: resignation vs employment, debt, etc.
+ * Input: each witness's relation and a summary of their testimony.
+ * Output: topics that would reveal secrets to present witnesses, with
+ *   keywords for post-generation checking.
  */
-export function buildNoTalkList(
+export async function generateNoTalkList(
+  llm: LLMClient,
+  subjectName: string,
+  drafts: readonly { witness: Witness; memory: readonly MemoryEntry[] }[],
+): Promise<NoTalkItem[]> {
+  const witnessSummaries = drafts.map((d) => {
+    const text = d.memory.map((m) => m.text).join(' ');
+    // Truncate very long testimonies
+    const summary = text.length > 300 ? text.substring(0, 300) + '……' : text;
+    return `【${d.witness.relation}(${d.witness.id})】${summary}`;
+  }).join('\n\n');
+
+  const system = [
+    `你是一位隐私保护分析师。以下是关于"${subjectName}"的多位证人的证言。这些证人马上要坐在同一个房间里聊天。`,
+    '你的任务:找出哪些事实如果在房间里被说出来,会让在场的某位证人当场得知自己被瞒了的事。',
+    '两类情形:',
+    '1. 某证人的证言里有明确的保密嘱托(如"千万别跟XX说""你别跟XX提"),这件事不能当着被瞒的人说。',
+    '2. 不同证人对同一件事持有矛盾认知(如A知道TA辞职了,而B还以为TA在上班),说出真相会让不知情的那位当场知道自己被骗。',
+    '',
+    '对每一条,给出:',
+    '- topic: 简短描述这个秘密(10字以内)',
+    '- keywords: 3-6个标志性词/短语,用于检测生成的台词是否触及该话题(要涵盖同义表述)',
+    '- knowingWitnessIds: 知情的证人id列表',
+    '- blindWitnessId: 不该知道这件事的在场证人id',
+    '- blindClaim: 该证人目前相信的版本(20字以内)',
+    '- sourceFragment: 判断依据的原文片段(30字以内)',
+    '',
+    '只输出 JSON 数组,不要其他文字。如果没有需要禁谈的话题,输出空数组 []。',
+  ].join('\n');
+
+  const user = `在场证人:\n${witnessSummaries}`;
+
+  const resp = await llm.complete({ system, user });
+  try {
+    // Extract JSON from response
+    const jsonMatch = resp.match(/\[[\s\S]*\]/);
+    if (!jsonMatch) return [];
+    const parsed = NO_TALK_LIST_SCHEMA.parse(JSON.parse(jsonMatch[0]));
+    return parsed.map((item) => ({
+      ...item,
+      elements: {
+        text: item.sourceFragment,
+        amounts: [],
+        verbs: [],
+        nouns: item.keywords.slice(), // keywords serve as the fact elements
+      },
+    }));
+  } catch {
+    return [];
+  }
+}
+
+/* ------------------------------------------------------------------ */
+/* Rule-based no-talk fallback (explicit secrecy markers only)         */
+/* ------------------------------------------------------------------ */
+
+/**
+ * Fallback: detect no-talk items from explicit secrecy markers only.
+ * Handles "别跟他妈/爸提" patterns and extracts fact elements.
+ * No domain-specific guessing (resignation, illness, etc.).
+ */
+export function buildNoTalkListFallback(
   drafts: readonly { witness: Witness; memory: readonly MemoryEntry[] }[],
 ): NoTalkItem[] {
   const items: NoTalkItem[] = [];
 
-  // Strategy: for each witness that has a private marker mentioning another
-  // person (别跟他妈提 → mother), extract the fact that should be hidden
-  // from that person.
   for (const draft of drafts) {
     for (const mem of draft.memory) {
       const sentences = splitSentences(mem.text);
@@ -747,96 +819,77 @@ export function buildNoTalkList(
         const sentence = sentences[i]!;
         if (!PRIVATE_MARKERS.some((m) => sentence.includes(m))) continue;
 
-        // The private fact is the preceding sentence(s)
         const factSentences: string[] = [];
         if (i > 0) factSentences.push(sentences[i - 1]!);
         factSentences.push(sentence);
         const factText = factSentences.join('');
-
         const elements = extractFactElements(factText);
 
-        // Try to identify who should NOT know this
-        // Common patterns: 别跟他妈/她妈/我妈/妈 提 → mother
+        // Identify who should NOT know this based on the marker sentence
         const blindTargets: string[] = [];
-        if (/妈|母亲|老妈/.test(sentence)) {
-          // Find a mother among the witnesses
-          for (const d of drafts) {
-            if (d.witness.relation.includes('母') || d.witness.relation.includes('妈')) {
-              blindTargets.push(d.witness.id);
-            }
-          }
-        }
-        if (/爸|父亲|老爸/.test(sentence)) {
-          for (const d of drafts) {
-            if (d.witness.relation.includes('父') || d.witness.relation.includes('爸')) {
-              blindTargets.push(d.witness.id);
+        // Generic family role matching
+        const rolePatterns: [RegExp, RegExp][] = [
+          [/妈|母亲|老妈/, /母|妈/],
+          [/爸|父亲|老爸/, /父|爸/],
+          [/老婆|妻子|媳妇/, /妻|老婆|媳/],
+          [/老公|丈夫/, /夫|老公/],
+        ];
+        for (const [markerRe, relationRe] of rolePatterns) {
+          if (markerRe.test(sentence)) {
+            for (const d of drafts) {
+              if (relationRe.test(d.witness.relation)) {
+                blindTargets.push(d.witness.id);
+              }
             }
           }
         }
 
         for (const blindId of blindTargets) {
-          // Find what the blind witness believes
           const blindDraft = drafts.find((d) => d.witness.id === blindId);
-          const blindClaim = blindDraft
-            ? blindDraft.memory.map((m) => m.text).join(' ').substring(0, 50)
-            : '(unknown)';
-
           items.push({
             topic: factText.substring(0, 30),
+            keywords: [],  // rule-based: no LLM keywords
             elements,
             blindWitnessId: blindId,
-            blindClaim,
+            blindClaim: blindDraft
+              ? blindDraft.memory.map((m) => m.text).join(' ').substring(0, 50)
+              : '(unknown)',
+            knowingWitnessIds: [draft.witness.id],
+            sourceFragment: factText.substring(0, 30),
           });
         }
       }
     }
   }
 
-  // Also detect direct contradictions: one witness says "辞职/辞了/离职"
-  // while another says "公司器重/在工作/没辞职"
-  // Build knowledge sets
-  const resignationWitnesses: string[] = [];
-  const employedWitnesses: string[] = [];
-  const resignationTexts: string[] = [];
-
-  for (const draft of drafts) {
-    const fullText = draft.memory.map((m) => m.text).join(' ');
-    if (/辞职|辞了|裸辞|离职|把工作.*辞/.test(fullText)) {
-      resignationWitnesses.push(draft.witness.id);
-      // Extract the resignation sentences
-      for (const mem of draft.memory) {
-        const sents = splitSentences(mem.text);
-        for (const s of sents) {
-          if (/辞职|辞了|裸辞|离职|把工作.*辞/.test(s)) {
-            resignationTexts.push(s);
-          }
-        }
-      }
-    }
-    if (/公司器重|在工作|没辞|升职|加班/.test(fullText) && !/辞职|辞了|裸辞|离职/.test(fullText)) {
-      employedWitnesses.push(draft.witness.id);
-    }
-  }
-
-  // If some witnesses know about resignation and others think he's still employed,
-  // resignation facts should not be said in front of the employed-believers
-  if (resignationWitnesses.length > 0 && employedWitnesses.length > 0) {
-    const factText = resignationTexts.join(' ');
-    const elements = extractFactElements(factText);
-    // Add resignation-specific verbs and nouns
-    elements.verbs.push('辞职', '辞了', '裸辞', '离职');
-    for (const blindId of employedWitnesses) {
-      const blindDraft = drafts.find((d) => d.witness.id === blindId);
-      items.push({
-        topic: '辞职/离职',
-        elements,
-        blindWitnessId: blindId,
-        blindClaim: blindDraft?.memory[0]?.text.substring(0, 50) ?? '',
-      });
-    }
-  }
-
   return items;
+}
+
+/* ------------------------------------------------------------------ */
+/* LLM-based post-generation leak verification                         */
+/* ------------------------------------------------------------------ */
+
+/**
+ * Check whether a generated line would reveal a no-talk topic to a blind
+ * witness. Only called when the line hits at least one keyword.
+ *
+ * Returns true if the line should be blocked (it leaks the topic).
+ */
+export async function llmVerifyLeak(
+  llm: LLMClient,
+  utteranceText: string,
+  topic: string,
+  blindWitnessRelation: string,
+): Promise<boolean> {
+  const system = '你是一个隐私判定器。只回答"是"或"否",不要其他文字。';
+  const user = [
+    `以下这句话如果在聊天室里被说出来,在场的"${blindWitnessRelation}"会不会因此得知"${topic}"这件事?`,
+    `台词:"${utteranceText}"`,
+    '只回答"是"或"否"。',
+  ].join('\n');
+
+  const resp = await llm.complete({ system, user });
+  return resp.trim().startsWith('是');
 }
 
 /**
@@ -1097,6 +1150,7 @@ async function runSchedule(
   privateTexts: readonly string[] = [],
   frontConfig?: FrontScheduleConfig,
   privateElements: readonly PrivateFactElements[] = [],
+  noTalkList: readonly NoTalkItem[] = [],
 ): Promise<RoomUtterance[]> {
   const utterances: RoomUtterance[] = [];
   const turnCounts = new Map<string, number>();
@@ -1198,6 +1252,42 @@ async function runSchedule(
       turnCounts.set(draft.witness.id, (turnCounts.get(draft.witness.id) ?? 0) + 1);
       lastWasHalfTruth = false;
       continue;
+    }
+
+    // LLM-based no-talk verification: for speech lines in behind mode,
+    // check if any no-talk keyword is hit and verify with one LLM call
+    if (mode === 'behind' && line.kind === 'speech' && noTalkList.length > 0) {
+      for (const item of noTalkList) {
+        const keywordHit = item.keywords.some((kw) => line.text.includes(kw));
+        if (!keywordHit) continue;
+
+        // Find the blind witness's relation for the LLM prompt
+        const blindDraft = drafts.find((d) => d.witness.id === item.blindWitnessId);
+        const blindRelation = blindDraft?.witness.relation ?? '在场的人';
+        try {
+          const isLeak = await llmVerifyLeak(llm, line.text, item.topic, blindRelation);
+          if (isLeak) {
+            // Block this line: rewrite or fall back to stage direction
+            if (secretLeakBudget.remaining > 0) {
+              secretLeakBudget.remaining -= 1;
+              line.kind = 'stage';
+              line.text = SECRET_LEAK_FALLBACK_STAGE;
+              line.qids = [];
+            } else {
+              line.kind = 'stage';
+              line.text = stageLine();
+              line.qids = [];
+            }
+            break; // no need to check more items
+          }
+        } catch {
+          // LLM call failed: err on the safe side, treat keyword hit as leak
+          line.kind = 'stage';
+          line.text = stageLine();
+          line.qids = [];
+          break;
+        }
+      }
     }
 
     // Dedup guard: check for ≥5 char contiguous overlap with existing utterances
@@ -1419,10 +1509,36 @@ export async function runBehindRoom(
     }
   }
 
-  // Build no-talk list from cross-witness knowledge conflicts
-  const noTalkList = buildNoTalkList(rawDrafts);
+  // Build no-talk list from cross-witness knowledge conflicts.
+  // Only call the LLM when there are 2+ witnesses (conflict requires at least two).
+  let noTalkList: NoTalkItem[];
+  if (rawDrafts.length >= 2) {
+    try {
+      noTalkList = await generateNoTalkList(llm, subjectName, rawDrafts);
+    } catch {
+      noTalkList = buildNoTalkListFallback(rawDrafts);
+    }
+    // If LLM returned nothing, also run the fallback to catch explicit markers
+    if (noTalkList.length === 0) {
+      noTalkList = buildNoTalkListFallback(rawDrafts);
+    }
+  } else {
+    noTalkList = [];
+  }
   for (const item of noTalkList) {
     privateElements.push(item.elements);
+    // Also add keywords as nouns for fact-level detection
+    for (const kw of item.keywords) {
+      if (kw.length >= 2 && !privateElements.some((pe) => pe.nouns.includes(kw))) {
+        // Create a synthetic fact element entry for each keyword set
+        privateElements.push({
+          text: item.sourceFragment,
+          amounts: [],
+          verbs: [],
+          nouns: [kw],
+        });
+      }
+    }
   }
 
   // Second pass: sanitise each witness's memory (strip private sentences)
@@ -1453,6 +1569,7 @@ export async function runBehindRoom(
     privateTexts,
     undefined, // no frontConfig for behind room
     privateElements,
+    noTalkList,
   );
 
   const room: Room = {

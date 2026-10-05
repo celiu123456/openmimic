@@ -20,7 +20,7 @@ import {
   extractFactElements,
   hasFactLevelLeak,
   sanitiseMemory,
-  buildNoTalkList,
+  buildNoTalkListFallback,
 } from '@openmimic/engine-room';
 
 const u = (
@@ -253,7 +253,7 @@ describe('frontTextAnchorRate', () => {
         text: '最近忙不忙啊',
         witnessId: 'w-a',
         tier: 'paraphrase',
-        anchors: [{ qid: 'q1', span: [0, 5] as [number, number] }],
+        anchors: [{ qid: 'q1', testimonyId: 't1' }],
       }),
       u({
         text: '来了来了',
@@ -265,7 +265,7 @@ describe('frontTextAnchorRate', () => {
         text: '听说你换工作了',
         witnessId: 'w-c',
         tier: 'quote',
-        anchors: [{ qid: 'q2', span: [0, 7] as [number, number] }],
+        anchors: [{ qid: 'q2', testimonyId: 't2' }],
       }),
     ];
     const frontTextEntries = [
@@ -284,7 +284,7 @@ describe('frontTextAnchorRate', () => {
         text: '哟来了',
         witnessId: 'w-a',
         tier: 'paraphrase',
-        anchors: [{ qid: 'q1', span: [0, 3] as [number, number] }],
+        anchors: [{ qid: 'q1', testimonyId: 't1' }],
       }),
     ];
     // q1 of w-a has no frontText entry
@@ -564,7 +564,7 @@ describe('sanitiseMemory', () => {
 /* Cross-witness knowledge conflicts                                   */
 /* ------------------------------------------------------------------ */
 
-describe('buildNoTalkList', () => {
+describe('buildNoTalkListFallback', () => {
   it('detects private marker targeting mother', () => {
     const drafts = [
       {
@@ -580,12 +580,13 @@ describe('buildNoTalkList', () => {
         ],
       },
     ];
-    const list = buildNoTalkList(drafts);
+    const list = buildNoTalkListFallback(drafts);
     expect(list.length).toBeGreaterThan(0);
-    expect(list.some((item) => item.blindWitnessId === 'w-mother')).toBe(true);
+    expect(list.some((item: { blindWitnessId: string }) => item.blindWitnessId === 'w-mother')).toBe(true);
   });
 
-  it('detects resignation/employment contradiction', () => {
+  it('does NOT do domain-specific guessing without explicit marker', () => {
+    // No "千万别" or other explicit marker -- fallback should NOT flag anything
     const drafts = [
       {
         witness: { id: 'w-faxiao', subjectId: 's1', relation: '发小', consentLevel: 'quotable' as const },
@@ -600,11 +601,8 @@ describe('buildNoTalkList', () => {
         ],
       },
     ];
-    const list = buildNoTalkList(drafts);
-    // Should have an item flagging resignation as a no-talk for mother
-    const resignItem = list.find(
-      (item) => item.blindWitnessId === 'w-mother' && item.topic.includes('辞职'),
-    );
-    expect(resignItem).toBeDefined();
+    const list = buildNoTalkListFallback(drafts);
+    // Fallback only handles explicit secrecy markers, not domain contradictions
+    expect(list.length).toBe(0);
   });
 });

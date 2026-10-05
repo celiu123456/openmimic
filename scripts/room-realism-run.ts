@@ -1,9 +1,13 @@
 #!/usr/bin/env npx tsx
 /**
- * Room realism iteration: generate a behind + front room for 林默 using a real
- * LLM, measure with room-metrics, and append a run to docs/room-realism-runs.md.
+ * Room realism iteration: generate a behind room (and optionally front room)
+ * for a fixture using a real LLM, measure with room-metrics, and append a
+ * run to docs/room-realism-runs.md.
  *
- * Usage: npx tsx scripts/room-realism-run.ts [run_number]
+ * Usage:
+ *   npx tsx scripts/room-realism-run.ts [run_number]              # 林默 (default)
+ *   npx tsx scripts/room-realism-run.ts [run_number] --fixture suzhi  # 苏芷
+ *   npx tsx scripts/room-realism-run.ts [run_number] --behind-only    # no front room
  */
 import { writeFileSync, readFileSync, existsSync } from 'node:fs';
 import { resolve } from 'node:path';
@@ -15,6 +19,11 @@ import {
   DEMO_SUBJECT_ID,
   DEMO_WITNESSES,
 } from '../fixtures/limo';
+import {
+  seedSuzhi,
+  SUZHI_SUBJECT_ID,
+  SUZHI_WITNESSES,
+} from '../fixtures/suzhi';
 import type { RoomUtterance } from '@openmimic/shared';
 import {
   buildReport,
@@ -42,7 +51,11 @@ try {
 } catch { /* no .env */ }
 
 async function main() {
-  const runNumber = parseInt(process.argv[2] ?? '1', 10);
+  const args = process.argv.slice(2);
+  const runNumber = parseInt(args.find((a) => !a.startsWith('--')) ?? '1', 10);
+  const fixtureName = args.includes('--fixture') ? args[args.indexOf('--fixture') + 1] : 'limo';
+  const behindOnly = args.includes('--behind-only');
+
   const baseUrl = process.env.LLM_BASE_URL;
   const apiKey = process.env.LLM_API_KEY;
   const model = process.env.LLM_MODEL;
@@ -52,39 +65,54 @@ async function main() {
     process.exit(1);
   }
 
-  const dbPath = `/tmp/room-realism-run-${runNumber}-${Date.now()}.db`;
+  const dbPath = `/tmp/room-realism-run-${fixtureName}-${runNumber}-${Date.now()}.db`;
   const store = new Store({ path: dbPath });
-  console.log(`Run ${runNumber} | DB: ${dbPath} | Model: ${model}`);
+  console.log(`Run ${runNumber} | Fixture: ${fixtureName} | DB: ${dbPath} | Model: ${model}`);
 
-  seedDemo(store);
+  // Select fixture
+  type FixtureWitness = { id: string; answers: { qid: string; behindText: string; frontText?: string }[] };
+  let subjectId: string;
+  let fixtureWitnesses: readonly FixtureWitness[];
+
+  if (fixtureName === 'suzhi') {
+    seedSuzhi(store);
+    subjectId = SUZHI_SUBJECT_ID;
+    fixtureWitnesses = SUZHI_WITNESSES;
+  } else {
+    seedDemo(store);
+    subjectId = DEMO_SUBJECT_ID;
+    fixtureWitnesses = DEMO_WITNESSES;
+  }
 
   const llm = new OpenAICompatClient({ baseUrl, apiKey, model, timeoutMs: 120_000 });
 
   // Generate behind room
   console.log('Generating behind room...');
-  const room = await runBehindRoom(DEMO_SUBJECT_ID, store, llm);
+  const room = await runBehindRoom(subjectId, store, llm);
   console.log(`Behind: ${room.behindTranscript.length} utterances`);
 
-  // Open door
-  console.log('Opening door...');
-  const doorRoom = await openDoor(room.id, store, llm);
-  const frontLen = doorRoom.frontTranscript?.length ?? 0;
-  console.log(`Front: ${frontLen} utterances`);
+  // Open door (unless behind-only)
+  let frontTranscript: RoomUtterance[] | undefined;
+  if (!behindOnly) {
+    console.log('Opening door...');
+    const doorRoom = await openDoor(room.id, store, llm);
+    frontTranscript = doorRoom.frontTranscript;
+    console.log(`Front: ${frontTranscript?.length ?? 0} utterances`);
+  }
 
   // Build metrics
-  const testimonies = DEMO_WITNESSES.map((w) => ({
+  const testimonies = fixtureWitnesses.map((w) => ({
     witnessId: w.id,
     answers: w.answers.map((a) => ({ qid: a.qid, behindText: a.behindText })),
   }));
   const privateFragments = extractPrivateFragments(testimonies);
 
-  // Extract frontText and behindText entries for new metrics
-  const frontTextEntries: FrontTextInfo[] = DEMO_WITNESSES.flatMap((w) =>
+  const frontTextEntries: FrontTextInfo[] = fixtureWitnesses.flatMap((w) =>
     w.answers
       .filter((a) => (a.frontText ?? '').length > 0)
       .map((a) => ({ witnessId: w.id, qid: a.qid, frontText: a.frontText as string })),
   );
-  const behindTextEntries: BehindTextInfo[] = DEMO_WITNESSES.flatMap((w) =>
+  const behindTextEntries: BehindTextInfo[] = fixtureWitnesses.flatMap((w) =>
     w.answers
       .filter((a) => a.behindText.length > 0)
       .map((a) => ({ witnessId: w.id, qid: a.qid, behindText: a.behindText })),
@@ -92,7 +120,7 @@ async function main() {
 
   const report = buildReport(
     room.behindTranscript,
-    doorRoom.frontTranscript,
+    frontTranscript,
     privateFragments,
     frontTextEntries,
     behindTextEntries,
@@ -100,7 +128,7 @@ async function main() {
   const checks = checkCriteria(report);
 
   // Witness labels
-  const witnesses = store.listWitnessesBySubject(DEMO_SUBJECT_ID);
+  const witnesses = store.listWitnessesBySubject(subjectId);
   const witnessRelation = new Map(witnesses.map((w) => [w.id, w.relation]));
 
   function formatUtt(u: RoomUtterance): string {
@@ -113,7 +141,7 @@ async function main() {
 
   // Build markdown
   const md: string[] = [
-    `## Run ${runNumber}`,
+    `## Run ${runNumber} (${fixtureName})`,
     '',
     `Date: ${new Date().toISOString()}`,
     `Model: ${model}`,
@@ -130,11 +158,16 @@ async function main() {
     '',
     ...room.behindTranscript.map(formatUtt),
     '',
-    '### Front Transcript (full)',
-    '',
-    ...(doorRoom.frontTranscript ?? []).map(formatUtt),
-    '',
   ];
+
+  if (frontTranscript) {
+    md.push(
+      '### Front Transcript (full)',
+      '',
+      ...frontTranscript.map(formatUtt),
+      '',
+    );
+  }
 
   // Write to docs/room-realism-runs.md
   const outPath = resolve(process.cwd(), 'docs/room-realism-runs.md');

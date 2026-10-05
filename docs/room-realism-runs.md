@@ -2111,3 +2111,139 @@ Model: deepseek-flash
   - [extrapolate] 前下属(换了个坐姿,看向窗外)
   - [extrapolate] 网友（认识四年,只见过一面）(打了个哈哈,说起别的事)
 
+## Run 13 (suzhi)
+
+Date: 2026-10-05T00:37:55.155Z
+Model: deepseek-flash
+
+### Behind Room
+
+| Metric | Value |
+|--------|-------|
+| Total utterances | 8 |
+| quote | 0 |
+| paraphrase | 3 |
+| extrapolate | 5 |
+| extrapolate ratio | 63% |
+| median length (chars) | 21 |
+| mean length (chars) | 24 |
+| p90 length (chars) | 39 |
+| max length (chars) | 39 |
+| secret leaks | 0 |
+| reply chain rate | 75% (3/4) |
+| repetition rate | 0% (0/10 pairs) |
+
+
+### Criteria Checks
+
+| Check | Pass | Detail |
+|-------|------|--------|
+| behind-extrapolate-ratio | PASS | 63% (target 40-70%, pass 30-80%) |
+| behind-median-length | PASS | 21 chars (target <=40, pass <=45) |
+| behind-secret-leaks | PASS | 0 (target <=1) |
+| behind-reply-chain | PASS | 75% (target >=30%, pass >=25%) |
+| behind-repetition | PASS | 0% (target <=10%) |
+
+### Behind Transcript (full)
+
+  - [paraphrase] 姐姐: "她最近朋友圈发得挺勤的，看着状态还行。就是……唉，她从小就这样，什么都自己扛。" [anchors: q2]
+  - [extrapolate] 父亲(笑了笑,把话题接给了别人)
+  - [paraphrase] 闺蜜: "她最近是看着还行，但我上礼拜见她，人瘦了一圈，说加班到十一点是常事。" [anchors: q1]
+  - [extrapolate] 姐姐: "嗯……她就这样，从小报喜不报忧。"
+  - [paraphrase] 父亲: "上个月打电话回来说升职了，我高兴了一晚上。" [anchors: q1]
+  - [extrapolate] 同事: "那挺好的呀，升职是好事。"
+  - [extrapolate] 闺蜜(低头喝了口水)
+  - [extrapolate] 同事(盯着杯子没接话)
+
+## Run 14 (suzhi)
+
+Date: 2026-10-05T00:38:09.131Z
+Model: deepseek-flash
+
+### Behind Room
+
+| Metric | Value |
+|--------|-------|
+| Total utterances | 8 |
+| quote | 0 |
+| paraphrase | 4 |
+| extrapolate | 4 |
+| extrapolate ratio | 50% |
+| median length (chars) | 24 |
+| mean length (chars) | 23 |
+| p90 length (chars) | 36 |
+| max length (chars) | 36 |
+| secret leaks | 0 |
+| reply chain rate | 40% (2/5) |
+| repetition rate | 0% (0/15 pairs) |
+
+
+### Criteria Checks
+
+| Check | Pass | Detail |
+|-------|------|--------|
+| behind-extrapolate-ratio | PASS | 50% (target 40-70%, pass 30-80%) |
+| behind-median-length | PASS | 24 chars (target <=40, pass <=45) |
+| behind-secret-leaks | PASS | 0 (target <=1) |
+| behind-reply-chain | PASS | 40% (target >=30%, pass >=25%) |
+| behind-repetition | PASS | 0% (target <=10%) |
+
+### Behind Transcript (full)
+
+  - [paraphrase] 姐姐: "她最近朋友圈发得挺勤的，看着状态还行。" [anchors: q2]
+  - [paraphrase] 父亲: "嗯，上个月还打电话回来说升职了，我高兴了一晚上。" [anchors: q1]
+  - [paraphrase] 闺蜜: "升职是真的，她跟我说过。不过她最近老念叨想换个节奏，我听着有点心疼。" [anchors: q2]
+  - [extrapolate] 姐姐: "嗯……她从小就这样，报喜不报忧。"
+  - [paraphrase] 父亲: "这孩子打小就懂事，有啥难处也不吭声。不过上回打电话，声音听着挺有劲儿的。" [anchors: q2]
+  - [extrapolate] 同事: "嗯，是，她一向挺稳的。"
+  - [extrapolate] 闺蜜(笑了笑,把话题接给了别人)
+  - [extrapolate] 同事(低头喝了口水)
+
+## Run 15 (limo)
+
+Date: 2026-10-05T00:38:29.005Z
+Model: deepseek-flash
+
+### Behind Room
+
+| Metric | Value |
+|--------|-------|
+| Total utterances | 12 |
+| quote | 0 |
+| paraphrase | 6 |
+| extrapolate | 6 |
+| extrapolate ratio | 50% |
+| median length (chars) | 24 |
+| mean length (chars) | 29 |
+| p90 length (chars) | 45 |
+| max length (chars) | 52 |
+| secret leaks | 0 |
+| reply chain rate | 60% (6/10) |
+| repetition rate | 0% (0/55 pairs) |
+
+
+### Criteria Checks
+
+| Check | Pass | Detail |
+|-------|------|--------|
+| behind-extrapolate-ratio | PASS | 50% (target 40-70%, pass 30-80%) |
+| behind-median-length | PASS | 24 chars (target <=40, pass <=45) |
+| behind-secret-leaks | PASS | 0 (target <=1) |
+| behind-reply-chain | PASS | 60% (target >=30%, pass >=25%) |
+| behind-repetition | PASS | 0% (target <=10%) |
+
+### Behind Transcript (full)
+
+  - [paraphrase] 发小: "最近联系是少了，上周约他吃饭又推了，说在忙。" [anchors: q1]
+  - [paraphrase] 前任: "忙什么呀，他朋友圈步数一天一万多，跑步倒是有空。" [anchors: q1]
+  - [paraphrase] 前下属: "跑步这事我信，他晚上睡不着就去跑，跑到累为止。" [anchors: q9]
+  - [extrapolate] 母亲: "嗯……睡不着啊。他从小就这样，心里有事不说。"
+  - [extrapolate] 网友（认识四年,只见过一面）(欲言又止,没说下去)
+  - [extrapolate] 前上司: "嗯，他这人，能力是真有，就是最后那一下，走得让我到现在都别扭。"
+  - [paraphrase] 前任: "他走之前那阵子，我刷朋友圈才知道他辞职了。他连这个都不跟我说。" [anchors: q6]
+  - [extrapolate] 母亲: "唉，他就是这样，什么都不跟人说。"
+  - [paraphrase] 发小: "阿姨您这话我认。就去年我做个手术，他跑前跑后比谁都上心，轮到他自己有事，一个字都不带说的。" [anchors: q7]
+  - [extrapolate] 前上司: "嗯，是这样。他帮别人从来不谈条件，轮到自己就一个字不说。"
+  - [paraphrase] 前下属: "这个我信。团建他老偷偷买单，我撞见过一次，他说你一个应届生跟我抢什么。结果他自己中午就啃个八块钱的饭团。" [anchors: q1]
+  - [extrapolate] 网友（认识四年,只见过一面）: "嗯……他这人就这样，对别人大方，对自己抠。"
+
