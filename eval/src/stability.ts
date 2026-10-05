@@ -167,6 +167,139 @@ export async function matchClaimsLlm(
   return survivingA.length > 0 ? matched / survivingA.length : 0;
 }
 
+/* ------------------------------------------------------------------ */
+/* Batch LLM claim matching: one call per direction                    */
+/* ------------------------------------------------------------------ */
+
+const BatchClaimMatchResponseSchema = z.array(
+  z.object({
+    pairIndex: z.number(),
+    verdict: z.enum(['same', 'different']),
+  }),
+);
+
+const BATCH_CLAIM_MATCH_SYSTEM = [
+  '你是一位人格论断对比裁判。给你一组论断配对,每对来自对同一人不同次法庭运行。',
+  '对每一对,判断两条论断是否描述同一个侧面或方面。',
+  '"同一侧面"指两条论断的核心观点一致(允许用词不同、详细程度不同)。',
+  '如果一条是另一条的同义改写、细化、或概括,视为同一侧面。',
+  '如果两条论断谈的是不同特质、不同场景、不同关系,视为不同侧面。',
+  '',
+  '只输出 JSON 数组,不要输出任何解释文字或 markdown 代码块。',
+  '格式: [{"pairIndex":0,"verdict":"same"},{"pairIndex":1,"verdict":"different"},...]',
+].join('\n');
+
+/**
+ * Batch-match claims from two runs: bigram pre-filter selects top-1 candidate
+ * per claim, then one LLM call judges all pairs at once.
+ *
+ * Returns { matched, total, pairs } where pairs is the list of
+ * {claimA, claimB, bigramSim, verdict} for human review.
+ */
+export async function matchClaimsBatch(
+  claimsA: Claim[],
+  claimsB: Claim[],
+  llm: LLMClient,
+): Promise<{
+  rate: number;
+  matched: number;
+  total: number;
+  pairs: Array<{ indexA: number; indexB: number; textA: string; textB: string; bigramSim: number; verdict: 'same' | 'different' | 'error' }>;
+}> {
+  const survivingA = claimsA.filter((c) => c.status === 'surviving');
+  const survivingB = claimsB.filter((c) => c.status === 'surviving');
+
+  if (survivingA.length === 0 && survivingB.length === 0) {
+    return { rate: 1, matched: 0, total: 0, pairs: [] };
+  }
+  if (survivingA.length === 0 || survivingB.length === 0) {
+    return { rate: 0, matched: 0, total: Math.max(survivingA.length, survivingB.length), pairs: [] };
+  }
+
+  // Build candidate pairs: for each claim in A, take best bigram match in B
+  const candidatePairs: Array<{ indexA: number; indexB: number; bigramSim: number }> = [];
+  const usedB = new Set<number>();
+
+  for (let i = 0; i < survivingA.length; i++) {
+    let bestSim = 0;
+    let bestIdx = -1;
+    for (let j = 0; j < survivingB.length; j++) {
+      if (usedB.has(j)) continue;
+      const sim = bigramJaccard(survivingA[i].text, survivingB[j].text);
+      if (sim > bestSim) {
+        bestSim = sim;
+        bestIdx = j;
+      }
+    }
+    if (bestIdx >= 0) {
+      candidatePairs.push({ indexA: i, indexB: bestIdx, bigramSim: bestSim });
+      usedB.add(bestIdx);
+    }
+  }
+
+  // Build batch prompt
+  const pairLines = candidatePairs.map((p, idx) =>
+    `--- Pair ${idx} ---\n论断 A: ${survivingA[p.indexA].text}\n论断 B: ${survivingB[p.indexB].text}`,
+  ).join('\n\n');
+
+  const user = `以下是 ${candidatePairs.length} 对论断,请逐对判断:\n\n${pairLines}`;
+  const request: LLMCompletionRequest = { system: BATCH_CLAIM_MATCH_SYSTEM, user, purpose: 'eval-judge' };
+
+  let verdicts: Map<number, 'same' | 'different'> = new Map();
+
+  for (let attempt = 0; attempt < 2; attempt++) {
+    try {
+      const raw = await llm.complete(request);
+      const trimmed = raw.trim();
+      let parsed: unknown;
+      try { parsed = JSON.parse(trimmed); } catch {
+        const fenced = /```(?:json)?\s*([\s\S]*?)```/i.exec(trimmed);
+        if (fenced?.[1]) parsed = JSON.parse(fenced[1].trim());
+        else {
+          const start = trimmed.search(/\[/);
+          if (start >= 0) {
+            const end = trimmed.lastIndexOf(']');
+            if (end > start) parsed = JSON.parse(trimmed.slice(start, end + 1));
+          }
+        }
+      }
+      if (!parsed) continue;
+      const results = BatchClaimMatchResponseSchema.parse(parsed);
+      for (const r of results) {
+        verdicts.set(r.pairIndex, r.verdict);
+      }
+      break; // success
+    } catch {
+      // retry once
+    }
+  }
+
+  // Assemble results
+  const pairs: Array<{ indexA: number; indexB: number; textA: string; textB: string; bigramSim: number; verdict: 'same' | 'different' | 'error' }> = [];
+  let matched = 0;
+
+  for (let idx = 0; idx < candidatePairs.length; idx++) {
+    const p = candidatePairs[idx];
+    const verdict = verdicts.get(idx) ?? 'error';
+    pairs.push({
+      indexA: p.indexA,
+      indexB: p.indexB,
+      textA: survivingA[p.indexA].text,
+      textB: survivingB[p.indexB].text,
+      bigramSim: p.bigramSim,
+      verdict,
+    });
+    if (verdict === 'same') matched++;
+  }
+
+  return {
+    rate: survivingA.length > 0 ? matched / survivingA.length : 0,
+    matched,
+    total: survivingA.length,
+    pairs,
+  };
+}
+
 /**
  * Compute all pairwise overlap rates using LLM judge and return mean +/- stddev.
  */

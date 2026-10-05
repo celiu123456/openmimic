@@ -76,12 +76,16 @@ export interface AblationQuestionResult {
   baselinePrediction: string;
   claimsStrippedPrediction: string;
   episodesStrippedPrediction: string;
+  /** Prediction using self-report-only persona (optional, only when selfReportArm enabled). */
+  selfReportPrediction?: string;
   /** full persona vs no-persona baseline */
   judgeVsBaseline: PairResult;
   /** full persona vs claims-stripped (episodes only) */
   judgeVsClaimsStripped: PairResult;
   /** full persona vs episodes-stripped (claims only) */
   judgeVsEpisodesStripped: PairResult;
+  /** full persona vs self-report-only (optional) */
+  judgeVsSelfReport?: PairResult;
 }
 
 export interface AblationArmStats {
@@ -102,6 +106,7 @@ export interface AblationWitnessResult {
   vsBaseline: AblationArmStats;
   vsClaimsStripped: AblationArmStats;
   vsEpisodesStripped: AblationArmStats;
+  vsSelfReport?: AblationArmStats;
 }
 
 export interface AblationResult {
@@ -113,6 +118,7 @@ export interface AblationResult {
     vsBaseline: AblationArmStats;
     vsClaimsStripped: AblationArmStats;
     vsEpisodesStripped: AblationArmStats;
+    vsSelfReport?: AblationArmStats;
   };
 }
 
@@ -121,6 +127,8 @@ export interface AblationOptions {
   skipCalibrationCheck?: boolean;
   maxQuestionsPerWitness?: number;
   progressFile?: string;
+  /** Enable self-report-only arm: full persona vs persona assembled from selfReport alone. */
+  selfReportArm?: boolean;
 }
 
 /* ------------------------------------------------------------------ */
@@ -284,6 +292,19 @@ export async function runAblation(
         episodesStrippedPrompt = persona.systemPrompt;
       }
 
+      // (d) self-report-only prompt (optional arm)
+      let selfReportPrompt: string | null = null;
+      if (options.selfReportArm) {
+        const subject = store.getSubject(subjectId);
+        const sr = subject?.selfReport ?? '';
+        if (sr.length > 0) {
+          selfReportPrompt = `你是${subject?.displayName ?? '某人'}。以下是他/她的自述:\n\n${sr}\n\n请根据以上自述回答问题。`;
+          console.error(`[Ablation]   Self-report-only prompt: ${selfReportPrompt.length} chars`);
+        } else {
+          console.error(`[Ablation]   No selfReport on subject — self-report arm skipped`);
+        }
+      }
+
       // 4. Process each held-out question
       const heldOutTestimonies = allTestimonies.filter((t) => t.witnessId === heldOut.id);
       const questions: AblationQuestionResult[] =
@@ -348,7 +369,25 @@ export async function runAblation(
           ].join('\n');
           const episodesStrippedPrediction = await generatePrediction(evalLlm, PREDICT_WITH_PERSONA_SYSTEM, episodesStrippedUser);
 
-          // Judge all three arms
+          // (d) self-report-only prediction (optional)
+          let selfReportPrediction: string | undefined;
+          let judgeVsSelfReport: PairResult | undefined;
+          if (selfReportPrompt !== null) {
+            const selfReportUser = [
+              `## 人格描述`,
+              selfReportPrompt,
+              '',
+              `## 证人与当事人的关系`,
+              heldOut.relation,
+              '',
+              `## 问题 (qid: ${answer.qid})`,
+              `请以这位证人(${heldOut.relation})的口吻,预测他/她会怎么回答关于当事人的这个方面。`,
+            ].join('\n');
+            selfReportPrediction = await generatePrediction(evalLlm, PREDICT_WITH_PERSONA_SYSTEM, selfReportUser);
+            judgeVsSelfReport = await judgePair(evalLlm, answer.behindText, withPersonaPrediction, selfReportPrediction);
+          }
+
+          // Judge all three (or four) arms
           const judgeVsBaseline = await judgePair(evalLlm, answer.behindText, withPersonaPrediction, baselinePrediction);
           const judgeVsClaimsStripped = await judgePair(evalLlm, answer.behindText, withPersonaPrediction, claimsStrippedPrediction);
           const judgeVsEpisodesStripped = await judgePair(evalLlm, answer.behindText, withPersonaPrediction, episodesStrippedPrediction);
@@ -362,9 +401,11 @@ export async function runAblation(
             baselinePrediction,
             claimsStrippedPrediction,
             episodesStrippedPrediction,
+            ...(selfReportPrediction !== undefined ? { selfReportPrediction } : {}),
             judgeVsBaseline,
             judgeVsClaimsStripped,
             judgeVsEpisodesStripped,
+            ...(judgeVsSelfReport !== undefined ? { judgeVsSelfReport } : {}),
           });
 
           if (options.progressFile) {
@@ -384,6 +425,10 @@ export async function runAblation(
         truncated: persona.meta.truncated,
       };
 
+      const selfReportStats = options.selfReportArm && selfReportPrompt !== null
+        ? computeArmStats(questions, (q) => q.judgeVsSelfReport ?? { status: 'discarded', reason: 'no self-report arm' })
+        : undefined;
+
       const wr: AblationWitnessResult = {
         witnessId: heldOut.id,
         relation: heldOut.relation,
@@ -393,6 +438,7 @@ export async function runAblation(
         vsBaseline: computeArmStats(questions, (q) => q.judgeVsBaseline),
         vsClaimsStripped: computeArmStats(questions, (q) => q.judgeVsClaimsStripped),
         vsEpisodesStripped: computeArmStats(questions, (q) => q.judgeVsEpisodesStripped),
+        ...(selfReportStats ? { vsSelfReport: selfReportStats } : {}),
       };
       witnessResults.push(wr);
 
@@ -426,6 +472,8 @@ export async function runAblation(
     };
   }
 
+  const hasSelfReportArm = witnessResults.some((wr) => wr.vsSelfReport !== undefined);
+
   const result: AblationResult = {
     subjectId,
     modelName: options.modelName,
@@ -435,6 +483,7 @@ export async function runAblation(
       vsBaseline: aggregateArm((wr) => wr.vsBaseline),
       vsClaimsStripped: aggregateArm((wr) => wr.vsClaimsStripped),
       vsEpisodesStripped: aggregateArm((wr) => wr.vsEpisodesStripped),
+      ...(hasSelfReportArm ? { vsSelfReport: aggregateArm((wr) => wr.vsSelfReport ?? { validPairs: 0, discardedPairs: 0, personaWins: 0, comparisonWins: 0, personaWinRate: 0, wilson95: { lower: 0, center: 0, upper: 0 } }) } : {}),
     },
   };
 

@@ -858,3 +858,236 @@ describe('Stability v2 curve', () => {
     expect(typeof stab.pairwiseOverlapLlm).toBe('function');
   });
 });
+
+/* ------------------------------------------------------------------ */
+/* 13. Batch semantic claim matching (matchClaimsBatch)                 */
+/* ------------------------------------------------------------------ */
+
+describe('Batch semantic claim matching', () => {
+  function makeClaim(text: string, id: string): Claim {
+    return {
+      id, subjectId: 's1', text, conviction: 0.9,
+      evidence: ['t1'], status: 'surviving', courtSessionId: 'cs1',
+    };
+  }
+
+  it('returns correct structure with FakeLLM', async () => {
+    const { matchClaimsBatch } = await import('../src/stability');
+
+    const claimsA = [makeClaim('他很节俭不爱花钱', 'a1'), makeClaim('他喜欢跑步热爱运动', 'a2'), makeClaim('他讨厌社交场合', 'a3')];
+    const claimsB = [makeClaim('他不爱花钱很节俭', 'b1'), makeClaim('他热爱运动喜欢跑步', 'b2'), makeClaim('他害怕参加社交场合', 'b3')];
+
+    // FakeLLM returns all-same verdicts for all 3 pairs
+    const batchResponse = JSON.stringify([
+      { pairIndex: 0, verdict: 'same' },
+      { pairIndex: 1, verdict: 'same' },
+      { pairIndex: 2, verdict: 'same' },
+    ]);
+    const fakeLlm = new FakeLLM([batchResponse]);
+
+    const result = await matchClaimsBatch(claimsA, claimsB, fakeLlm);
+    expect(result.total).toBe(3);
+    expect(result.matched).toBe(3);
+    expect(result.rate).toBeCloseTo(1, 5);
+    expect(result.pairs).toHaveLength(3);
+    // Each pair should have a verdict of 'same'
+    for (const pair of result.pairs) {
+      expect(pair.verdict).toBe('same');
+      expect(typeof pair.bigramSim).toBe('number');
+      expect(pair.bigramSim).toBeGreaterThan(0);
+    }
+  });
+
+  it('handles empty claim lists', async () => {
+    const { matchClaimsBatch } = await import('../src/stability');
+    const emptyClaim = makeClaim('something', 'x1');
+    const fakeLlm = new FakeLLM([]);
+    const result = await matchClaimsBatch([], [emptyClaim], fakeLlm);
+    expect(result.total).toBe(1);
+    expect(result.rate).toBe(0);
+    expect(result.pairs).toHaveLength(0);
+  });
+});
+
+/* ------------------------------------------------------------------ */
+/* 14. Calibration pairs: count and fact-reversal validation            */
+/* ------------------------------------------------------------------ */
+
+describe('Calibration pairs expanded', () => {
+  it('has >= 86 total pairs (24 easy + 62 hard)', () => {
+    const pairs = loadCalibrationPairs();
+    expect(pairs.length).toBeGreaterThanOrEqual(86);
+
+    const easy = pairs.filter((p: { difficulty: string }) => p.difficulty === 'easy');
+    const hard = pairs.filter((p: { difficulty: string }) => p.difficulty === 'hard');
+    expect(easy.length).toBe(24);
+    expect(hard.length).toBeGreaterThanOrEqual(62);
+  });
+
+  it('has >= 12 fact-reversal pairs (cal-h-rev*)', () => {
+    const pairs = loadCalibrationPairs();
+    const rev = pairs.filter((p: { id: string }) => p.id.startsWith('cal-h-rev'));
+    expect(rev.length).toBeGreaterThanOrEqual(12);
+  });
+
+  it('fact-reversal pairs have close and far texts with different content', () => {
+    const pairs = loadCalibrationPairs();
+    const rev = pairs.filter((p: { id: string }) => p.id.startsWith('cal-h-rev'));
+    for (const pair of rev) {
+      expect(pair.close.length).toBeGreaterThan(30);
+      expect(pair.far.length).toBeGreaterThan(30);
+      expect(pair.close).not.toBe(pair.far);
+      // They should share some vocabulary (same subject) but differ in key facts
+      expect(pair.difficulty).toBe('hard');
+    }
+  });
+});
+
+/* ------------------------------------------------------------------ */
+/* 15. Self-report ablation arm types                                   */
+/* ------------------------------------------------------------------ */
+
+describe('Self-report ablation arm', () => {
+  it('AblationOptions accepts selfReportArm flag', async () => {
+    const abl = await import('../src/ablation');
+    // Verify the type compiles - selfReportArm is optional
+    const opts: import('../src/ablation').AblationOptions = {
+      modelName: 'test',
+      selfReportArm: true,
+    };
+    expect(opts.selfReportArm).toBe(true);
+  });
+
+  it('AblationQuestionResult includes optional self-report fields', async () => {
+    // Type-level check: verify the interface compiles with selfReport fields
+    const q: import('../src/ablation').AblationQuestionResult = {
+      qid: 'q1',
+      witnessId: 'w1',
+      relation: 'test',
+      realAnswer: 'real',
+      withPersonaPrediction: 'pred',
+      baselinePrediction: 'baseline',
+      claimsStrippedPrediction: 'cs',
+      episodesStrippedPrediction: 'es',
+      selfReportPrediction: 'sr',
+      judgeVsBaseline: { status: 'valid', winner: 'first', cues: ['a', 'b'] },
+      judgeVsClaimsStripped: { status: 'valid', winner: 'first', cues: ['a', 'b'] },
+      judgeVsEpisodesStripped: { status: 'valid', winner: 'first', cues: ['a', 'b'] },
+      judgeVsSelfReport: { status: 'valid', winner: 'first', cues: ['a', 'b'] },
+    };
+    expect(q.selfReportPrediction).toBe('sr');
+    expect(q.judgeVsSelfReport?.status).toBe('valid');
+  });
+
+  it('AblationResult includes optional vsSelfReport in overall', async () => {
+    const partial: import('../src/ablation').AblationResult = {
+      subjectId: 'test',
+      modelName: 'test',
+      promptSha: 'abc',
+      witnessResults: [],
+      overall: {
+        vsBaseline: { validPairs: 0, discardedPairs: 0, personaWins: 0, comparisonWins: 0, personaWinRate: 0, wilson95: { lower: 0, center: 0, upper: 0 } },
+        vsClaimsStripped: { validPairs: 0, discardedPairs: 0, personaWins: 0, comparisonWins: 0, personaWinRate: 0, wilson95: { lower: 0, center: 0, upper: 0 } },
+        vsEpisodesStripped: { validPairs: 0, discardedPairs: 0, personaWins: 0, comparisonWins: 0, personaWinRate: 0, wilson95: { lower: 0, center: 0, upper: 0 } },
+        vsSelfReport: { validPairs: 5, discardedPairs: 1, personaWins: 4, comparisonWins: 1, personaWinRate: 0.8, wilson95: { lower: 0.4, center: 0.8, upper: 1.0 } },
+      },
+    };
+    expect(partial.overall.vsSelfReport?.personaWinRate).toBe(0.8);
+  });
+});
+
+/* ------------------------------------------------------------------ */
+/* 16. Twin-2K-500 adapter                                              */
+/* ------------------------------------------------------------------ */
+
+describe('Twin-2K-500 adapter', () => {
+  it('twin2kToSubject converts participant to Subject with selfReport', async () => {
+    const { twin2kToSubject, fabricatedTwin2KParticipants } = await import('../src/twin2k-adapter');
+    const participants = fabricatedTwin2KParticipants();
+    const subject = twin2kToSubject(participants[0]);
+    expect(subject.id).toBe('twin2k-FAKE-001');
+    expect(subject.displayName).toBe('Participant FAKE-001');
+    expect(subject.selfReport).toContain('exercise');
+    expect(subject.selfReport!.length).toBeLessThanOrEqual(6100); // maxChars=6000 + truncation suffix
+  });
+
+  it('twin2kToSubject truncates long persona text', async () => {
+    const { twin2kToSubject } = await import('../src/twin2k-adapter');
+    const longText = 'A'.repeat(10000);
+    const subject = twin2kToSubject({ pid: 'X', personaText: longText, heldOutQuestions: [] }, 500);
+    expect(subject.selfReport!.length).toBeLessThanOrEqual(520);
+    expect(subject.selfReport).toContain('[... truncated ...]');
+  });
+
+  it('fabricatedTwin2KParticipants returns 3 participants with held-out questions', async () => {
+    const { fabricatedTwin2KParticipants } = await import('../src/twin2k-adapter');
+    const ps = fabricatedTwin2KParticipants();
+    expect(ps).toHaveLength(3);
+    expect(ps[0].heldOutQuestions).toHaveLength(3);
+    expect(ps[1].heldOutQuestions).toHaveLength(2);
+    expect(ps[2].heldOutQuestions).toHaveLength(1);
+    // Verify structure
+    for (const p of ps) {
+      expect(p.pid).toBeTruthy();
+      expect(p.personaText.length).toBeGreaterThan(0);
+      for (const q of p.heldOutQuestions) {
+        expect(q.options.length).toBeGreaterThanOrEqual(3);
+        expect(q.correctIndex).toBeGreaterThanOrEqual(0);
+        expect(q.correctIndex).toBeLessThan(q.options.length);
+        expect(q.options[q.correctIndex]).toBe(q.correctAnswer);
+      }
+    }
+  });
+
+  it('predictTwin2KAnswer parses letter from FakeLLM', async () => {
+    const { predictTwin2KAnswer, fabricatedTwin2KParticipants } = await import('../src/twin2k-adapter');
+    const p = fabricatedTwin2KParticipants()[0];
+    const q = p.heldOutQuestions[0]; // correctIndex=1 (B)
+
+    // FakeLLM returns "B" => should match correctIndex=1
+    const fakeLlm = new FakeLLM(['B']);
+    const pred = await predictTwin2KAnswer(fakeLlm, p.personaText, q);
+    expect(pred.predictedIndex).toBe(1);
+    expect(pred.correct).toBe(true);
+    expect(pred.predictedAnswer).toBe(q.options[1]);
+  });
+
+  it('predictTwin2KAnswer handles wrong letter', async () => {
+    const { predictTwin2KAnswer, fabricatedTwin2KParticipants } = await import('../src/twin2k-adapter');
+    const p = fabricatedTwin2KParticipants()[0];
+    const q = p.heldOutQuestions[0]; // correctIndex=1 (B)
+
+    // FakeLLM returns "C" => predictedIndex=2 != correctIndex=1
+    const fakeLlm = new FakeLLM(['C']);
+    const pred = await predictTwin2KAnswer(fakeLlm, p.personaText, q);
+    expect(pred.predictedIndex).toBe(2);
+    expect(pred.correct).toBe(false);
+  });
+
+  it('runTwin2K computes accuracy over all questions', async () => {
+    const { runTwin2K, fabricatedTwin2KParticipants } = await import('../src/twin2k-adapter');
+    const p = fabricatedTwin2KParticipants()[0]; // 3 questions, all correctIndex=1 (B)
+
+    // FakeLLM returns B, B, A => 2 correct out of 3
+    const fakeLlm = new FakeLLM(['B', 'B', 'A']);
+    const result = await runTwin2K(fakeLlm, p);
+    expect(result.pid).toBe('FAKE-001');
+    expect(result.totalQuestions).toBe(3);
+    expect(result.correctCount).toBe(2);
+    expect(result.accuracy).toBeCloseTo(2 / 3, 5);
+  });
+
+  it('dataset metadata matches CC BY 4.0 license', async () => {
+    // Verify the adapter header documents CC BY 4.0 and arXiv citation
+    const fs = await import('node:fs');
+    const path = await import('node:path');
+    const src = fs.readFileSync(
+      path.join(__dirname, '..', 'src', 'twin2k-adapter.ts'),
+      'utf-8',
+    );
+    expect(src).toContain('CC BY 4.0');
+    expect(src).toContain('arXiv 2505.17479');
+    expect(src).toContain('Toubia');
+    expect(src).toContain('LLM-Digital-Twin/Twin-2K-500');
+  });
+});
