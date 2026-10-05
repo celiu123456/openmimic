@@ -99,12 +99,14 @@ Every functional or numerical statement in README.en.md mapped to its evidence s
 | 2 pairs discarded | eval-ledger entry 8: "作废对: 2" | OK |
 | N=16 is small, CI is wide, directional reading | eval-ledger entry 8 解读: "N=16, 区间很宽" | OK |
 | Ablation: full vs baseline 100% (15/15, Wilson CI [79.6%, 100%]) | eval-ledger entry 9: "vs-baseline... 100.0%... [79.6%, 100%]" | OK |
-| Removing claims: 53.3%, removing episodes: 64.3% | eval-ledger entry 9: "vs-claims-stripped 53.3%", "vs-episodes-stripped 64.3%" | OK |
+| Full vs claims-removed: 53.3% (8/15), removing claims almost no difference | eval-ledger entry 9: "vs-claims-stripped 53.3%" | OK |
+| Full vs episodes-removed: 64.3% (9/14), directionally episodes matter more | eval-ledger entry 9: "vs-episodes-stripped 64.3%" | OK |
 | Both CIs cross 50%, not statistically conclusive | eval-ledger entry 9: "[30.1%, 75.2%]" and "[38.8%, 83.7%]" both cross 50% | OK |
 | Stability: 67--73 claims, overlap 46.9%, SD 13.8% | eval-ledger entry 5: "论断条数接近 (67-73)", "重合率均值: 46.9%", "标准差: 13.8%" | OK |
 | N=3 pairs for stability | eval-ledger entry 5: "3 对" | OK |
-| Room leak: 4 runs x 0 leaks | eval-ledger entry 11: "0 泄密, 全部 criteria pass" | OK |
-| No-talk list size varied (2--6 items) | eval-ledger entry 11: "分别产出 6 条和 2 条 no-talk 条目" | OK |
+| Room leak: earlier 4 behind-room runs had 0 detected leaks | eval-ledger entry 11: "0 泄密, 全部 criteria pass" | OK |
+| Subsequent regression found leaks in face-to-face room and euphemistic partial leak | Post-baseline regression (2026-10-07, reported by coordinator) | OK (README now states both findings) |
+| No-talk list non-deterministic, produced as few as 1 item | eval-ledger entry 11 + coordinator report | OK |
 | Liveness scaffold built but uncalibrated | eval-ledger Liveness section: "UNCALIBRATED... 没有经过标定" | OK |
 | No human-labeled real-person samples exist | eval-ledger Liveness: "不存在人工指认的真人样本白名单" | OK |
 
@@ -112,8 +114,10 @@ Every functional or numerical statement in README.en.md mapped to its evidence s
 
 | Statement | Source | Status |
 |---|---|---|
+| Leak protection is not a guarantee (first limitation listed) | claims-audit: RoomEngine 备注 + coordinator regression report | OK |
+| No-talk list may produce as few as 1 item | Coordinator report | OK |
+| Face-to-face room leak protection still being completed | Coordinator report | OK |
 | Demo data is handwritten fiction | eval-ledger: repeated throughout; fixtures/limo.ts | OK |
-| Leak protection is not a guarantee | claims-audit: RoomEngine 备注 | OK |
 | Prompt injection isolation reduces but does not eliminate risk | claims-audit: P4 "不可信内容隔离" = 已实现 (functional; limitation is design-inherent) | OK |
 | MinHash threshold 0.5 for reflux | claims-audit: P4 "threshold 0.5" | OK |
 | Small evaluation sample sizes | eval-ledger: all entries | OK |
@@ -154,7 +158,8 @@ Every functional or numerical statement in README.en.md mapped to its evidence s
 | Crisis-word circuit breaker concept from Twig | claims-audit: "危机协议三原则(借鉴衔枝)" = 部分 | OK (README says "concept" not "full implementation") |
 | Contested veto flow from Twig design document | claims-audit: "contested 否决流(借鉴衔枝)" = 已实现 | OK |
 | Claim permission wall from Twig design document | claims-audit: "论断权限墙(借鉴衔枝)" = 已实现 | OK |
-| Counter-evidence search from Twig | claims-audit: "反证搜索(借鉴衔枝)" = 已实现 | OK |
+| Claim pairing is OpenMimic's own mechanism, not Twig's counter-evidence search | Own mechanism; README now states this explicitly | OK |
+| Counter-evidence search planned, no code | Chinese README "计划借鉴" is correct; claims-audit row 120 mislabels pairing as counter-evidence search (see Audit rows section) | OK |
 | DEPLOY-FOR-AI format modeled after Twig | claims-audit: "DEPLOY-FOR-AI 做法(借鉴衔枝)" = 已实现 | OK |
 | Blind derivation audit planned, not implemented | claims-audit: "盲推导审计(借鉴衔枝)" = 计划 | OK |
 | Process evaluation partially implemented | claims-audit: "过程评测三指标" = 部分 | OK |
@@ -188,10 +193,21 @@ Every functional or numerical statement in README.en.md mapped to its evidence s
 
 ---
 
+## Audit rows found to be wrong
+
+The following claims-audit.md entry was found to be incorrect during English documentation review:
+
+| claims-audit row | What it says | What is actually true | Impact on English README |
+|---|---|---|---|
+| Row 120: "反证搜索(借鉴衔枝)" = 已实现, citing `engines/court/src/conflict.ts` | Labels EmbeddingClaimPairFinder + KeywordClaimPairFinder as an implementation of Twig's counter-evidence search | These are **claim pairing** mechanisms (finding semantically related claims across witnesses). Twig's counter-evidence search is a different operation: generating a counter-hypothesis for an existing claim, then searching for evidence against it. No code for that exists in the repo. The Chinese README correctly lists counter-evidence search under "计划借鉴(尚未实现)". | README.en.md was corrected: counter-evidence search moved to "Planned adaptations (not yet implemented)"; claim pairing described as OpenMimic's own mechanism without attribution to Twig. |
+
+---
+
 ## Summary
 
 | Category | Count |
 |---|---|
-| Total statements checked | 91 |
-| Supported by claims-audit / eval-ledger / source code | 91 |
+| Total statements checked | 95 |
+| Supported by claims-audit / eval-ledger / source code / coordinator report | 95 |
 | Unsupported (should not be in README) | 0 |
+| claims-audit rows found to be wrong | 1 |

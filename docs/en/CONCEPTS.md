@@ -68,7 +68,7 @@ Before a behind-the-scenes room session, the RoomEngine generates a no-talk list
 
 Leak detection runs in two stages: keyword fast-scan followed by LLM semantic judgment (including partial leak detection). If a leak is detected, the engine attempts a guided rewrite using safe material (up to 2 retries), falling back to a stage direction if rewrite fails. A room session enforces a 25% stage-direction cap.
 
-**Limitation:** The no-talk list is regenerated each session and may vary. Whether something counts as a "partial leak" depends on the model's judgment.
+**Limitation:** The no-talk list is regenerated each session and may vary -- it has produced as few as 1 item for a fixture with multiple secrets. Euphemistic wording can bypass keyword detection. The face-to-face room's integration with the no-talk list and leak verification is still being completed. Whether something counts as a "partial leak" depends on the model's judgment.
 
 **Code:** `engines/room/src/room.ts` (no-talk generation, leak detection, guided rewrite), `engines/room/src/wordlist.ts` (crisis/diagnosis word lists).
 

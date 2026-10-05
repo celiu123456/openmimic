@@ -8,7 +8,7 @@ OpenMimic builds a digital persona from the testimony of the people around someo
 
 ## What you can do today
 
-**The Room You're Not In** -- Send an invite link to 5--10 people who know you. Each spends a few minutes answering questions about you. Then open the room: their digital stand-ins are in there talking about you while you watch from outside. Press the button -- push the door open. The same people, different tone. What they say behind your back and what they say to your face, shown side by side for the first time. The behind-the-scenes room uses only material each witness explicitly authorized for display (see Ethics & Consent below). Leak protection is present (no-talk list generation, keyword + LLM verification, guided rewrite) but depends on model judgment and is not a guarantee.
+**The Room You're Not In** -- Send an invite link to 5--10 people who know you. Each spends a few minutes answering questions about you. Then open the room: their digital stand-ins are in there talking about you while you watch from outside. Press the button -- push the door open. The same people, different tone. What they say behind your back and what they say to your face, shown side by side for the first time. The behind-the-scenes room uses only material each witness explicitly authorized for display (see Ethics & Consent below). Leak protection (no-talk list generation, keyword + LLM verification, guided rewrite) is present in the behind room but depends on model judgment, is not a guarantee, and is still being extended to the face-to-face room (see Limitations).
 
 **Rebuild anyone** -- You do not need the subject's participation to build their persona: your and your colleagues' testimony about your boss is the input. Talk to the version of yourself that your friends see, keep a composite of a deceased relative built from family testimony, or construct a historical figure from historical accounts. Historical figures have no self-report data; third-party testimony is all that exists.
 
@@ -119,11 +119,11 @@ All evaluation data to date uses **Lin Mo**, a fictional demo character with **h
 
 **Leave-One-Witness-Out (LOWO)** (entry 8): With one of 6 witnesses held out, the persona predicts the held-out witness's answers. Persona win rate: 87.5% (14/16 valid pairs, Wilson 95% CI [64.0%, 96.5%]). 2 pairs discarded due to position inconsistency. N=16 is small; the confidence interval is wide; this is a directional reading.
 
-**Ablation** (entry 9): Three-arm comparison (full persona vs. baseline, vs. episodes-only, vs. claims-only). Full persona vs. no-persona baseline: 100% win rate (15/15 valid pairs, Wilson CI [79.6%, 100%]). Removing claims had smaller impact (53.3%) than removing episodes (64.3%), directionally suggesting episodes contribute more, but both CIs cross 50% and the result is not statistically conclusive. N=14--15.
+**Ablation** (entry 9): Three-arm comparison. Each arm pits the full persona against a variant: (1) full persona vs. no-persona baseline, (2) full persona vs. the same persona with the claims section removed, (3) full persona vs. the same persona with the episodes section removed. Full persona vs. no-persona baseline: 100% win rate (15/15 valid pairs, Wilson CI [79.6%, 100%]). Full persona vs. claims-removed: 53.3% (8/15) -- removing claims made almost no difference. Full persona vs. episodes-removed: 64.3% (9/14) -- directionally suggesting episodes contribute more than claims. Both CIs cross 50%; the sample is too small for a statistical conclusion. N=14--15.
 
 **Stability** (entry 5): Running the court 3 times on the same testimony produces 67--73 surviving claims per run. Overlap rate (character bigram Jaccard >= 0.5, greedy matching): 46.9% mean across 3 pairs, SD 13.8%. This number reflects both court non-determinism and the strictness of the matching method (semantic rewording counts as non-overlap). N=3 pairs.
 
-**Room leak protection** (entry 11): 4 behind-room runs (2 fixtures x 2 runs) produced 0 secret leaks across all utterances. No-talk list size varied between runs (2--6 items for the same fixture), confirming non-determinism in the LLM-generated list.
+**Room leak protection** (entry 11): An earlier batch of 4 behind-room runs (2 fixtures x 2 runs) produced 0 detected secret leaks. Subsequent regression testing with real-model runs found leaks in the face-to-face room (which had not been wired into the no-talk list and leak verification pipeline) and a partial leak via euphemistic wording in a behind room. Fixes are in progress. The no-talk list is non-deterministic; one fixture produced only 1 item in its list on one run.
 
 **Liveness** (activity): The liveness evaluation scaffold (13-signal rubric, calibration gate, scenario scripts, ablation harness) is built but **uncalibrated** -- no human-labeled real-person samples exist. The pipeline will not produce readings until calibration samples are provided and pass the accuracy gate (>80%, >=20 valid pairs, <=30% position bias).
 
@@ -131,8 +131,8 @@ All evaluation data to date uses **Lin Mo**, a fictional demo character with **h
 
 ## Limitations
 
+- **Leak protection is not a guarantee.** The no-talk list, keyword scan, and LLM verification reduce but do not eliminate the risk of cross-witness secret disclosure. The list is regenerated each time, may vary, and has produced as few as 1 item for a fixture with multiple secrets. Euphemistic wording can bypass keyword detection. The face-to-face room's leak protection pipeline is still being completed. Partial-leak boundary (e.g. "changed cities" vs. "changed pace") depends on the model's judgment.
 - **Demo data is handwritten fiction.** The built-in Lin Mo demo was written by hand, not produced by the engine from real testimony. Do not treat demo quality as representative of engine output.
-- **Leak protection is not a guarantee.** The no-talk list, keyword scan, and LLM verification reduce but do not eliminate the risk of cross-witness secret disclosure. The list is regenerated each time and may vary. Partial-leak boundary (e.g. "changed cities" vs. "changed pace") depends on the model's judgment.
 - **Prompt injection isolation reduces but does not eliminate risk.** User text is wrapped in delimited data blocks with guard instructions and scanned for injection patterns. This makes injection harder but not impossible.
 - **AI reflux detection is pattern-based.** MinHash fingerprinting (3-char shingles, 128 dimensions) detects verbatim and near-verbatim recycling of AI output back into testimony. Paraphrased reflux below the threshold (Jaccard 0.5) will not be caught.
 - **Small evaluation sample sizes.** All reported numbers have N <= 18 valid pairs, wide confidence intervals, and are directional readings on fictional data.
@@ -207,11 +207,14 @@ These measures reduce risk but do not eliminate it. See [docs/ARCHITECTURE.md](d
 ### Implemented adaptations
 
 - **Conviction scoring**, the `contested` status name, and the **crisis-word circuit breaker** concept are adapted from [Twig](https://github.com/qimingjiu/twig-memory) (MIT). This project extends Twig's approach from "a single AI's longitudinal understanding audit of one person" to "cross-examination across multiple witness sources." The code is an independent implementation; see Twig's [ATTRIBUTION.md](https://github.com/qimingjiu/twig-memory/blob/main/ATTRIBUTION.md) for scope and comparison.
-- The **contested veto flow**, **claim permission wall** (diagnostic/crisis term filtering), and **counter-evidence search** (embedding + keyword pair finding) draw on mechanisms described in the Twig design document, adapted to the multi-witness setting.
+- The **contested veto flow** and **claim permission wall** (diagnostic/crisis term filtering) draw on mechanisms described in the Twig design document, adapted to the multi-witness setting.
 - The **DEPLOY-FOR-AI** onboarding format is modeled after Twig's.
+
+Claim pairing (finding semantically related claims across witnesses via LLM, embedding cosine, or keyword overlap) is OpenMimic's own mechanism for cross-witness comparison. It is not an implementation of Twig's counter-evidence search.
 
 ### Planned adaptations (not yet implemented)
 
+- **Counter-evidence search** (generating a counter-hypothesis for an existing claim, then searching for evidence against it) is described in Twig's design document. OpenMimic has no code for this; the existing claim pairing mechanism finds related claims across witnesses but does not generate counter-hypotheses.
 - **Blind derivation audit** is described in Twig's design document and planned for OpenMimic but has no code.
 - **Process evaluation metrics**: evidence coverage is implemented in CourtReport; contradiction response count is available as a proxy; memory repair has no corresponding implementation.
 
