@@ -1,5 +1,6 @@
 import type { Claim, CorpusItem, Divergence, Episode, StyleSample } from '@openmimic/shared';
 import { OBSERVER_GUARD, wrapUntrusted, appendGuardInstruction } from '@openmimic/shared';
+import { deriveDisclosure, classifyContentSubject, type DisclosureLevel } from './disclosure';
 import type { EmbeddingClient } from './embedding';
 import { cosine } from './embedding';
 import type { Store } from './store';
@@ -122,14 +123,21 @@ export function collectQuotableSamples(store: Store, subjectId: string): StyleSa
 /* Section renderers                                                   */
 /* ------------------------------------------------------------------ */
 
-function renderClaimLine(claim: Claim): string {
+function renderClaimLine(
+  claim: Claim,
+  disclosure?: DisclosureLevel,
+  holdUntilRaised?: boolean,
+): string {
   const qualifier =
     claim.qualifiers && claim.qualifiers.length > 0
       ? `;限定:${claim.qualifiers.join(';')}`
       : '';
   const reraised = claim.reraised ? ';重新提出:又有人提到类似的事' : '';
   const kindTag = claim.kind && claim.kind !== 'pattern' ? `[${claim.kind}]` : '';
-  return `- ${kindTag}${claim.text}（置信 ${round2(claim.conviction).toFixed(2)}${qualifier}${reraised}）`;
+  const discTag = disclosure === 'reference_only' ? '[仅可引述大意]'
+    : disclosure === 'presence_only' ? '[仅可感知氛围]' : '';
+  const holdTag = holdUntilRaised ? '[不主动提起]' : '';
+  return `- ${kindTag}${discTag}${holdTag}${claim.text}（置信 ${round2(claim.conviction).toFixed(2)}${qualifier}${reraised}）`;
 }
 
 /**
@@ -144,6 +152,8 @@ function renderWitnessGroupedClaims(
   claims: Claim[],
   witnessMap: Map<string, string>,
   interlocutor?: string,
+  disclosureMap?: Map<string, DisclosureLevel>,
+  holdUntilRaisedIds?: Set<string>,
 ): string {
   // Group by witness relation (primary witness)
   const groups = new Map<string, Claim[]>();
@@ -175,7 +185,11 @@ function renderWitnessGroupedClaims(
         : `### ${key}`;
     lines.push(label);
     for (const claim of group) {
-      lines.push(renderClaimLine(claim));
+      lines.push(renderClaimLine(
+        claim,
+        disclosureMap?.get(claim.id),
+        holdUntilRaisedIds?.has(claim.id),
+      ));
     }
   }
   return lines.join('\n');
@@ -439,13 +453,39 @@ export async function assemblePersonaContext(
   const identity = personaIdentityLine(displayName);
 
   // Claims: surviving, above threshold, sorted by conviction
+  // Disclosure pass: filter and annotate by four-level disclosure policy
   const allClaims = store
     .listClaimsBySubject(subjectId)
     .filter((c) => c.status === 'surviving');
-  const eligible = allClaims
+
+  // Build witness interlocutor mapping for disclosure
+  const interlocutorWitnessId = opts.interlocutor
+    ? store.listWitnessesBySubject(subjectId)
+        .find((w) => w.relation === opts.interlocutor)?.id
+    : undefined;
+
+  // Apply disclosure filter: drop excluded, annotate reference_only
+  const disclosureMap = new Map<string, DisclosureLevel>();
+  const holdUntilRaisedIds = new Set<string>();
+  const disclosedClaims = allClaims.filter((c) => {
+    const contentSubject = classifyContentSubject({
+      sourceWitnessIds: c.witnessIds ?? [],
+      interlocutorWitnessId,
+    });
+    const result = deriveDisclosure({
+      admissible: true,
+      purpose: 'persona',
+      contentSubject,
+    });
+    disclosureMap.set(c.id, result.disclosure);
+    if (result.holdUntilRaised) holdUntilRaisedIds.add(c.id);
+    return result.disclosure !== 'excluded';
+  });
+
+  const eligible = disclosedClaims
     .filter((c) => c.conviction >= PERSONA_MIN_CONVICTION)
     .sort((a, b) => b.conviction - a.conviction);
-  const belowThreshold = allClaims.filter(
+  const belowThreshold = disclosedClaims.filter(
     (c) => c.conviction < PERSONA_MIN_CONVICTION,
   );
 
@@ -492,7 +532,9 @@ export async function assemblePersonaContext(
   }
 
   // Build sections content
-  const claimsText = renderWitnessGroupedClaims(eligible, witnessMap, opts.interlocutor);
+  const claimsText = renderWitnessGroupedClaims(
+    eligible, witnessMap, opts.interlocutor, disclosureMap, holdUntilRaisedIds,
+  );
   const episodesText = renderEpisodes(rankedEpisodes, witnessMap);
   const divergencesText = renderDivergences(promptDivergences, witnessMap);
   const corpusText = renderCorpus(corpusItems);
@@ -527,7 +569,9 @@ export async function assemblePersonaContext(
       claimCount -= 1;
       truncated = true;
       const trimmedClaims = eligible.slice(0, claimCount);
-      sections.claims = renderWitnessGroupedClaims(trimmedClaims, witnessMap, opts.interlocutor);
+      sections.claims = renderWitnessGroupedClaims(
+        trimmedClaims, witnessMap, opts.interlocutor, disclosureMap, holdUntilRaisedIds,
+      );
       prompt = assembleSections(sections, includeEpisodes, includeClaims, includeCorpus, includeSelfReport, includeStyle);
     }
     if (claimCount === 0) {
