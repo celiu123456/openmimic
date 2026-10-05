@@ -175,6 +175,63 @@ describe('verifyPersonaResponse', () => {
     expect(result.verifyCallCount).toBe(1);
   });
 
+  it('off_topic substitution triggers rewrite then fallback', async () => {
+    // User asks about "搬家" but persona answers about "住院" — a different event
+    const result = await verifyPersonaResponse({
+      systemPrompt: SAMPLE_SYSTEM_PROMPT,
+      userMessage: '听说你帮周野搬过家？那次怎么回事？',
+      response: '哦那次啊,周野住院我去看了他,带了点水果。',
+      llm: fakeLLM([
+        // First verify: detects off-topic substitution
+        '{"contradicts":[],"unsupported":[],"off_topic":["周野住院我去看了他,带了点水果"],"user_premise":["搬过家"]}',
+        // Rewrite attempt
+        '记不太清了。',
+        // Re-verify the rewrite: clean
+        '{"contradicts":[],"unsupported":[],"off_topic":[],"user_premise":[]}',
+      ]),
+      displayName: '林默',
+    });
+    expect(result.verified).toBe(true);
+    expect(result.passed).toBe(false);
+    expect(result.unfoundedFragments).toContain('周野住院我去看了他,带了点水果');
+    expect(result.finalResponse).toBe('记不太清了。');
+    expect(result.verifyCallCount).toBe(3);
+  });
+
+  it('off_topic triggers fallback when rewrite still substitutes', async () => {
+    const result = await verifyPersonaResponse({
+      systemPrompt: SAMPLE_SYSTEM_PROMPT,
+      userMessage: '你帮周野搬过家吗？',
+      response: '搬家？我记得的是有次他住院了。',
+      llm: fakeLLM([
+        '{"contradicts":[],"unsupported":[],"off_topic":["有次他住院了"],"user_premise":["搬过家"]}',
+        '搬家？好像有这事,当时他出了个状况。',
+        '{"contradicts":[],"unsupported":["出了个状况"],"off_topic":[],"user_premise":["搬过家"]}',
+      ]),
+      displayName: '林默',
+    });
+    expect(result.verified).toBe(true);
+    expect(result.passed).toBe(false);
+    expect(result.finalResponse).toBe('记不太清了。');
+    expect(result.verifyCallCount).toBe(3);
+  });
+
+  it('off_topic is not triggered for on-topic grounded answers', async () => {
+    const result = await verifyPersonaResponse({
+      systemPrompt: SAMPLE_SYSTEM_PROMPT,
+      userMessage: '听说你帮周野搬过家？',
+      response: '嗯,搬过。加班到十点还是去了,搬完在楼道里坐着歇了会儿。',
+      llm: fakeLLM([
+        '{"contradicts":[],"unsupported":[],"off_topic":[],"user_premise":["搬过家"]}',
+      ]),
+      displayName: '林默',
+    });
+    expect(result.verified).toBe(true);
+    expect(result.passed).toBe(true);
+    expect(result.unfoundedFragments).toEqual([]);
+    expect(result.verifyCallCount).toBe(1);
+  });
+
   it('structured format: contradicts triggers rewrite', async () => {
     const result = await verifyPersonaResponse({
       systemPrompt: SAMPLE_SYSTEM_PROMPT,

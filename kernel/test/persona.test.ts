@@ -13,6 +13,7 @@ import {
   Store,
   assemblePersonaContext,
   extractNameHints,
+  keywordOverlap,
   personaIdentityLine,
 } from '@openmimic/kernel';
 
@@ -903,5 +904,61 @@ describe('assemblePersonaContext v2', () => {
     expect(systemPrompt).toContain('ep-priv-1');
     // ep-priv-2 contains "谁都没说" and should be filtered out
     expect(systemPrompt).not.toContain('ep-priv-2');
+  });
+});
+
+/* ------------------------------------------------------------------ */
+/* keywordOverlap — CJK-aware episode ranking                         */
+/* ------------------------------------------------------------------ */
+
+describe('keywordOverlap', () => {
+  it('returns 0 for empty query', () => {
+    expect(keywordOverlap('', '林默帮周野搬家')).toBe(0);
+  });
+
+  it('returns 0 for no overlap', () => {
+    expect(keywordOverlap('打篮球', '林默帮周野搬家')).toBe(0);
+  });
+
+  it('matches exact CJK substring', () => {
+    const score = keywordOverlap('搬家', '去年答应帮我搬家');
+    expect(score).toBeGreaterThan(0);
+  });
+
+  it('partial morphological overlap: "搬过家" recalls "搬家"', () => {
+    // Core bug fix: "搬过家" should recall episodes containing "搬家"
+    // because they share characters "搬" and "家"
+    const score = keywordOverlap('听说你帮周野搬过家', '去年答应帮我搬家,结果加班到十点');
+    expect(score).toBeGreaterThan(0);
+  });
+
+  it('"搬过家" scores higher on "搬家" text than unrelated text', () => {
+    const scoreRelevant = keywordOverlap(
+      '听说你帮周野搬过家？那次怎么回事？',
+      '去年答应帮我搬家,结果加班到十点还是来了',
+    );
+    const scoreIrrelevant = keywordOverlap(
+      '听说你帮周野搬过家？那次怎么回事？',
+      '林默最近状态不太好,总是加班到很晚',
+    );
+    expect(scoreRelevant).toBeGreaterThan(scoreIrrelevant);
+  });
+
+  it('Latin/digit tokens still work', () => {
+    const score = keywordOverlap('hello world', 'hello beautiful world');
+    expect(score).toBeGreaterThan(0);
+  });
+
+  it('mixed CJK and Latin tokens', () => {
+    const score = keywordOverlap('iPhone 手机', '他用iPhone很久了,手机不离手');
+    expect(score).toBeGreaterThan(0);
+  });
+
+  it('bigram match scores higher than unigram-only match', () => {
+    // "搬家" bigram appears in both query and text — tighter match
+    const scoreBigram = keywordOverlap('搬家', '他帮我搬家');
+    // "搬" and "买" share only one char overlap
+    const scoreUnigram = keywordOverlap('搬买', '他帮我搬家');
+    expect(scoreBigram).toBeGreaterThan(scoreUnigram);
   });
 });

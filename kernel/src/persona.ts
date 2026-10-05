@@ -37,6 +37,7 @@ export const PERSONA_DISCIPLINE = [
   '- 如果证人们集体回避了某个话题,你也不要主动提起——那是他们共同的沉默,不是你能替他们打破的。',
   '- 不要在回复里写舞台指示括号(如"(停顿了一下)""(沉默)""(叹气)")——只输出台词本身。',
   '- 被问到的事不在上面的素材里,就按本人口吻说记不清或不接("这事不方便说""记不太清了"),不要补细节。',
+  '- 被问到某件具体的事,只在素材里确有这件事时才讲;没有就说记不清,不要拿别的事来代替。',
   '- 素材里有的事可以用自己的口吻简短地说,但只说素材里写明的部分——不补原因、结果、时间、数量和别处的细节;不同人讲的事不要拼在一起。',
   '- 被嘱咐保密的事（如证人说"别跟谁说""只跟你说"的内容）,直接不接("这事不方便说"),不透露任何细节。',
 ].join('\n');
@@ -273,21 +274,60 @@ function renderCorpus(items: CorpusItem[]): string {
 /* Episode ranking                                                     */
 /* ------------------------------------------------------------------ */
 
-/** Simple keyword overlap score between a query and episode text. */
-function keywordOverlap(query: string, text: string): number {
-  const qTokens = new Set(
-    query
-      .toLowerCase()
-      .split(/[\s,。！？!?.;;\n]+/)
-      .filter((t) => t.length > 1),
-  );
-  if (qTokens.size === 0) return 0;
-  const tLower = text.toLowerCase();
-  let hits = 0;
-  for (const token of qTokens) {
-    if (tLower.includes(token)) hits++;
+const CJK_CHAR = /[㐀-鿿]/;
+const LATIN_TOKEN = /[a-z0-9]+/g;
+
+/**
+ * Tokenize a string into CJK bigrams + individual CJK characters + Latin words.
+ *
+ * CJK text has no spaces, so splitting on punctuation produces oversized tokens
+ * that never match. Instead we extract CJK character bigrams (the same strategy
+ * used by the court tokenizer) plus individual CJK characters so that partial
+ * morphological overlaps still score (e.g. "搬过家" produces bigrams "搬过",
+ * "过家" and unigrams "搬", "过", "家" — the unigram "搬" and "家" match
+ * against text containing "搬家").
+ */
+function cjkTokenize(input: string): Set<string> {
+  const tokens = new Set<string>();
+  const lower = input.toLowerCase();
+
+  // Latin/digit words (length >= 2)
+  for (const m of lower.matchAll(LATIN_TOKEN)) {
+    if (m[0].length >= 2) tokens.add(m[0]);
   }
-  return hits / qTokens.size;
+
+  // CJK characters → bigrams + unigrams
+  const cjk = [...lower].filter((ch) => CJK_CHAR.test(ch));
+  for (let i = 0; i < cjk.length; i++) {
+    tokens.add(cjk[i]); // unigram
+    if (i + 1 < cjk.length) tokens.add(`${cjk[i]}${cjk[i + 1]}`); // bigram
+  }
+
+  return tokens;
+}
+
+/**
+ * Keyword overlap score between a query and episode text.
+ *
+ * Uses CJK-aware tokenization so that character-level overlaps are detected
+ * (e.g. query "搬过家" recalls episodes containing "搬家").
+ * Bigram matches count double to reward tighter overlap.
+ *
+ * @internal exported for testing
+ */
+export function keywordOverlap(query: string, text: string): number {
+  const qTokens = cjkTokenize(query);
+  if (qTokens.size === 0) return 0;
+  const tTokens = cjkTokenize(text);
+
+  let score = 0;
+  let maxScore = 0;
+  for (const token of qTokens) {
+    const weight = token.length >= 2 && CJK_CHAR.test(token[0]) ? 2 : 1;
+    maxScore += weight;
+    if (tTokens.has(token)) score += weight;
+  }
+  return maxScore > 0 ? score / maxScore : 0;
 }
 
 async function rankEpisodes(

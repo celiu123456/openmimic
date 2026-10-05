@@ -101,20 +101,22 @@ const VERIFY_SYSTEM = [
   '2. 用户问题',
   '3. 人格的回答',
   '',
-  '任务:逐句检查人格回答,把每一个具体细节归入以下三类之一:',
+  '任务:逐句检查人格回答,把每一个具体细节归入以下四类之一:',
   '',
   'A. contradicts — 与素材矛盾(回答说的和素材写的相反或冲突)',
   'B. unsupported — 素材里没有的新增具体事实(人名、地点、时间、金额、原因、结果、行为细节)',
-  'C. user_premise — 仅复述/承认/否认用户问题里已经提到的事物(不算无据)',
+  'C. off_topic — 用户明确问的是一件具体的事,回答讲的却是素材里的另一件事(即使那件事本身有据,也算答非所问)',
+  'D. user_premise — 仅复述/承认/否认用户问题里已经提到的事物(不算无据)',
   '',
   '判定规则:',
   '- 用户问题里提到的人名、事件、称呼:人格对此进行承认、否认或简短回应,不算无据——归入 user_premise。',
   '- 素材事例标签里的称呼线索(如"他叫对方:周野")说明了该关系人的真实称呼,引用这些称呼不算无据。',
   '- 人格在回应时新增了素材里没有的具体细节(如补充了时间、地点、原因等),那些新增部分归 unsupported。',
+  '- 用户问"搬家"的事,回答却讲了"住院"的事——即使住院确有素材,这也是 off_topic。',
   '- 模糊表达(如"嗯""还行""记不太清")不算无据。',
   '',
   '只输出JSON:',
-  '{"contradicts":["..."],"unsupported":["..."],"user_premise":["..."]}',
+  '{"contradicts":["..."],"unsupported":["..."],"off_topic":["..."],"user_premise":["..."]}',
   '任何一类为空就写空数组。',
 ].join('\n');
 
@@ -137,10 +139,10 @@ function buildVerifyUser(
 
 function buildRewriteSystem(fragments: string[]): string {
   return [
-    '你是人格回答改写器。去除下列无据片段,保留有据部分,保持口吻。',
+    '你是人格回答改写器。去除下列无据或答非所问的片段,保留有据部分,保持口吻。',
     '如果去除后什么都不剩,输出一句该人格口吻的回避("记不太清了""这事不方便说")。',
     '',
-    `无据片段:${fragments.join(', ')}`,
+    `需去除的片段:${fragments.join(', ')}`,
   ].join('\n');
 }
 
@@ -148,12 +150,13 @@ function buildRewriteSystem(fragments: string[]): string {
 export interface VerifyCategories {
   contradicts: string[];
   unsupported: string[];
+  offTopic: string[];
   userPremise: string[];
 }
 
 /** Best-effort JSON extraction for the verify response. */
 function parseVerifyResult(raw: string): VerifyCategories {
-  const empty: VerifyCategories = { contradicts: [], unsupported: [], userPremise: [] };
+  const empty: VerifyCategories = { contradicts: [], unsupported: [], offTopic: [], userPremise: [] };
   try {
     const jsonMatch = raw.match(/\{[\s\S]*\}/);
     if (!jsonMatch) return empty;
@@ -163,17 +166,18 @@ function parseVerifyResult(raw: string): VerifyCategories {
       Array.isArray(v) ? v.filter((s): s is string => typeof s === 'string' && s.length > 0) : [];
 
     // New structured format
-    if ('contradicts' in parsed || 'unsupported' in parsed || 'user_premise' in parsed) {
+    if ('contradicts' in parsed || 'unsupported' in parsed || 'off_topic' in parsed || 'user_premise' in parsed) {
       return {
         contradicts: toArr(parsed.contradicts),
         unsupported: toArr(parsed.unsupported),
+        offTopic: toArr(parsed.off_topic),
         userPremise: toArr(parsed.user_premise),
       };
     }
 
     // Legacy format fallback: {"unfounded": [...]}
     if (Array.isArray(parsed.unfounded)) {
-      return { contradicts: [], unsupported: toArr(parsed.unfounded), userPremise: [] };
+      return { contradicts: [], unsupported: toArr(parsed.unfounded), offTopic: [], userPremise: [] };
     }
 
     return empty;
@@ -182,9 +186,9 @@ function parseVerifyResult(raw: string): VerifyCategories {
   }
 }
 
-/** Extract only the actionable unfounded fragments (contradicts + unsupported). */
+/** Extract only the actionable unfounded fragments (contradicts + unsupported + off_topic). */
 function getUnfounded(cats: VerifyCategories): string[] {
-  return [...cats.contradicts, ...cats.unsupported];
+  return [...cats.contradicts, ...cats.unsupported, ...cats.offTopic];
 }
 
 const FALLBACK_RESPONSE = '记不太清了。';
