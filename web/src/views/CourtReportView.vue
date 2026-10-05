@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { ref, computed, onMounted } from 'vue';
-import { useRoute } from 'vue-router';
+import { useRoute, useRouter } from 'vue-router';
 
 interface DivergencePosition {
   witnessId: string;
@@ -46,6 +46,7 @@ interface SilenceSignalItem {
 }
 
 const route = useRoute();
+const router = useRouter();
 const subjectId = route.params.id as string;
 const divergences = ref<Divergence[]>([]);
 const claims = ref<Claim[]>([]);
@@ -178,6 +179,9 @@ async function uncontestClaim(claimId: string): Promise<void> {
 
 <template>
   <main class="court-report">
+    <nav class="report-nav">
+      <button type="button" class="btn ghost" @click="router.push('/')">首页</button>
+    </nav>
     <h1>法庭报告</h1>
     <p v-if="loading">加载中...</p>
     <p v-else-if="error" class="error">{{ error }}</p>

@@ -58,6 +58,8 @@ function claimsForSession(store: Store, subjectId: string, sessionId: string) {
 
 export interface MountRestConfig {
   asr?: Partial<AsrConfig>;
+  /** Base URL for invite links (e.g. "https://example.com"). */
+  publicUrl?: string;
 }
 
 export const mountRestPlugin: Plugin<MountRestConfig> = {
@@ -70,6 +72,7 @@ export const mountRestPlugin: Plugin<MountRestConfig> = {
     const collector = ctx.get<WitnessCollector>('witness');
     const router = ctx.get<Router>('router');
     const asr: AsrConfig = { ...readAsrConfig(), ...config?.asr };
+    const publicUrl = (config?.publicUrl ?? process.env.OPENMIMIC_PUBLIC_URL ?? '').replace(/\/+$/, '');
 
     const hasCourt = () => ctx.has('court');
     const getCourt = () => ctx.get<CourtEngine>('court');
@@ -80,6 +83,11 @@ export const mountRestPlugin: Plugin<MountRestConfig> = {
       status: 200,
       body: { ok: true, version: SERVER_VERSION },
     }));
+
+    router.get('/api/subjects', () => {
+      const subjects = store.listSubjects();
+      return { status: 200, body: { subjects } };
+    });
 
     router.post('/api/subjects', (context) => {
       const body = CreateSubjectBodySchema.parse(context.body);
@@ -96,9 +104,14 @@ export const mountRestPlugin: Plugin<MountRestConfig> = {
       const subject = store.getSubject(context.params.id ?? '');
       if (!subject) throw new HttpError(404, 'subject_not_found', '当事人不存在');
       const invite = collector.createInvite(subject.id);
+      const invitePath = `/i/${invite.token}`;
       return {
         status: 201,
-        body: { token: invite.token, url: `/i/${invite.token}`, expiresAt: invite.expiresAt },
+        body: {
+          token: invite.token,
+          url: publicUrl ? `${publicUrl}${invitePath}` : invitePath,
+          expiresAt: invite.expiresAt,
+        },
       };
     });
 

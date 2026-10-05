@@ -146,6 +146,11 @@ export interface ApiClientOptions {
   fetchImpl?: typeof fetch;
 }
 
+export interface CourtSessionPayload {
+  session: { id: string; subjectId: string };
+  claims: unknown[];
+}
+
 export interface ApiClient {
   fetchInvite(token: string): Promise<InvitePayload>;
   checkAsrAvailable(): Promise<boolean>;
@@ -174,6 +179,8 @@ export interface ApiClient {
   ): Promise<InterviewStepPayload>;
   /** Close the session and append the assembled testimony. */
   finishInterview(sessionId: string, payload: SubmitPayload): Promise<SubmitResult>;
+  /** Trigger the court (requires LLM). */
+  runCourt(subjectId: string): Promise<CourtSessionPayload>;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -302,6 +309,12 @@ export function createApiClient(options: ApiClientOptions = {}): ApiClient {
       request<SubmitResult>(
         `/api/interview/${encodeURIComponent(sessionId)}/finish`,
         jsonInit('POST', payload),
+      ),
+
+    runCourt: (subjectId) =>
+      request<CourtSessionPayload>(
+        `/api/subjects/${encodeURIComponent(subjectId)}/court`,
+        { method: 'POST' },
       ),
   };
 }

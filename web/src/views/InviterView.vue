@@ -33,6 +33,10 @@ const demoNote = ref('');
 const roomBusy = ref(false);
 const roomNeedsKey = ref(false);
 const roomError = ref('');
+const courtBusy = ref(false);
+const courtNeedsKey = ref(false);
+const courtError = ref('');
+const courtDone = ref(false);
 let timer: ReturnType<typeof setInterval> | null = null;
 
 const link = computed(() =>
@@ -169,6 +173,33 @@ async function openOwnRoom(): Promise<void> {
   }
 }
 
+/** Run the court to process testimonies. */
+async function runCourt(): Promise<void> {
+  if (!canOpenRoom.value || courtBusy.value || courtNeedsKey.value) return;
+  courtBusy.value = true;
+  courtError.value = '';
+  try {
+    await api.runCourt(subjectId.value);
+    courtDone.value = true;
+  } catch (caught) {
+    if (caught instanceof ApiError && caught.status === 501) {
+      courtNeedsKey.value = true;
+    } else {
+      courtError.value = '法庭没能开成,稍后再试。';
+    }
+  } finally {
+    courtBusy.value = false;
+  }
+}
+
+function goToCourtReport(): void {
+  void router.push({ name: 'court-report', params: { id: subjectId.value } });
+}
+
+function goToMetaPerception(): void {
+  void router.push({ name: 'meta-perception', params: { id: subjectId.value } });
+}
+
 function enterRoom(room: RoomPayload): void {
   const name = activeName();
   void router.push({
@@ -287,6 +318,29 @@ onBeforeUnmount(stopPolling);
         </li>
       </ul>
       <p v-else-if="canOpenRoom" class="muted small">还没有房间。开一间，看看他们背后怎么说。</p>
+    </section>
+
+    <section v-if="subjectId !== '' && canOpenRoom" class="court-panel">
+      <div class="room-panel-head">
+        <span class="label" style="margin: 0">法庭与报告</span>
+        <div class="row" style="gap: 0.5rem">
+          <button
+            type="button"
+            class="btn"
+            :disabled="courtBusy || courtNeedsKey"
+            @click="runCourt"
+          >
+            {{ courtBusy ? '正在开审……' : '开审' }}
+          </button>
+          <button type="button" class="btn" @click="goToCourtReport">查看报告</button>
+          <button type="button" class="btn" @click="goToMetaPerception">元知觉</button>
+        </div>
+      </div>
+      <p v-if="courtNeedsKey" class="muted small">
+        需要配置模型：服务器还没有语言模型，法庭暂时开不了。
+      </p>
+      <p v-if="courtDone" class="muted small">法庭已结束，点「查看报告」看结果。</p>
+      <p v-if="courtError" class="error small">{{ courtError }}</p>
     </section>
   </main>
 </template>
