@@ -190,6 +190,35 @@ describe('computeConviction', () => {
       wasPaired: true, isContested: false,
     })).toBe(0.9);
   });
+
+  it('caps at 0.85 when weakestBasis is unknown', () => {
+    // 4 witnesses paired with episodes: base 0.5 + 3*0.12 = 0.86, but capped at 0.85
+    expect(computeConviction({
+      witnessCount: 4, hasEpisode: true, allEpisodesElicited: false,
+      wasPaired: true, isContested: false, weakestBasis: 'unknown',
+    })).toBe(0.85);
+  });
+
+  it('unknown basis + unpaired: unchallenged cap (0.6) dominates over unknown cap (0.85)', () => {
+    // The 0.6 unchallenged cap is applied first and is stricter than the 0.85 unknown cap
+    expect(computeConviction({
+      witnessCount: 3, hasEpisode: true, allEpisodesElicited: false,
+      wasPaired: false, isContested: false, weakestBasis: 'unknown',
+    })).toBe(0.6);
+  });
+
+  it('unknown basis + paired: unknown cap takes effect', () => {
+    // 3 witnesses, paired: base 0.5 + 2*0.12 = 0.74, but capped at 0.85 (no change)
+    expect(computeConviction({
+      witnessCount: 3, hasEpisode: true, allEpisodesElicited: false,
+      wasPaired: true, isContested: false, weakestBasis: 'unknown',
+    })).toBe(0.74);
+    // 5 witnesses, paired: base 0.5 + 4*0.12 = 0.98, capped at 0.9 then 0.85
+    expect(computeConviction({
+      witnessCount: 5, hasEpisode: true, allEpisodesElicited: false,
+      wasPaired: true, isContested: false, weakestBasis: 'unknown',
+    })).toBe(0.85);
+  });
 });
 
 /* ------------------------------------------------------------------ */

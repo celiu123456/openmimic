@@ -286,4 +286,103 @@ describe('OpenAI-compatible persona surface', () => {
       type: 'server_error',
     });
   });
+
+  it('strips orphan tool messages and tool_calls fields before forwarding', async () => {
+    clearLlmEnv();
+    upstream = await startUpstream((_request, response) => {
+      response.writeHead(200, { 'content-type': 'application/json' });
+      response.end(
+        JSON.stringify({
+          id: 'chatcmpl-2',
+          object: 'chat.completion',
+          choices: [
+            { index: 0, message: { role: 'assistant', content: '好的' }, finish_reason: 'stop' },
+          ],
+          usage: { prompt_tokens: 5, completion_tokens: 2, total_tokens: 7 },
+        }),
+      );
+    });
+    store = new Store();
+    server = await startServer({
+      port: 0,
+      store,
+      chat: new OpenAICompatClient({
+        baseUrl: upstream.url,
+        apiKey: 'test-key',
+        model: 'upstream-model',
+      }),
+      webDistDir: '',
+    });
+    const base = server.url;
+
+    const response = await api(base, 'POST', '/v1/chat/completions', {
+      model: `persona/${DEMO_SUBJECT_ID}`,
+      messages: [
+        { role: 'user', content: 'hello' },
+        {
+          role: 'assistant',
+          content: null,
+          tool_calls: [{ id: 'call_1', type: 'function', function: { name: 'foo', arguments: '{}' } }],
+        },
+        { role: 'tool', tool_call_id: 'call_1', content: 'result' },
+        { role: 'tool', tool_call_id: 'orphan_id', content: 'orphan' },
+        { role: 'user', content: 'now reply' },
+      ],
+    });
+
+    expect(response.status).toBe(200);
+    const forwarded = upstream.requests[0]?.body as {
+      messages: Array<{ role: string; content?: unknown; tool_calls?: unknown }>;
+    };
+    // System prompt + user("hello") + assistant(no tool_calls) + user("now reply")
+    // The tool messages should be stripped, and tool_calls removed from assistant
+    const roles = forwarded.messages.map((m) => m.role);
+    expect(roles).not.toContain('tool');
+    const assistantMsgs = forwarded.messages.filter((m) => m.role === 'assistant');
+    for (const msg of assistantMsgs) {
+      expect(msg.tool_calls).toBeUndefined();
+    }
+  });
+
+  it('registers reflux fingerprint for non-streamed persona reply', async () => {
+    clearLlmEnv();
+    upstream = await startUpstream((_request, response) => {
+      response.writeHead(200, { 'content-type': 'application/json' });
+      response.end(
+        JSON.stringify({
+          id: 'chatcmpl-fp',
+          object: 'chat.completion',
+          choices: [
+            { index: 0, message: { role: 'assistant', content: '这是一段足够长的人格回复测试文本' }, finish_reason: 'stop' },
+          ],
+          usage: { prompt_tokens: 10, completion_tokens: 5, total_tokens: 15 },
+        }),
+      );
+    });
+    store = new Store();
+    server = await startServer({
+      port: 0,
+      store,
+      chat: new OpenAICompatClient({
+        baseUrl: upstream.url,
+        apiKey: 'test-key',
+        model: 'upstream-model',
+      }),
+      webDistDir: '',
+    });
+    const base = server.url;
+
+    const before = store.listFingerprints(DEMO_SUBJECT_ID);
+
+    await api(base, 'POST', '/v1/chat/completions', {
+      model: `persona/${DEMO_SUBJECT_ID}`,
+      messages: [{ role: 'user', content: '你好' }],
+    });
+
+    const after = store.listFingerprints(DEMO_SUBJECT_ID);
+    // At least one new fingerprint should have been registered
+    expect(after.length).toBeGreaterThan(before.length);
+    const newFp = after.find((fp) => fp.artifactId.startsWith('persona:'));
+    expect(newFp).toBeDefined();
+  });
 });

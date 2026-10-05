@@ -55,7 +55,10 @@ const ChatCompletionResponseSchema = z.object({
   choices: z
     .array(
       z.object({
-        message: z.object({ content: z.string().nullable().optional() }),
+        message: z.object({
+          content: z.string().nullable().optional(),
+          reasoning_content: z.string().nullable().optional(),
+        }),
       }),
     )
     .min(1),
@@ -182,9 +185,86 @@ export class OpenAICompatClient implements LLMClient {
 
       const parsed = ChatCompletionResponseSchema.parse(await response.json());
       const content = parsed.choices[0]?.message.content ?? '';
-      if (!content) throw new Error('LLM response contained no message content');
+      const reasoningContent = parsed.choices[0]?.message.reasoning_content ?? '';
 
-      // Record usage
+      // Record usage from first attempt
+      const tag = purpose ?? 'other';
+      const usage: CallUsage = {
+        promptTokens: parsed.usage?.prompt_tokens ?? 0,
+        completionTokens: parsed.usage?.completion_tokens ?? 0,
+        cachedTokens: parsed.usage?.prompt_cache_hit_tokens
+          ?? parsed.usage?.cached_tokens
+          ?? 0,
+      };
+      recordUsage(tag, usage);
+
+      if (content) return content;
+
+      // Thinking model fallback: content is empty but reasoning_content is non-empty.
+      // Disable thinking and raise max_tokens, then retry once (counts toward budget).
+      if (reasoningContent && this.disableThinking) {
+        // Already disabled — nothing more to try
+        throw new Error('LLM response contained no message content (reasoning_content present but thinking already disabled)');
+      }
+      if (reasoningContent) {
+        return this.retryWithThinkingDisabled({ system, user, maxTokens, purpose });
+      }
+
+      throw new Error('LLM response contained no message content');
+    } finally {
+      clearTimeout(timer);
+    }
+  }
+
+  /**
+   * Retry a request with thinking explicitly disabled and a raised max_tokens.
+   * Used when the first response had reasoning_content but empty content.
+   */
+  private async retryWithThinkingDisabled(
+    { system, user, maxTokens, purpose }: LLMCompletionRequest,
+  ): Promise<string> {
+    checkBudget();
+
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), this.timeoutMs);
+    try {
+      const body: Record<string, unknown> = {
+        model: this.model,
+        temperature: 0,
+        messages: [
+          { role: 'system', content: system },
+          { role: 'user', content: user },
+        ],
+        thinking: { type: 'disabled' },
+        max_tokens: Math.max(maxTokens ?? 4096, 4096),
+      };
+
+      const response = await this.fetchImpl(`${this.baseUrl}/chat/completions`, {
+        method: 'POST',
+        headers: {
+          'content-type': 'application/json',
+          ...(this.apiKey ? { authorization: `Bearer ${this.apiKey}` } : {}),
+        },
+        body: JSON.stringify(body),
+        signal: controller.signal,
+      });
+
+      if (!response.ok) {
+        const detail = await response.text().catch(() => '');
+        if (response.status === 402) {
+          throw new InsufficientBalanceError(402, detail.slice(0, 500));
+        }
+        throw new Error(
+          `LLM request failed (thinking retry): ${response.status} ${response.statusText}${detail ? ` — ${detail.slice(0, 500)}` : ''}`,
+        );
+      }
+
+      const parsed = ChatCompletionResponseSchema.parse(await response.json());
+      const content = parsed.choices[0]?.message.content ?? '';
+      if (!content) {
+        throw new Error('LLM response contained no message content even after disabling thinking');
+      }
+
       const tag = purpose ?? 'other';
       const usage: CallUsage = {
         promptTokens: parsed.usage?.prompt_tokens ?? 0,

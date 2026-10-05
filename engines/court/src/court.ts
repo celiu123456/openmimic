@@ -236,10 +236,15 @@ export function computeConviction(input: ConvictionInput): number {
   }
 
   // Basis-based ceiling: heard and inferred evidence can't reach full conviction.
+  // unknown gets 0.85 (not punitive, but not full trust either — absence of
+  // explicit "I saw" markers does not warrant the same ceiling as witnessed).
+  // These ceilings align with basisConvictionCeiling() in engines/witness/src/basis.ts.
   if (input.weakestBasis === 'heard') {
     score = Math.min(score, 0.7);
   } else if (input.weakestBasis === 'inferred') {
     score = Math.min(score, 0.5);
+  } else if (input.weakestBasis === 'unknown') {
+    score = Math.min(score, 0.85);
   }
 
   return round2(clamp01(score));

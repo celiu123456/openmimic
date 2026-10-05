@@ -9,6 +9,7 @@ import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
 import { z } from 'zod';
+import { extractJson } from '@openmimic/shared';
 import type { LLMClient, LLMCompletionRequest } from '@openmimic/engine-court';
 
 /* ------------------------------------------------------------------ */
@@ -57,32 +58,6 @@ const JudgeResponseSchema = z.object({
 });
 
 export type JudgeResponse = z.infer<typeof JudgeResponseSchema>;
-
-/* ------------------------------------------------------------------ */
-/* JSON extraction (reused from court engine)                          */
-/* ------------------------------------------------------------------ */
-
-function extractJson(text: string): unknown {
-  const trimmed = text.trim();
-  try { return JSON.parse(trimmed); } catch { /* fallthrough */ }
-
-  const fenced = /```(?:json)?\s*([\s\S]*?)```/i.exec(trimmed);
-  if (fenced?.[1]) {
-    try { return JSON.parse(fenced[1].trim()); } catch { /* fallthrough */ }
-  }
-
-  const start = trimmed.search(/[{[]/);
-  if (start >= 0) {
-    const candidate = trimmed.slice(start);
-    for (const closing of ['}', ']'] as const) {
-      const end = candidate.lastIndexOf(closing);
-      if (end > 0) {
-        try { return JSON.parse(candidate.slice(0, end + 1)); } catch { /* try next */ }
-      }
-    }
-  }
-  throw new Error('Judge response did not contain parseable JSON');
-}
 
 /* ------------------------------------------------------------------ */
 /* Single LLM call                                                     */
