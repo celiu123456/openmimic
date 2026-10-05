@@ -358,6 +358,12 @@ export const InterviewSessionStateSchema = z.object({
    * follow-ups are asked for the rest of the session. Added in v2.
    */
   fatigue: z.number().nonnegative().optional(),
+  /**
+   * Adaptive question order: when the planner schedules questions based on
+   * prior coverage, the ordered qid list is fixed at session start and stored
+   * here. When absent, the default questionnaire order is used. Added in v3.
+   */
+  questionOrder: z.array(z.string().min(1)).optional(),
 });
 export type InterviewSessionState = z.infer<typeof InterviewSessionStateSchema>;
 
@@ -390,11 +396,21 @@ export function createInterviewState(args: NewInterviewState): InterviewSessionS
   };
 }
 
-/** The question the witness is currently on, or `undefined` when finished. */
+/**
+ * The question the witness is currently on, or `undefined` when finished.
+ *
+ * When the session carries a `questionOrder` (adaptive scheduling), the
+ * order follows that qid list instead of the questionnaire's natural order.
+ */
 export function questionAt(
   state: InterviewSessionState,
   questions: readonly WitnessQuestion[],
 ): WitnessQuestion | undefined {
+  if (state.questionOrder) {
+    const qid = state.questionOrder[state.index];
+    if (qid === undefined) return undefined;
+    return questions.find((q) => q.qid === qid);
+  }
   return questions[state.index];
 }
 
@@ -403,7 +419,8 @@ export function isFinished(
   state: InterviewSessionState,
   questions: readonly WitnessQuestion[],
 ): boolean {
-  return state.index >= questions.length;
+  const total = state.questionOrder ? state.questionOrder.length : questions.length;
+  return state.index >= total;
 }
 
 /** The step to return after a transition. */
