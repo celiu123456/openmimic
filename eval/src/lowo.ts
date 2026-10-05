@@ -61,6 +61,20 @@ function getCommitSha(): string {
   }
 }
 
+const CLAIMS_SECTION_HEADING = '## 他在不同人面前';
+
+/** Remove the claims section from an assembled persona prompt, keeping everything else. */
+export function stripClaimsSection(systemPrompt: string): string {
+  const start = systemPrompt.indexOf(CLAIMS_SECTION_HEADING);
+  if (start < 0) {
+    throw new Error('Persona prompt has no claims section to strip');
+  }
+  const next = systemPrompt.indexOf('\n\n## ', start);
+  return next < 0
+    ? systemPrompt.slice(0, start).trimEnd()
+    : systemPrompt.slice(0, start) + systemPrompt.slice(next + 2);
+}
+
 /* ------------------------------------------------------------------ */
 /* LOWO types                                                          */
 /* ------------------------------------------------------------------ */
@@ -112,7 +126,11 @@ export interface LowoOptions {
   maxQuestionsPerWitness?: number;
   /** Path to checkpoint file for incremental save/resume */
   progressFile?: string;
-  /** Ablation mode: strip claims from persona, keep only episodes */
+  /**
+   * Ablation arm: the second candidate is the same persona with its claims
+   * section removed (instead of the no-persona baseline). `personaWins` then
+   * counts full-persona wins and `baselineWins` episodes-only wins.
+   */
   ablationEpisodesOnly?: boolean;
 }
 
@@ -250,13 +268,16 @@ export async function runLowo(
       const persona = await adapterAssemblePersona(subjectId, tempStore);
       console.error(`[LOWO]   Persona assembled (${persona.meta.charCount} chars, ${persona.meta.includedClaimIds.length} claims)`);
 
-      // Ablation: strip claims, keep only episodes
-      let personaPrompt = persona.systemPrompt;
+      // Ablation arm: same persona with the claims section removed
+      let episodesOnlyPrompt: string | null = null;
       if (options.ablationEpisodesOnly) {
-        const episodes = tempStore.listEpisodesBySubject(subjectId);
-        const episodeTexts = episodes.map((e) => e.text).join('\n');
-        personaPrompt = episodeTexts || '(无事例)';
-        console.error(`[LOWO]   Ablation: episodes only (${episodes.length} episodes, ${personaPrompt.length} chars)`);
+        if (persona.meta.episodeCount === 0) {
+          throw new Error(
+            `Ablation needs episodes in the persona, but holdout ${heldOut.id} has none. Aborting.`,
+          );
+        }
+        episodesOnlyPrompt = stripClaimsSection(persona.systemPrompt);
+        console.error(`[LOWO]   Ablation: claims section removed (${persona.systemPrompt.length} -> ${episodesOnlyPrompt.length} chars, ${persona.meta.episodeCount} episodes kept)`);
       }
 
       // 4. Get held-out witness's testimonies
@@ -280,7 +301,7 @@ export async function runLowo(
           // Generate "with persona" prediction — uses evalLlm
           const withPersonaUser = [
             `## 人格描述`,
-            personaPrompt,
+            persona.systemPrompt,
             '',
             `## 证人与当事人的关系`,
             heldOut.relation,
@@ -295,20 +316,38 @@ export async function runLowo(
             withPersonaUser,
           );
 
-          // Generate baseline prediction (no persona) — uses evalLlm
-          const baselineUser = [
-            `## 证人与当事人的关系`,
-            heldOut.relation,
-            '',
-            `## 问题 (qid: ${answer.qid})`,
-            `请以这位证人(${heldOut.relation})的口吻,猜测他/她会怎么描述当事人。`,
-          ].join('\n');
-
-          const baselinePrediction = await generatePrediction(
-            evalLlm,
-            PREDICT_BASELINE_SYSTEM,
-            baselineUser,
-          );
+          // Second candidate: no-persona baseline, or (ablation) episodes-only persona
+          let baselinePrediction: string;
+          if (episodesOnlyPrompt !== null) {
+            const episodesOnlyUser = [
+              `## 人格描述`,
+              episodesOnlyPrompt,
+              '',
+              `## 证人与当事人的关系`,
+              heldOut.relation,
+              '',
+              `## 问题 (qid: ${answer.qid})`,
+              `请以这位证人(${heldOut.relation})的口吻,预测他/她会怎么回答关于当事人的这个方面。`,
+            ].join('\n');
+            baselinePrediction = await generatePrediction(
+              evalLlm,
+              PREDICT_WITH_PERSONA_SYSTEM,
+              episodesOnlyUser,
+            );
+          } else {
+            const baselineUser = [
+              `## 证人与当事人的关系`,
+              heldOut.relation,
+              '',
+              `## 问题 (qid: ${answer.qid})`,
+              `请以这位证人(${heldOut.relation})的口吻,猜测他/她会怎么描述当事人。`,
+            ].join('\n');
+            baselinePrediction = await generatePrediction(
+              evalLlm,
+              PREDICT_BASELINE_SYSTEM,
+              baselineUser,
+            );
+          }
 
           // 5. Judge: which prediction is closer to real answer? — uses evalLlm
           // first = withPersona, second = baseline

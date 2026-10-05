@@ -38,7 +38,7 @@ async function main(): Promise<void> {
 
   const modelName = process.env.LLM_MODEL ?? 'unknown';
   console.log(`Running LOWO for subject: ${subjectId}, model: ${modelName}, maxQ=${maxQuestionsPerWitness}`);
-  if (ablationEpisodesOnly) console.log('Ablation mode: episodes only (no claims)');
+  if (ablationEpisodesOnly) console.log('Ablation arm: full persona (W) vs claims-stripped persona (L)');
   if (progressFile) console.log(`Checkpoint file: ${progressFile}`);
 
   // Load demo data

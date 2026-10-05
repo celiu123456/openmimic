@@ -627,3 +627,32 @@ describe('Adversarial calibration pairs', () => {
     }
   });
 });
+
+/* ------------------------------------------------------------------ */
+/* 12. LOWO ablation: claims section stripping                         */
+/* ------------------------------------------------------------------ */
+
+describe('LOWO ablation: stripClaimsSection', () => {
+  const prompt = [
+    '身份行',
+    '## 他在不同人面前\n### 发小\n- 论断甲\n\n### 上司\n- 论断乙',
+    '## 别人讲过的事（证人视角,不是他本人的口吻）\n- 事例一',
+    '## 行为纪律\n- 纪律',
+  ].join('\n\n');
+
+  it('removes the claims section and keeps the rest intact', async () => {
+    const { stripClaimsSection } = await import('../src/lowo');
+    const stripped = stripClaimsSection(prompt);
+    expect(stripped).not.toContain('论断甲');
+    expect(stripped).not.toContain('论断乙');
+    expect(stripped).not.toContain('他在不同人面前');
+    expect(stripped).toBe(
+      ['身份行', '## 别人讲过的事（证人视角,不是他本人的口吻）\n- 事例一', '## 行为纪律\n- 纪律'].join('\n\n'),
+    );
+  });
+
+  it('throws when the prompt has no claims section', async () => {
+    const { stripClaimsSection } = await import('../src/lowo');
+    expect(() => stripClaimsSection('身份行\n\n## 行为纪律\n- 纪律')).toThrow('no claims section');
+  });
+});
