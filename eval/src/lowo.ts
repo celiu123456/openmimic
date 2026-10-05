@@ -62,12 +62,25 @@ function getCommitSha(): string {
 }
 
 const CLAIMS_SECTION_HEADING = '## 他在不同人面前';
+const EPISODES_SECTION_HEADING = '## 别人讲过的事';
 
 /** Remove the claims section from an assembled persona prompt, keeping everything else. */
 export function stripClaimsSection(systemPrompt: string): string {
   const start = systemPrompt.indexOf(CLAIMS_SECTION_HEADING);
   if (start < 0) {
     throw new Error('Persona prompt has no claims section to strip');
+  }
+  const next = systemPrompt.indexOf('\n\n## ', start);
+  return next < 0
+    ? systemPrompt.slice(0, start).trimEnd()
+    : systemPrompt.slice(0, start) + systemPrompt.slice(next + 2);
+}
+
+/** Remove the episodes section from an assembled persona prompt, keeping everything else. */
+export function stripEpisodesSection(systemPrompt: string): string {
+  const start = systemPrompt.indexOf(EPISODES_SECTION_HEADING);
+  if (start < 0) {
+    throw new Error('Persona prompt has no episodes section to strip');
   }
   const next = systemPrompt.indexOf('\n\n## ', start);
   return next < 0
@@ -89,6 +102,13 @@ export interface LowoQuestionResult {
   judgeResult: PairResult;
 }
 
+export interface PersonaComposition {
+  episodeCount: number;
+  claimCount: number;
+  charCount: number;
+  truncated: boolean;
+}
+
 export interface LowoWitnessResult {
   witnessId: string;
   relation: string;
@@ -100,6 +120,7 @@ export interface LowoWitnessResult {
     claimCount: number;
     durationMs: number;
   };
+  personaComposition?: PersonaComposition;
 }
 
 export interface LowoResult {
@@ -397,6 +418,12 @@ export async function runLowo(
         courtStats: {
           claimCount: survivingCount,
           durationMs: courtDurationMs,
+        },
+        personaComposition: {
+          episodeCount: persona.meta.episodeCount,
+          claimCount: persona.meta.includedClaimIds.length,
+          charCount: persona.meta.charCount,
+          truncated: persona.meta.truncated,
         },
       };
       witnessResults.push(wr);

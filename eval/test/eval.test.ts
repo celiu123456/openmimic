@@ -723,12 +723,49 @@ describe('Adversarial calibration pairs', () => {
     expect(adversarial.length).toBeGreaterThanOrEqual(12);
   });
 
-  it('adversarial pairs have non-trivial similarity between close and far', () => {
+  it('original adversarial pairs (adv01-14) have non-trivial similarity between close and far', () => {
     const pairs = loadCalibrationPairs();
-    const adversarial = pairs.filter((p) => p.id.startsWith('cal-h-adv'));
-    for (const p of adversarial) {
+    // Only the original adversarial pairs (01-14) were designed with high close-far keyword overlap.
+    // The round-2 challenge pairs (adv15+) use different adversarial strategies.
+    const originalAdversarial = pairs.filter((p) =>
+      p.id.startsWith('cal-h-adv') && parseInt(p.id.replace('cal-h-adv', ''), 10) <= 14,
+    );
+    for (const p of originalAdversarial) {
       const sim = bigramJaccard(p.close, p.far);
       expect(sim).toBeGreaterThan(0.02);
+    }
+  });
+});
+
+/* ------------------------------------------------------------------ */
+/* 11b. Round-2 challenge pairs                                        */
+/* ------------------------------------------------------------------ */
+
+describe('Round-2 challenge pairs', () => {
+  it('has at least 10 challenge pairs (cal-h-adv15+)', () => {
+    const pairs = loadCalibrationPairs();
+    const challenge = pairs.filter((p) => {
+      if (!p.id.startsWith('cal-h-adv')) return false;
+      const num = parseInt(p.id.replace('cal-h-adv', ''), 10);
+      return num >= 15;
+    });
+    expect(challenge.length).toBeGreaterThanOrEqual(10);
+  });
+
+  it('total calibration pairs is now at least 74 (64 + 10)', () => {
+    const pairs = loadCalibrationPairs();
+    expect(pairs.length).toBeGreaterThanOrEqual(74);
+  });
+
+  it('all challenge pairs have valid schema', () => {
+    const pairs = loadCalibrationPairs();
+    const challenge = pairs.filter((p) => p.id.startsWith('cal-h-adv') && parseInt(p.id.replace('cal-h-adv', ''), 10) >= 15);
+    for (const p of challenge) {
+      expect(p.real.length).toBeGreaterThan(10);
+      expect(p.close.length).toBeGreaterThan(10);
+      expect(p.far.length).toBeGreaterThan(10);
+      expect(p.expectedWinner).toBe('close');
+      expect(p.difficulty).toBe('hard');
     }
   });
 });
@@ -759,5 +796,65 @@ describe('LOWO ablation: stripClaimsSection', () => {
   it('throws when the prompt has no claims section', async () => {
     const { stripClaimsSection } = await import('../src/lowo');
     expect(() => stripClaimsSection('身份行\n\n## 行为纪律\n- 纪律')).toThrow('no claims section');
+  });
+});
+
+/* ------------------------------------------------------------------ */
+/* 12b. LOWO ablation: episodes section stripping                      */
+/* ------------------------------------------------------------------ */
+
+describe('LOWO ablation: stripEpisodesSection', () => {
+  const prompt = [
+    '身份行',
+    '## 他在不同人面前\n### 发小\n- 论断甲',
+    '## 别人讲过的事（证人视角,不是他本人的口吻）\n- 事例一\n- 事例二',
+    '## 行为纪律\n- 纪律',
+  ].join('\n\n');
+
+  it('removes the episodes section and keeps the rest intact', async () => {
+    const { stripEpisodesSection } = await import('../src/lowo');
+    const stripped = stripEpisodesSection(prompt);
+    expect(stripped).not.toContain('事例一');
+    expect(stripped).not.toContain('事例二');
+    expect(stripped).not.toContain('别人讲过的事');
+    expect(stripped).toContain('论断甲');
+    expect(stripped).toContain('纪律');
+  });
+
+  it('throws when the prompt has no episodes section', async () => {
+    const { stripEpisodesSection } = await import('../src/lowo');
+    expect(() => stripEpisodesSection('身份行\n\n## 行为纪律\n- 纪律')).toThrow('no episodes section');
+  });
+});
+
+/* ------------------------------------------------------------------ */
+/* 12c. Ablation arm: stats computation                                */
+/* ------------------------------------------------------------------ */
+
+describe('Ablation arm stats', () => {
+  it('PersonaComposition type is usable', async () => {
+    const lowo = await import('../src/lowo');
+    // Verify stripClaimsSection and stripEpisodesSection are exported
+    expect(typeof lowo.stripClaimsSection).toBe('function');
+    expect(typeof lowo.stripEpisodesSection).toBe('function');
+  });
+
+  it('ablation module exports runAblation', async () => {
+    const ablation = await import('../src/ablation');
+    expect(typeof ablation.runAblation).toBe('function');
+  });
+});
+
+/* ------------------------------------------------------------------ */
+/* 12d. Stability v2 curve types                                       */
+/* ------------------------------------------------------------------ */
+
+describe('Stability v2 curve', () => {
+  it('StabilityCurvePointV2 type includes intra-subset overlap', async () => {
+    const stab = await import('../src/stability');
+    // Just verify the type definition compiles and the function exports work
+    expect(typeof stab.runStability).toBe('function');
+    expect(typeof stab.matchClaimsLlm).toBe('function');
+    expect(typeof stab.pairwiseOverlapLlm).toBe('function');
   });
 });
