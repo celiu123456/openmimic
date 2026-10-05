@@ -4,4 +4,5 @@ export * from './llm-usage';
 export * from './prompt/render';
 export * from './prompt/untrusted';
 export * from './provider-error';
+export * from './sanitize';
 export * from './schemas';
