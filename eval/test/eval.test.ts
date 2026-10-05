@@ -425,6 +425,18 @@ describe('Stability: claim matching', () => {
     expect(matchClaims(a, b)).toBe(0);
   });
 
+  it('matchClaims returns 1 for two empty surviving sets', () => {
+    const a = [{ ...baseClaim('c1', 'x'), status: 'retired' as const }];
+    const b = [{ ...baseClaim('c2', 'y'), status: 'retired' as const }];
+    expect(matchClaims(a, b)).toBe(1);
+  });
+
+  it('matchClaims returns 0 when one set has 0 surviving', () => {
+    const a = [baseClaim('c1', '他很善良')];
+    const b = [{ ...baseClaim('c2', '他很善良'), status: 'retired' as const }];
+    expect(matchClaims(a, b)).toBe(0);
+  });
+
   it('pairwiseOverlap computes mean and stddev', () => {
     const sets = [
       [baseClaim('c1', '他很善良'), baseClaim('c2', '他很聪明')],
@@ -519,5 +531,99 @@ describe('Ledger', () => {
 
     const found = findCalibrationRun('model-b', 'sha-a');
     expect(found).toBeUndefined();
+  });
+});
+
+/* ------------------------------------------------------------------ */
+/* 10. Hard gate: 0 claims = abort                                     */
+/* ------------------------------------------------------------------ */
+
+describe('Hard gate: zero claims abort', () => {
+  beforeEach(cleanRuns);
+  afterEach(cleanRuns);
+
+  it('stability aborts when court produces 0 surviving claims', async () => {
+    const store = new Store();
+    seedDemo(store);
+
+    // FakeLLM that produces 0 claims (filing returns empty arrays)
+    const zeroClaimLlm = new FakeLLM(
+      Array.from({ length: 50 }, () => JSON.stringify([])),
+    );
+
+    writeRun({
+      kind: 'calibration',
+      modelName: 'test',
+      promptSha: getJudgePromptSha(),
+      commitSha: 'test',
+      params: {},
+      results: { passed: true },
+      details: [],
+      timestamp: '2026-01-01T00-00-00-000Z',
+    });
+
+    const { runStability } = await import('../src/stability');
+    await expect(
+      runStability(DEMO_SUBJECT_ID, store, zeroClaimLlm, Store, {
+        modelName: 'test',
+        K: 1,
+        maxSubsets: 1,
+      }),
+    ).rejects.toThrow(/0 surviving claims/);
+
+    store.close();
+  });
+
+  it('LOWO aborts when court produces 0 surviving claims', async () => {
+    const store = new Store();
+    seedDemo(store);
+
+    // courtLlm produces 0 claims, evalLlm is for predictions/judging (won't be reached)
+    const zeroClaimCourtLlm = new FakeLLM(
+      Array.from({ length: 50 }, () => JSON.stringify([])),
+    );
+    const evalLlm = new FakeLLM(['unused']);
+
+    writeRun({
+      kind: 'calibration',
+      modelName: 'test',
+      promptSha: getJudgePromptSha(),
+      commitSha: 'test',
+      params: {},
+      results: { passed: true },
+      details: [],
+      timestamp: '2026-01-01T00-00-00-000Z',
+    });
+
+    const { runLowo } = await import('../src/lowo');
+    await expect(
+      runLowo(DEMO_SUBJECT_ID, store, zeroClaimCourtLlm, evalLlm, Store, {
+        modelName: 'test',
+        maxQuestionsPerWitness: 1,
+      }),
+    ).rejects.toThrow(/0 surviving claims/);
+
+    store.close();
+  });
+});
+
+/* ------------------------------------------------------------------ */
+/* 11. Adversarial calibration pairs                                   */
+/* ------------------------------------------------------------------ */
+
+describe('Adversarial calibration pairs', () => {
+  it('has at least 12 adversarial pairs (cal-h-adv prefix)', () => {
+    const pairs = loadCalibrationPairs();
+    const adversarial = pairs.filter((p) => p.id.startsWith('cal-h-adv'));
+    expect(adversarial.length).toBeGreaterThanOrEqual(12);
+  });
+
+  it('adversarial pairs have non-trivial similarity between close and far', () => {
+    const pairs = loadCalibrationPairs();
+    const adversarial = pairs.filter((p) => p.id.startsWith('cal-h-adv'));
+    for (const p of adversarial) {
+      const sim = bigramJaccard(p.close, p.far);
+      expect(sim).toBeGreaterThan(0.02);
+    }
   });
 });

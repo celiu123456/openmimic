@@ -8,7 +8,7 @@
 
 import { loadEnv } from './env';
 loadEnv();
-import { createEvalLLM } from './eval-llm';
+import { OpenAICompatClient } from '@openmimic/engine-court';
 import { Store } from '@openmimic/kernel';
 import { seedDemo, DEMO_SUBJECT_ID } from '@openmimic/fixtures';
 import { runStability } from './stability';
@@ -27,9 +27,9 @@ async function main(): Promise<void> {
   const progressIdx = args.indexOf('--progress');
   const progressFile = progressIdx >= 0 && args[progressIdx + 1] ? args[progressIdx + 1] : undefined;
 
-  const client = createEvalLLM();
+  const courtClient = new OpenAICompatClient({ timeoutMs: 120_000 });
 
-  if (!client.configured) {
+  if (!courtClient.configured) {
     console.error('LLM not configured: set LLM_BASE_URL and LLM_MODEL in .env');
     process.exit(1);
   }
@@ -45,7 +45,7 @@ async function main(): Promise<void> {
   }
 
   try {
-    const result = await runStability(subjectId, store, client, Store, {
+    const result = await runStability(subjectId, store, courtClient, Store, {
       modelName,
       K,
       maxSubsets,
@@ -57,6 +57,9 @@ async function main(): Promise<void> {
     console.log(`  Claim counts: ${result.repeat.claimCounts.join(', ')}`);
     console.log(`  Overlap mean: ${(result.repeat.overlap.mean * 100).toFixed(1)}%`);
     console.log(`  Overlap std:  ${(result.repeat.overlap.stddev * 100).toFixed(1)}%`);
+    for (const cs of result.repeat.courtStats) {
+      console.log(`  Court: ${cs.claimCount} claims in ${(cs.durationMs / 1000).toFixed(1)}s`);
+    }
 
     console.log('\nWitness count curve:');
     for (const point of result.curve) {

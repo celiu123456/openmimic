@@ -33,86 +33,30 @@
 - **结论**: 通过。难题集独立达标。
 - **运行文件**: `eval/runs/2026-10-04T23-01-27-353Z-calibration.json`
 
-### 2. LOWO (Leave-One-Witness-Out)
+### 2. ~~LOWO (Leave-One-Witness-Out)~~ 作废(评测侧故障:法庭零论断)
+
+> **作废原因**: 评测管线将 `EvalLLMClient` 传给法庭调用。`EvalLLMClient` 不发送
+> `thinking: { type: 'disabled' }`,导致 DeepSeek 模型消耗 token 在思维链上,filing
+> 阶段 JSON 解析全部失败,每次法庭产出 0 surviving claims。主干脚本使用引擎自带的
+> `OpenAICompatClient`(自动检测 DeepSeek 并禁用 thinking)跑同一份数据分别产出
+> 78/71/108 条论断。此批读数建立在零论断人格上,完全不可用。
+>
+> **修复**: `runLowo` / `runStability` 改为双客户端模式——法庭调用用
+> `OpenAICompatClient`,裁判与预测用 `EvalLLMClient`。同时加硬门禁:法庭产出 0
+> surviving claims 时直接 abort,不产出退化读数。
 
 - **日期**: 2026-10-05
 - **Commit**: 6aa0b02 (feat/eval-real)
-- **模型**: deepseek-flash
-- **Prompt SHA**: 07938f2145036dd2adbd74395dfde3f92200f09a50d3153a2ce449f3b09fed83
-- **被试**: 林默 (limo), 6 名证人, 每证人 3 题
-- **总对数**: 18 (6 x 3)
-- **有效对**: 16
-- **作废对**: 2 (均来自 w-ex)
-- **人格胜率**: 81.3% (13/16)
-- **Wilson 95% CI**: [57.0%, 93.4%]
-- **运行耗时**: ~24 分钟 (DeepSeek API 延迟高, 单次法庭 3-30 分钟不等)
 - **运行文件**: `eval/runs/2026-10-04T23-31-30-784Z-lowo.json`
+- **状态**: **作废**
 
-#### 逐证人明细
+### 3. ~~稳定度 (Stability)~~ 作废(评测侧故障:法庭零论断)
 
-| 证人 | ID | 人格胜 | 基线胜 | 作废 | 胜率 |
-|------|-----|--------|--------|------|------|
-| 发小 | w-faxiao | 3 | 0 | 0 | 100% |
-| 前上司 | w-boss | 3 | 0 | 0 | 100% |
-| 前任 | w-ex | 1 | 0 | 2 | 100% (1/1 有效) |
-| 母亲 | w-mother | 1 | 2 | 0 | 33.3% |
-| 前下属 | w-subordinate | 3 | 0 | 0 | 100% |
-| 网友 | w-netizen | 2 | 1 | 0 | 66.7% |
-
-#### 逐题明细
-
-| 证人 | q1 | q2 | q3 |
-|------|-----|-----|-----|
-| w-faxiao | persona | persona | persona |
-| w-boss | persona | persona | persona |
-| w-ex | DISCARD | persona | DISCARD |
-| w-mother | baseline | persona | baseline |
-| w-subordinate | persona | persona | persona |
-| w-netizen | persona | persona | baseline |
-
-#### 观察
-
-- 母亲视角 (w-mother) 基线反超: 人格描述来自其余 5 名证人, 可能缺少母亲特有的私密观察维度, 导致带人格预测反而偏离真实回答
-- 前任 (w-ex) 两题作废: 位置互换后裁判结论不一致, 可能因该视角的预测和基线都与真实回答差距不大, 裁判无法区分
-- 网友 (w-netizen) q3 基线胜: 证人接触面窄 (四年只见一面), 人格描述可能引入了与该证人实际观察不一致的信息
-- Wilson 区间下界 57.0% > 50%, 在统计意义上人格确有信息增益, 但样本量小 (N=16), 区间宽
-- **法庭均产出 0 claims (includedClaimIds=[])**; 人格 prompt 仍含 2500-2900 字, 来源为法庭 transcript 的直接拼接而非结构化 claim。这表明 DeepSeek-flash 在 filing 阶段解析率低, 但 transcript 本身仍承载了足够信息
-
-### 3. 稳定度 (Stability)
+> **作废原因**: 同上。全部 7 次法庭运行均产出 0 surviving claims,重合率 100%
+> (两个空集) 和 0% (单子集无配对) 均为退化结果,无信息量。根因是
+> `EvalLLMClient` 缺少 `thinking: { type: 'disabled' }`,非模型能力问题。
 
 - **日期**: 2026-10-05
 - **Commit**: 6aa0b02 (feat/eval-real)
-- **模型**: deepseek-flash
-- **Prompt SHA**: 07938f2145036dd2adbd74395dfde3f92200f09a50d3153a2ce449f3b09fed83
-- **参数**: K=2, maxSubsets=1, curve n=2..6
-- **参数缩减原因**: DeepSeek API 延迟极高 (单次法庭 3-30 分钟不等, 最长超 7 小时), 原参数 (K=3, maxSubsets=2) 估算总耗时 > 90 分钟上限; 按优先级缩减 maxSubsets 2->1, K 3->2
-- **运行耗时**: ~20 小时 (7 次法庭调用, 受 DeepSeek API 延迟影响极大)
 - **运行文件**: `eval/runs/2026-10-04T23-52-47-469Z-stability.json`
-
-#### 重复重合率 (Repeat Overlap)
-
-| 指标 | 值 |
-|------|-----|
-| K | 2 |
-| 第 1 次存活论断数 | 0 |
-| 第 2 次存活论断数 | 0 |
-| 重合率均值 | 100.0% (退化: 两个空集被视为完全一致) |
-| 重合率标准差 | 0.0% |
-
-#### 证人数曲线 (Witness Count Curve)
-
-| n | 子集数 | 重合率均值 | 重合率标准差 | 备注 |
-|---|--------|-----------|-------------|------|
-| 2 | 1 | 0.0% | 0.0% | 0 claims; 单子集无配对可比较 |
-| 3 | 1 | 0.0% | 0.0% | 同上 |
-| 4 | 1 | 0.0% | 0.0% | 同上 |
-| 5 | 1 | 0.0% | 0.0% | 同上 |
-| 6 | 1 | 0.0% | 0.0% | 同上 |
-
-#### 观察
-
-- **全部 7 次法庭运行均产出 0 surviving claims**: 与 LOWO 中观察到的现象一致。DeepSeek-flash 在 filing 阶段的 JSON 解析率极低, 导致无结构化论断进入对抗阶段。
-- **重复重合率 100% 为退化结果**: 当两次运行均产出 0 claims 时, matchClaims 将空集视为完全匹配 (Jaccard = 1.0), 数值无信息量。
-- **曲线重合率 0% 亦为退化结果**: maxSubsets=1 时每个 n 只有 1 个子集, pairwiseOverlap 无配对可计算, 返回 mean=0, stddev=0。
-- **结论**: 稳定度管线代码可正常运行, 但在 DeepSeek-flash 作为法庭模型时, 所有结果均退化。需换用 filing 解析能力更强的模型 (如 Claude 或 GPT-4 级别) 才能获得有效的稳定度读数。
-- **API 延迟**: 同一次运行中, 各法庭调用延迟差异巨大 (从 3 分钟到超过 7 小时), 疑似 DeepSeek API 限流或排队机制所致。
+- **状态**: **作废**

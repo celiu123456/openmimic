@@ -16,6 +16,7 @@
  */
 
 import { readFileSync } from 'node:fs';
+import { execSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
 import { z } from 'zod';
@@ -203,7 +204,7 @@ export async function runCalibration(
     kind: 'calibration',
     modelName,
     promptSha,
-    commitSha: 'unknown', // filled by CLI
+    commitSha: (() => { try { return execSync('git rev-parse HEAD', { encoding: 'utf-8' }).trim(); } catch { return 'unknown'; } })(),
     params: {
       totalPairs: pairs.length,
       easyPairs: easy.totalPairs,

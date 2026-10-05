@@ -11,6 +11,7 @@
  */
 
 import { readFileSync, writeFileSync, existsSync } from 'node:fs';
+import { execSync } from 'node:child_process';
 import type { LLMClient } from '@openmimic/engine-court';
 import type { Store } from '@openmimic/kernel';
 import type { Claim } from '@openmimic/shared';
@@ -59,9 +60,6 @@ export function matchClaims(
   claimsB: Claim[],
   similarity: SimilarityFn = bigramJaccard,
 ): number {
-  if (claimsA.length === 0 && claimsB.length === 0) return 1;
-  if (claimsA.length === 0 || claimsB.length === 0) return 0;
-
   const survivingA = claimsA.filter((c) => c.status === 'surviving');
   const survivingB = claimsB.filter((c) => c.status === 'surviving');
 
@@ -88,7 +86,6 @@ export function matchClaims(
     }
   }
 
-  // Symmetric: average of A-matched-in-B and B-matched-in-A fractions
   const rateAinB = survivingA.length > 0 ? matched / survivingA.length : 0;
   return rateAinB;
 }
@@ -116,6 +113,18 @@ export function pairwiseOverlap(
 }
 
 /* ------------------------------------------------------------------ */
+/* Helpers                                                             */
+/* ------------------------------------------------------------------ */
+
+function getCommitSha(): string {
+  try {
+    return execSync('git rev-parse HEAD', { encoding: 'utf-8' }).trim();
+  } catch {
+    return 'unknown';
+  }
+}
+
+/* ------------------------------------------------------------------ */
 /* Stability types                                                     */
 /* ------------------------------------------------------------------ */
 
@@ -123,6 +132,7 @@ export interface StabilityRepeatResult {
   K: number;
   claimCounts: number[];
   overlap: { mean: number; stddev: number; pairs: number };
+  courtStats: Array<{ claimCount: number; durationMs: number }>;
 }
 
 export interface StabilityCurvePoint {
@@ -165,6 +175,8 @@ interface StabilityCheckpoint {
   /** Subset claim texts for in-progress curve point n */
   currentN?: number;
   currentSubsetClaimTexts?: string[][];
+  /** Per-run court stats from repeat phase */
+  repeatCourtStats?: Array<{ claimCount: number; durationMs: number }>;
 }
 
 function loadStabilityCheckpoint(file: string): StabilityCheckpoint | null {
@@ -245,7 +257,7 @@ function combinations<T>(items: T[], k: number): T[][] {
 export async function runStability(
   subjectId: string,
   store: Store,
-  llm: LLMClient,
+  courtLlm: LLMClient,
   StoreClass: new () => Store,
   options: StabilityOptions,
 ): Promise<StabilityResult> {
@@ -269,6 +281,8 @@ export async function runStability(
   const repeatClaimSets: Claim[][] = checkpoint
     ? checkpoint.repeatClaimTexts.map(textsToMinimalClaims)
     : [];
+  const courtStatsArr: Array<{ claimCount: number; durationMs: number }> =
+    checkpoint?.repeatCourtStats ?? [];
 
   for (let run = repeatClaimSets.length; run < K; run++) {
     console.error(`[Stability] Repeat run ${run + 1}/${K}...`);
@@ -279,16 +293,31 @@ export async function runStability(
     for (const t of allTestimonies) tempStore.addTestimony(t);
 
     try {
-      await adapterRunCourt(subjectId, tempStore, llm);
+      const courtStart = Date.now();
+      await adapterRunCourt(subjectId, tempStore, courtLlm);
+      const courtDurationMs = Date.now() - courtStart;
+
       const claims = tempStore.listClaimsBySubject(subjectId);
+      const survivingCount = claims.filter((c) => c.status === 'surviving').length;
+      console.error(`[Stability]   Run ${run + 1}: ${survivingCount} surviving claims (${claims.length} total) in ${(courtDurationMs / 1000).toFixed(1)}s`);
+
+      if (survivingCount === 0) {
+        throw new Error(
+          `Stability repeat run ${run + 1}/${K} produced 0 surviving claims. ` +
+          `Overlap measurements with 0 claims are degenerate. Aborting. ` +
+          `Check that the court LLM client correctly disables thinking for DeepSeek models.`,
+        );
+      }
+
       repeatClaimSets.push(claims);
-      console.error(`[Stability]   Run ${run + 1}: ${claims.length} claims`);
+      courtStatsArr.push({ claimCount: survivingCount, durationMs: courtDurationMs });
 
       // Checkpoint
       if (options.progressFile) {
         saveStabilityCheckpoint(options.progressFile, {
           repeatClaimTexts: repeatClaimSets.map(claimsToTexts),
           curve: checkpoint?.curve ?? [],
+          repeatCourtStats: courtStatsArr,
         });
       }
     } finally {
@@ -298,8 +327,9 @@ export async function runStability(
 
   const repeat: StabilityRepeatResult = {
     K,
-    claimCounts: repeatClaimSets.map((c) => c.length),
+    claimCounts: repeatClaimSets.map((c) => c.filter((cl) => cl.status === 'surviving').length),
     overlap: pairwiseOverlap(repeatClaimSets, similarity),
+    courtStats: courtStatsArr,
   };
 
   /* ---- Witness count curve ---- */
@@ -329,10 +359,22 @@ export async function runStability(
       }
 
       try {
-        await adapterRunCourt(subjectId, tempStore, llm);
+        const courtStart = Date.now();
+        await adapterRunCourt(subjectId, tempStore, courtLlm);
+        const courtDurationMs = Date.now() - courtStart;
+
         const claims = tempStore.listClaimsBySubject(subjectId);
+        const survivingCount = claims.filter((c) => c.status === 'surviving').length;
+        console.error(`[Stability]     ${survivingCount} surviving claims in ${(courtDurationMs / 1000).toFixed(1)}s`);
+
+        if (survivingCount === 0) {
+          throw new Error(
+            `Stability curve n=${n} subset ${si + 1}/${subsets.length} produced 0 surviving claims. ` +
+            `Aborting. Check that the court LLM client correctly disables thinking for DeepSeek models.`,
+          );
+        }
+
         subsetClaimSets.push(claims);
-        console.error(`[Stability]     ${claims.length} claims`);
       } finally {
         tempStore.close();
       }
@@ -349,6 +391,7 @@ export async function runStability(
       saveStabilityCheckpoint(options.progressFile, {
         repeatClaimTexts: repeatClaimSets.map(claimsToTexts),
         curve,
+        repeatCourtStats: courtStatsArr,
       });
     }
   }
@@ -362,11 +405,11 @@ export async function runStability(
   };
 
   // Write run log
-  const run: RunRecord = {
+  const runRecord: RunRecord = {
     kind: 'stability',
     modelName: options.modelName,
     promptSha,
-    commitSha: 'unknown',
+    commitSha: getCommitSha(),
     params: { subjectId, K, maxSubsets },
     results: {
       repeat: {
@@ -374,6 +417,7 @@ export async function runStability(
         claimCounts: repeat.claimCounts,
         overlapMean: repeat.overlap.mean,
         overlapStddev: repeat.overlap.stddev,
+        courtStats: repeat.courtStats,
       },
       curve: curve.map((p) => ({
         n: p.n,
@@ -384,7 +428,7 @@ export async function runStability(
     },
     details: [],
   };
-  writeRun(run);
+  writeRun(runRecord);
 
   return result;
 }

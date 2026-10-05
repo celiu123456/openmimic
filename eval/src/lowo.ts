@@ -15,9 +15,9 @@
  */
 
 import { readFileSync, writeFileSync, existsSync } from 'node:fs';
+import { execSync } from 'node:child_process';
 import type { LLMClient, LLMCompletionRequest } from '@openmimic/engine-court';
 import type { Store } from '@openmimic/kernel';
-import type { Testimony, Witness } from '@openmimic/shared';
 import { adapterRunCourt, adapterAssemblePersona } from './engine-adapter';
 import { judgePair, getJudgePromptSha, verifyJudgePromptSha, type PairResult } from './judge';
 import { wilsonInterval } from './wilson';
@@ -50,6 +50,18 @@ async function generatePrediction(
 }
 
 /* ------------------------------------------------------------------ */
+/* Helpers                                                             */
+/* ------------------------------------------------------------------ */
+
+function getCommitSha(): string {
+  try {
+    return execSync('git rev-parse HEAD', { encoding: 'utf-8' }).trim();
+  } catch {
+    return 'unknown';
+  }
+}
+
+/* ------------------------------------------------------------------ */
 /* LOWO types                                                          */
 /* ------------------------------------------------------------------ */
 
@@ -70,6 +82,10 @@ export interface LowoWitnessResult {
   personaWins: number;
   baselineWins: number;
   discarded: number;
+  courtStats: {
+    claimCount: number;
+    durationMs: number;
+  };
 }
 
 export interface LowoResult {
@@ -96,6 +112,8 @@ export interface LowoOptions {
   maxQuestionsPerWitness?: number;
   /** Path to checkpoint file for incremental save/resume */
   progressFile?: string;
+  /** Ablation mode: strip claims from persona, keep only episodes */
+  ablationEpisodesOnly?: boolean;
 }
 
 /* ------------------------------------------------------------------ */
@@ -162,14 +180,16 @@ function buildHeldOutStore(
  *
  * @param subjectId - the subject to evaluate
  * @param store - store containing the full data
- * @param llm - LLM client for court, prediction, and judging
+ * @param courtLlm - LLM client for court calls (must support thinking disabled for DeepSeek)
+ * @param evalLlm - LLM client for prediction and judging
  * @param StoreClass - Store constructor (for creating temporary stores)
  * @param options - configuration
  */
 export async function runLowo(
   subjectId: string,
   store: Store,
-  llm: LLMClient,
+  courtLlm: LLMClient,
+  evalLlm: LLMClient,
   StoreClass: new () => Store,
   options: LowoOptions,
 ): Promise<LowoResult> {
@@ -207,13 +227,37 @@ export async function runLowo(
     const tempStore = buildHeldOutStore(StoreClass, store, subjectId, heldOut.id);
 
     try {
-      // 2. Run court on reduced data
+      // 2. Run court on reduced data — uses courtLlm, NOT evalLlm
       console.error(`[LOWO]   Running court...`);
-      await adapterRunCourt(subjectId, tempStore, llm);
+      const courtStart = Date.now();
+      await adapterRunCourt(subjectId, tempStore, courtLlm);
+      const courtDurationMs = Date.now() - courtStart;
+
+      // Hard gate: court must produce surviving claims
+      const claims = tempStore.listClaimsBySubject(subjectId);
+      const survivingCount = claims.filter((c) => c.status === 'surviving').length;
+      console.error(`[LOWO]   Court produced ${survivingCount} surviving claims in ${(courtDurationMs / 1000).toFixed(1)}s`);
+
+      if (survivingCount === 0) {
+        throw new Error(
+          `Court produced 0 surviving claims for witness holdout ${heldOut.id} (${heldOut.relation}). ` +
+          `This makes LOWO results degenerate. Aborting. ` +
+          `Check that the court LLM client correctly disables thinking for DeepSeek models.`,
+        );
+      }
 
       // 3. Assemble persona from the reduced court results
       const persona = await adapterAssemblePersona(subjectId, tempStore);
       console.error(`[LOWO]   Persona assembled (${persona.meta.charCount} chars, ${persona.meta.includedClaimIds.length} claims)`);
+
+      // Ablation: strip claims, keep only episodes
+      let personaPrompt = persona.systemPrompt;
+      if (options.ablationEpisodesOnly) {
+        const episodes = tempStore.listEpisodesBySubject(subjectId);
+        const episodeTexts = episodes.map((e) => e.text).join('\n');
+        personaPrompt = episodeTexts || '(无事例)';
+        console.error(`[LOWO]   Ablation: episodes only (${episodes.length} episodes, ${personaPrompt.length} chars)`);
+      }
 
       // 4. Get held-out witness's testimonies
       const heldOutTestimonies = allTestimonies.filter((t) => t.witnessId === heldOut.id);
@@ -233,10 +277,10 @@ export async function runLowo(
 
           console.error(`[LOWO]   Q${questions.length + 1} (${answer.qid})...`);
 
-          // Generate "with persona" prediction
+          // Generate "with persona" prediction — uses evalLlm
           const withPersonaUser = [
             `## 人格描述`,
-            persona.systemPrompt,
+            personaPrompt,
             '',
             `## 证人与当事人的关系`,
             heldOut.relation,
@@ -246,12 +290,12 @@ export async function runLowo(
           ].join('\n');
 
           const withPersonaPrediction = await generatePrediction(
-            llm,
+            evalLlm,
             PREDICT_WITH_PERSONA_SYSTEM,
             withPersonaUser,
           );
 
-          // Generate baseline prediction (no persona)
+          // Generate baseline prediction (no persona) — uses evalLlm
           const baselineUser = [
             `## 证人与当事人的关系`,
             heldOut.relation,
@@ -261,15 +305,15 @@ export async function runLowo(
           ].join('\n');
 
           const baselinePrediction = await generatePrediction(
-            llm,
+            evalLlm,
             PREDICT_BASELINE_SYSTEM,
             baselineUser,
           );
 
-          // 5. Judge: which prediction is closer to real answer?
+          // 5. Judge: which prediction is closer to real answer? — uses evalLlm
           // first = withPersona, second = baseline
           const judgeResult = await judgePair(
-            llm,
+            evalLlm,
             answer.behindText,
             withPersonaPrediction,
             baselinePrediction,
@@ -311,6 +355,10 @@ export async function runLowo(
         personaWins,
         baselineWins,
         discarded,
+        courtStats: {
+          claimCount: survivingCount,
+          durationMs: courtDurationMs,
+        },
       };
       witnessResults.push(wr);
 
@@ -359,15 +407,16 @@ export async function runLowo(
 
   // Write run log
   const run: RunRecord = {
-    kind: 'lowo',
+    kind: options.ablationEpisodesOnly ? 'lowo-ablation-episodes-only' : 'lowo',
     modelName: options.modelName,
     promptSha,
-    commitSha: 'unknown',
+    commitSha: getCommitSha(),
     params: {
       subjectId,
       witnessCount: witnesses.length,
       maxQuestionsPerWitness: options.maxQuestionsPerWitness ?? 'all',
       mismatchSubjectId: options.mismatchSubjectId ?? null,
+      ablationEpisodesOnly: options.ablationEpisodesOnly ?? false,
     },
     results: {
       totalValidPairs: totalValid,
@@ -382,6 +431,7 @@ export async function runLowo(
       personaWins: wr.personaWins,
       baselineWins: wr.baselineWins,
       discarded: wr.discarded,
+      courtStats: wr.courtStats,
       questions: wr.questions.map((q) => ({
         qid: q.qid,
         status: q.judgeResult.status,
