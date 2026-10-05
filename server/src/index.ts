@@ -7,3 +7,6 @@ export * from './mount-rest';
 export * from './mount-openai';
 export * from './mount-mcp';
 export * from './mcp/protocol';
+export * from './scopes';
+export * from './token-store';
+export * from './capabilities';

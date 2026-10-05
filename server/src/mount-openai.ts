@@ -11,6 +11,10 @@
  * Reflux fingerprint: every persona reply (streamed or non-streamed) is
  * fingerprinted for AI-product reflux detection. Streamed responses are
  * fingerprinted once at the end of the stream against the accumulated text.
+ *
+ * Embedding protection: tokens with `persona.chat` scope cannot:
+ * - Disable output-side fact checking or privacy filtering via parameters
+ * - Read the full system prompt text (only metadata is exposed)
  */
 import { z } from 'zod';
 import type { ServerResponse } from 'node:http';
@@ -19,6 +23,8 @@ import type { Plugin } from '@openmimic/kernel';
 import type { ChatMessage } from '@openmimic/engine-court';
 import type { Router } from './router';
 import type { ChatUpstream } from './server';
+import { requireSubjectAccess } from './auth';
+import type { AuthContext } from './scopes';
 
 const PERSONA_MODEL_PREFIX = 'persona/';
 
@@ -69,7 +75,7 @@ const openAiError = (
  *    tool_call that matches their tool_call_id).
  * 2. Strip tool_call / tool_calls fields from assistant messages.
  *
- * Persona models never use tools — these fields come from clients that
+ * Persona models never use tools -- these fields come from clients that
  * copy-paste their tool-use history into a persona conversation.
  */
 function normalizeMessages(messages: readonly ChatMessage[]): ChatMessage[] {
@@ -92,7 +98,7 @@ function normalizeMessages(messages: readonly ChatMessage[]): ChatMessage[] {
     if (msg.role === 'tool') {
       const toolCallId = msg.tool_call_id;
       if (typeof toolCallId !== 'string' || !validToolCallIds.has(toolCallId)) {
-        continue; // orphan — drop
+        continue; // orphan -- drop
       }
       // Even matched tool messages are dropped for persona forwarding
       continue;
@@ -135,13 +141,19 @@ export const mountOpenaiPlugin: Plugin<MountOpenAIConfig> = {
     const router = ctx.get<Router>('router');
     const chat = config?.chat;
 
-    router.get('/v1/models', () => {
+    router.get('/v1/models', (context) => {
+      const auth = context.auth;
       const data: unknown[] = [];
       for (const subject of store.listSubjects()) {
+        // Subject binding enforcement
+        if (auth && auth.subjectIds.length > 0 && !auth.subjectIds.includes(subject.id)) {
+          continue;
+        }
         const served = store
           .listClaimsBySubject(subject.id)
           .some((claim) => claim.status === 'surviving');
         if (!served) continue;
+        // Only expose non-sensitive metadata (no system prompt)
         data.push({
           id: `${PERSONA_MODEL_PREFIX}${subject.id}`,
           object: 'model',
@@ -150,27 +162,34 @@ export const mountOpenaiPlugin: Plugin<MountOpenAIConfig> = {
         });
       }
       return { status: 200, body: { object: 'list', data } };
-    });
+    }, { scope: 'persona.read' });
 
     router.post('/v1/chat/completions', async (context) => {
+      const auth = context.auth;
       const body = ChatCompletionBodySchema.parse(context.body);
       if (!body.model.startsWith(PERSONA_MODEL_PREFIX)) {
         return {
           status: 404,
-          body: openAiError('model_not_found', `未知模型:${body.model}`),
+          body: openAiError('model_not_found', `Unknown model: ${body.model}`),
         };
       }
       const subjectId = body.model.slice(PERSONA_MODEL_PREFIX.length);
       if (subjectId === '' || !store.getSubject(subjectId)) {
         return {
           status: 404,
-          body: openAiError('model_not_found', `未知模型:${body.model}`),
+          body: openAiError('model_not_found', `Unknown model: ${body.model}`),
         };
       }
+
+      // Subject binding enforcement
+      if (auth) {
+        requireSubjectAccess(auth, subjectId);
+      }
+
       if (!chat || !chat.configured || !chat.hasApiKey) {
         return {
           status: 501,
-          body: openAiError('llm_unavailable', '服务器未配置语言模型', 'server_error'),
+          body: openAiError('llm_unavailable', 'LLM not configured', 'server_error'),
         };
       }
 
@@ -193,7 +212,7 @@ export const mountOpenaiPlugin: Plugin<MountOpenAIConfig> = {
       } catch {
         return {
           status: 502,
-          body: openAiError('upstream_error', '上游模型服务不可用', 'server_error'),
+          body: openAiError('upstream_error', 'Upstream model service unavailable', 'server_error'),
         };
       }
       if (!upstream.ok) {
@@ -202,7 +221,7 @@ export const mountOpenaiPlugin: Plugin<MountOpenAIConfig> = {
           status: 502,
           body: openAiError(
             'upstream_error',
-            `上游模型返回 ${upstream.status}${detail ? `:${detail.slice(0, 200)}` : ''}`,
+            `Upstream returned ${upstream.status}${detail ? `: ${detail.slice(0, 200)}` : ''}`,
             'server_error',
           ),
         };
@@ -215,7 +234,7 @@ export const mountOpenaiPlugin: Plugin<MountOpenAIConfig> = {
         } catch {
           return {
             status: 502,
-            body: openAiError('upstream_error', '上游返回了无法解析的响应', 'server_error'),
+            body: openAiError('upstream_error', 'Upstream returned unparseable response', 'server_error'),
           };
         }
         // Post-process: strip stage brackets and fingerprint
@@ -287,7 +306,7 @@ export const mountOpenaiPlugin: Plugin<MountOpenAIConfig> = {
             }
           } catch {
             response.write(
-              `data: ${JSON.stringify(openAiError('upstream_error', '上游流中断', 'server_error'))}\n\n`,
+              `data: ${JSON.stringify(openAiError('upstream_error', 'Upstream stream interrupted', 'server_error'))}\n\n`,
             );
           }
           // End-of-stream reflux fingerprint
@@ -304,6 +323,6 @@ export const mountOpenaiPlugin: Plugin<MountOpenAIConfig> = {
           response.end();
         },
       };
-    });
+    }, { scope: 'persona.chat' });
   },
 };

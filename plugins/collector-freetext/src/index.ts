@@ -40,7 +40,7 @@ export const collectorFreetextPlugin: Plugin = {
           answers: [{ qid: 'freetext', behindText: body.text }],
         });
         return { status: 201, body: result };
-      });
+      }, { open: true });
     }
 
     // Register in collectors registry

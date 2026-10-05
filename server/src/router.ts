@@ -1,4 +1,5 @@
 import type { IncomingMessage, ServerResponse } from 'node:http';
+import type { AuthContext } from './scopes';
 
 /** Everything a route handler receives for one request. */
 export interface RouteContext {
@@ -9,6 +10,8 @@ export interface RouteContext {
   rawBody?: Buffer;
   /** Original `content-type` header, paired with {@link rawBody}. */
   contentType?: string;
+  /** Resolved auth context for this request. */
+  auth?: AuthContext;
 }
 
 export interface RouteResult {
@@ -97,15 +100,37 @@ export async function readJsonBody(request: IncomingMessage): Promise<unknown> {
   }
 }
 
+/**
+ * Options for route registration. Plugins may declare required scopes
+ * via the `scope` field. Routes without a scope declaration default to
+ * 'admin' (fail-closed).
+ */
+export interface RouteOptions {
+  /** The scope required to access this route. Default: 'admin' (fail-closed). */
+  scope?: string;
+  /** When true, this route is open (no auth required). Overrides scope. */
+  open?: boolean;
+}
+
 interface Route {
   method: string;
   segments: string[];
   handler: RouteHandler;
+  /** The scope required to access this route. */
+  scope: string | undefined;
+  /** Whether this route is open (unauthenticated). */
+  open: boolean;
+  /** The original path pattern (e.g. '/api/subjects/:id'). */
+  pattern: string;
 }
 
 export interface RouteMatch {
   handler: RouteHandler;
   params: Record<string, string>;
+  /** The scope required by the matched route, or undefined (defaults to 'admin'). */
+  scope: string | undefined;
+  /** Whether the matched route is open (no auth needed). */
+  open: boolean;
 }
 
 const splitPath = (path: string): string[] => path.split('/').filter((part) => part !== '');
@@ -113,21 +138,31 @@ const splitPath = (path: string): string[] => path.split('/').filter((part) => p
 /**
  * Minimal method + path router: exact segments, `:name` captures, nothing
  * else. No middleware, no wildcards, no regex — the API needs none of them.
+ *
+ * Each route may declare a required scope via {@link RouteOptions}. Routes
+ * without a scope declaration default to 'admin' (fail-closed).
  */
 export class Router {
   private readonly routes: Route[] = [];
 
-  add(method: string, path: string, handler: RouteHandler): this {
-    this.routes.push({ method, segments: splitPath(path), handler });
+  add(method: string, path: string, handler: RouteHandler, options?: RouteOptions): this {
+    this.routes.push({
+      method,
+      segments: splitPath(path),
+      handler,
+      scope: options?.scope,
+      open: options?.open ?? false,
+      pattern: path,
+    });
     return this;
   }
 
-  get(path: string, handler: RouteHandler): this {
-    return this.add('GET', path, handler);
+  get(path: string, handler: RouteHandler, options?: RouteOptions): this {
+    return this.add('GET', path, handler, options);
   }
 
-  post(path: string, handler: RouteHandler): this {
-    return this.add('POST', path, handler);
+  post(path: string, handler: RouteHandler, options?: RouteOptions): this {
+    return this.add('POST', path, handler, options);
   }
 
   match(method: string, pathname: string): RouteMatch | undefined {
@@ -145,8 +180,23 @@ export class Router {
           break;
         }
       }
-      if (matched) return { handler: route.handler, params };
+      if (matched) return { handler: route.handler, params, scope: route.scope, open: route.open };
     }
     return undefined;
+  }
+
+  /**
+   * Return all registered routes with their scope declarations.
+   *
+   * Used by tests to scan for undeclared routes and by the capabilities
+   * endpoint to build the capability directory.
+   */
+  listRoutes(): Array<{ method: string; pattern: string; scope: string | undefined; open: boolean }> {
+    return this.routes.map((r) => ({
+      method: r.method,
+      pattern: r.pattern,
+      scope: r.scope,
+      open: r.open,
+    }));
   }
 }

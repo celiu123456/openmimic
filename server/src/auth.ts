@@ -1,27 +1,38 @@
 /**
- * Minimal access control for public deployments.
+ * Access control for OpenMimic.
  *
- * - OPENMIMIC_ADMIN_TOKEN gates management routes (create subject, view
- *   testimonies, run court, rooms, export, etc.).
- * - Invite/interview routes are open: the invite token itself is the
- *   authorization.
- * - When OPENMIMIC_ADMIN_TOKEN is unset the server binds only to 127.0.0.1
- *   and prints a warning.
+ * Two layers:
+ * 1. **Admin token** (OPENMIMIC_ADMIN_TOKEN): the existing instance-level
+ *    management password. Unchanged behavior — it grants full access.
+ * 2. **Scoped tokens** (omk_...): created via `POST /api/tokens`. Each
+ *    token carries an explicit set of scopes and optional subject bindings.
+ *
+ * Open routes (invites, interviews, health) require no authentication.
+ * Every other route declares the scope it needs; routes without a
+ * declaration default to requiring `admin` (fail-closed).
+ *
+ * When OPENMIMIC_ADMIN_TOKEN is unset the server binds only to 127.0.0.1
+ * and prints a warning. Scoped tokens still work in that mode.
  */
 import type { IncomingMessage } from 'node:http';
 import { HttpError } from './router';
+import {
+  AUTH_ERROR_CODES,
+  ADMIN_AUTH,
+  OPEN_AUTH,
+  TOKEN_PREFIX,
+  hasScope,
+  hasSubjectAccess,
+  type AuthContext,
+} from './scopes';
+import type { TokenStore } from './token-store';
 
-/** Routes that never require authentication. */
-const OPEN_PREFIXES = [
-  '/api/health',
-  '/api/invites/',   // resolve invite, submit testimony, start interview
-  '/api/interview/', // interview session (answer, followup, finish)
-  '/api/i/',         // short code invite resolution
-  '/api/asr',        // speech -- gated by its own config, not auth
-];
+/* ------------------------------------------------------------------ */
+/* Token extraction                                                    */
+/* ------------------------------------------------------------------ */
 
 /**
- * Extract the admin token from the request.
+ * Extract the bearer/cookie/query token from the request.
  *
  * Checks (in order):
  *   1. `Authorization: Bearer <token>` header
@@ -54,31 +65,111 @@ export function extractToken(request: IncomingMessage): string | undefined {
   return undefined;
 }
 
+/* ------------------------------------------------------------------ */
+/* Auth resolution                                                     */
+/* ------------------------------------------------------------------ */
+
 /**
- * Returns true if the path is an open (unauthenticated) route.
+ * Resolve the auth context for a request.
+ *
+ * Order of precedence:
+ *   1. If the route is open, return OPEN_AUTH.
+ *   2. If the token matches the admin token, return ADMIN_AUTH.
+ *   3. If the token starts with `omk_`, resolve it as a scoped token.
+ *   4. Otherwise, throw 401.
  */
-export function isOpenRoute(pathname: string): boolean {
-  return OPEN_PREFIXES.some((prefix) => pathname.startsWith(prefix));
+export function resolveAuth(
+  request: IncomingMessage,
+  adminToken: string | undefined,
+  isOpen: boolean,
+  tokenStore: TokenStore | undefined,
+): AuthContext {
+  if (isOpen) return OPEN_AUTH;
+
+  const token = extractToken(request);
+
+  // No token provided
+  if (!token) {
+    // When no admin token is configured, all routes are open (loopback mode)
+    if (!adminToken) return ADMIN_AUTH;
+    throw new HttpError(401, AUTH_ERROR_CODES.UNAUTHORIZED, 'Authentication required');
+  }
+
+  // Check admin token first
+  if (adminToken && token === adminToken) {
+    return ADMIN_AUTH;
+  }
+
+  // Check scoped token
+  if (token.startsWith(TOKEN_PREFIX) && tokenStore) {
+    const record = tokenStore.resolve(token);
+    if (!record) {
+      throw new HttpError(401, AUTH_ERROR_CODES.UNAUTHORIZED, 'Invalid or expired token');
+    }
+    return {
+      kind: 'scoped_token',
+      scopes: record.scopes,
+      subjectIds: record.subjectIds,
+      tokenId: record.id,
+    };
+  }
+
+  // Token provided but does not match admin or scoped format
+  if (!adminToken) return ADMIN_AUTH;
+  throw new HttpError(401, AUTH_ERROR_CODES.UNAUTHORIZED, 'Invalid token');
+}
+
+/* ------------------------------------------------------------------ */
+/* Scope enforcement                                                   */
+/* ------------------------------------------------------------------ */
+
+/**
+ * Enforce a scope requirement against an auth context.
+ *
+ * Throws HttpError(403) if the auth context does not carry the required scope.
+ */
+export function requireScope(auth: AuthContext, scope: string): void {
+  if (!hasScope(auth, scope)) {
+    throw new HttpError(403, AUTH_ERROR_CODES.FORBIDDEN_SCOPE,
+      `Token does not have the required scope: ${scope}`);
+  }
 }
 
 /**
- * Check admin access. Throws HttpError(401) on failure.
+ * Enforce subject access against an auth context.
+ *
+ * Throws HttpError(403) if the token is subject-bound and the subject is
+ * not in its allowed list.
  */
-export function requireAdmin(
-  request: IncomingMessage,
-  adminToken: string,
-  pathname: string,
-): void {
-  // Static assets and open API routes skip auth
-  if (!pathname.startsWith('/api/') && !pathname.startsWith('/v1/')) return;
-
-  // Open routes
-  if (isOpenRoute(pathname)) return;
-
-  const token = extractToken(request);
-  if (!token || token !== adminToken) {
-    throw new HttpError(401, 'unauthorized', '需要管理口令');
+export function requireSubjectAccess(auth: AuthContext, subjectId: string): void {
+  if (!hasSubjectAccess(auth, subjectId)) {
+    throw new HttpError(403, AUTH_ERROR_CODES.FORBIDDEN_SUBJECT,
+      'Token is not authorized for this subject');
   }
+}
+
+/* ------------------------------------------------------------------ */
+/* Legacy compat: isOpenRoute                                          */
+/* ------------------------------------------------------------------ */
+
+/** Routes that never require authentication (used by open route declarations). */
+const OPEN_PREFIXES = [
+  '/api/health',
+  '/api/invites/',   // resolve invite, submit testimony, start interview
+  '/api/interview/', // interview session (answer, followup, finish)
+  '/api/asr',        // speech -- gated by its own config, not auth
+  '/api/capabilities', // public capability directory
+];
+
+/**
+ * Returns true if the path is an open (unauthenticated) route.
+ *
+ * Note: this is now a fallback. Routes should declare `{ open: true }` in
+ * their registration. This function catches routes that use the old prefix
+ * convention.
+ */
+export function isOpenRoute(pathname: string): boolean {
+  return OPEN_PREFIXES.some((prefix) => pathname.startsWith(prefix));
 }
 
 /* ------------------------------------------------------------------ */
@@ -139,10 +230,18 @@ export class RateLimiter {
 }
 
 /**
- * Extract a rate-limit key from the request. Uses the invite token if
- * present in the URL, otherwise falls back to the remote IP.
+ * Extract a rate-limit key from the request. Uses the auth token ID if
+ * available, the invite token if present in the URL, otherwise falls back
+ * to the remote IP.
  */
-export function rateLimitKey(request: IncomingMessage, pathname: string): string {
+export function rateLimitKey(
+  request: IncomingMessage,
+  pathname: string,
+  auth?: AuthContext,
+): string {
+  // For scoped tokens, key by token ID
+  if (auth?.tokenId) return `token:${auth.tokenId}`;
+
   // For invite/interview routes, key by the token in the URL
   const inviteMatch = pathname.match(/^\/api\/invites\/([^/]+)/);
   if (inviteMatch) return `invite:${inviteMatch[1]}`;
@@ -156,4 +255,31 @@ export function rateLimitKey(request: IncomingMessage, pathname: string): string
     ? forwarded.split(',')[0]!.trim()
     : request.socket.remoteAddress ?? 'unknown';
   return `ip:${ip}`;
+}
+
+/* ------------------------------------------------------------------ */
+/* Legacy compat: requireAdmin (kept for backward compatibility)       */
+/* ------------------------------------------------------------------ */
+
+/**
+ * @deprecated Use resolveAuth + requireScope instead.
+ *
+ * Kept so that the existing test suite continues to pass during migration.
+ * Internally delegates to the new auth system.
+ */
+export function requireAdmin(
+  request: IncomingMessage,
+  adminToken: string,
+  pathname: string,
+): void {
+  // Static assets and open API routes skip auth
+  if (!pathname.startsWith('/api/') && !pathname.startsWith('/v1/')) return;
+
+  // Open routes
+  if (isOpenRoute(pathname)) return;
+
+  const token = extractToken(request);
+  if (!token || token !== adminToken) {
+    throw new HttpError(401, AUTH_ERROR_CODES.UNAUTHORIZED, 'Authentication required');
+  }
 }

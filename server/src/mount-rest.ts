@@ -5,6 +5,10 @@
  * `store` and `witness`, and optionally uses `court`, `room` and `llm` when
  * available. If those engines are not loaded, routes that require them return
  * 501 (or fall back to demo data for the demo subject).
+ *
+ * Every route declares the scope it requires via the third argument to
+ * `router.get()` / `router.post()`. Routes without a declaration default
+ * to `admin` (fail-closed).
  */
 import { randomUUID } from 'node:crypto';
 import { z, ZodError } from 'zod';
@@ -34,6 +38,10 @@ import {
   personaContentDisposition,
 } from './persona-package';
 import { HttpError, type Router } from './router';
+import { requireSubjectAccess } from './auth';
+import { buildCapabilityDirectory } from './capabilities';
+import { SCOPE_DEFINITIONS, AUTH_ERROR_CODES, type AuthContext } from './scopes';
+import type { TokenStore } from './token-store';
 import {
   isAsrAvailable,
   normalizeAudioInput,
@@ -54,6 +62,13 @@ const CreateRoomBodySchema = z.object({
   scenarioId: z.string().min(1).optional(),
 });
 
+const CreateTokenBodySchema = z.object({
+  name: z.string().min(1).max(128),
+  scopes: z.array(z.string().min(1)).min(1),
+  subjectIds: z.array(z.string().min(1)).optional(),
+  expiresAt: z.string().min(1).optional(),
+});
+
 const errorBody = (code: string, message: string): unknown => ({ error: { code, message } });
 
 function claimsForSession(store: Store, subjectId: string, sessionId: string) {
@@ -62,10 +77,21 @@ function claimsForSession(store: Store, subjectId: string, sessionId: string) {
     .filter((claim) => claim.courtSessionId === sessionId);
 }
 
+/** Enforce subject binding from the auth context. */
+function enforceSubject(context: { auth?: AuthContext; params: Record<string, string> }): void {
+  const auth = context.auth;
+  const subjectId = context.params.id;
+  if (auth && subjectId) {
+    requireSubjectAccess(auth, subjectId);
+  }
+}
+
 export interface MountRestConfig {
   asr?: Partial<AsrConfig>;
   /** Base URL for invite links (e.g. "https://example.com"). */
   publicUrl?: string;
+  /** Token store for scoped API tokens (injected by server). */
+  tokenStore?: TokenStore;
 }
 
 export const mountRestPlugin: Plugin<MountRestConfig> = {
@@ -79,21 +105,78 @@ export const mountRestPlugin: Plugin<MountRestConfig> = {
     const router = ctx.get<Router>('router');
     const asr: AsrConfig = { ...readAsrConfig(), ...config?.asr };
     const publicUrl = (config?.publicUrl ?? process.env.OPENMIMIC_PUBLIC_URL ?? '').replace(/\/+$/, '');
+    const tokenStore = config?.tokenStore;
 
     const hasCourt = () => ctx.has('court');
     const getCourt = () => ctx.get<CourtEngine>('court');
     const hasRoom = () => ctx.has('room');
     const getRoom = () => ctx.get<RoomEngine>('room');
 
+    /* ---------------------------------------------------------------- */
+    /* Health & capabilities (open)                                      */
+    /* ---------------------------------------------------------------- */
+
     router.get('/api/health', () => ({
       status: 200,
       body: { ok: true, version: SERVER_VERSION },
-    }));
+    }), { open: true });
+
+    router.get('/api/capabilities', () => {
+      const capabilities = buildCapabilityDirectory();
+      const scopes = Object.fromEntries(SCOPE_DEFINITIONS);
+      return { status: 200, body: { capabilities, scopes } };
+    }, { open: true });
+
+    /* ---------------------------------------------------------------- */
+    /* Token management (admin only)                                     */
+    /* ---------------------------------------------------------------- */
+
+    router.post('/api/tokens', (context) => {
+      if (!tokenStore) {
+        throw new HttpError(501, 'tokens_unavailable', 'Token management is not available');
+      }
+      const body = CreateTokenBodySchema.parse(context.body);
+      try {
+        const result = tokenStore.create({
+          name: body.name,
+          scopes: body.scopes,
+          subjectIds: body.subjectIds,
+          expiresAt: body.expiresAt,
+        });
+        return { status: 201, body: result };
+      } catch (err: unknown) {
+        if (err instanceof Error && err.message.includes('unknown scope')) {
+          throw new HttpError(400, 'invalid_scope', err.message);
+        }
+        throw err;
+      }
+    }, { scope: 'admin' });
+
+    router.get('/api/tokens', () => {
+      if (!tokenStore) {
+        throw new HttpError(501, 'tokens_unavailable', 'Token management is not available');
+      }
+      return { status: 200, body: { tokens: tokenStore.list() } };
+    }, { scope: 'admin' });
+
+    router.add('DELETE', '/api/tokens/:id', (context) => {
+      if (!tokenStore) {
+        throw new HttpError(501, 'tokens_unavailable', 'Token management is not available');
+      }
+      const id = context.params.id ?? '';
+      const deleted = tokenStore.delete(id);
+      if (!deleted) throw new HttpError(404, 'token_not_found', 'Token not found');
+      return { status: 200, body: { ok: true } };
+    }, { scope: 'admin' });
+
+    /* ---------------------------------------------------------------- */
+    /* Subjects                                                          */
+    /* ---------------------------------------------------------------- */
 
     router.get('/api/subjects', () => {
       const subjects = store.listSubjects();
       return { status: 200, body: { subjects } };
-    });
+    }, { scope: 'persona.read' });
 
     router.post('/api/subjects', (context) => {
       const body = CreateSubjectBodySchema.parse(context.body);
@@ -104,11 +187,12 @@ export const mountRestPlugin: Plugin<MountRestConfig> = {
       });
       store.putSubject(subject);
       return { status: 201, body: subject };
-    });
+    }, { scope: 'admin' });
 
     router.post('/api/subjects/:id/invites', (context) => {
+      enforceSubject(context);
       const subject = store.getSubject(context.params.id ?? '');
-      if (!subject) throw new HttpError(404, 'subject_not_found', '当事人不存在');
+      if (!subject) throw new HttpError(404, 'subject_not_found', 'Subject not found');
       const invite = collector.createInvite(subject.id);
       const invitePath = `/i/${invite.token}`;
       return {
@@ -127,17 +211,21 @@ export const mountRestPlugin: Plugin<MountRestConfig> = {
             : {}),
         },
       };
-    });
+    }, { scope: 'admin' });
+
+    /* ---------------------------------------------------------------- */
+    /* Invite / interview routes (open — gated by invite token)          */
+    /* ---------------------------------------------------------------- */
 
     router.get('/api/invites/:token', (context) => {
       const resolved = collector.resolveInvite(context.params.token ?? '');
       const subject = store.getSubject(resolved.subjectId);
-      if (!subject) throw new HttpError(404, 'subject_not_found', '当事人不存在');
+      if (!subject) throw new HttpError(404, 'subject_not_found', 'Subject not found');
       return {
         status: 200,
         body: { subjectDisplayName: subject.displayName, questionnaire: resolved.questionnaire },
       };
-    });
+    }, { open: true });
 
     /* Short code resolution — stricter rate limit against guessing */
     const shortCodeLimiter = new RateLimiter({ maxRequests: 10, windowMs: 60_000 });
@@ -167,9 +255,7 @@ export const mountRestPlugin: Plugin<MountRestConfig> = {
       const input = SubmitTestimonyInputSchema.parse(context.body);
       const result = collector.submitTestimony(context.params.token ?? '', input);
       return { status: 201, body: result };
-    });
-
-    /* Interview sessions */
+    }, { open: true });
 
     router.post('/api/invites/:token/interview', (context) => {
       const started = collector.startInterview(context.params.token ?? '');
@@ -181,30 +267,35 @@ export const mountRestPlugin: Plugin<MountRestConfig> = {
           total: collector.questionnaire.questions.length,
         },
       };
-    });
+    }, { open: true });
 
     router.post('/api/interview/:sid/answer', async (context) => {
       const input = AnswerQuestionInputSchema.parse(context.body);
       const step = await collector.answerQuestion(context.params.sid ?? '', input);
       return { status: 200, body: step };
-    });
+    }, { open: true });
 
     router.post('/api/interview/:sid/followup', (context) => {
       const input = AnswerFollowupInputSchema.parse(context.body);
       const step = collector.answerFollowup(context.params.sid ?? '', input);
       return { status: 200, body: step };
-    });
+    }, { open: true });
 
     router.post('/api/interview/:sid/finish', (context) => {
       const input = FinishInterviewInputSchema.parse(context.body);
       const result = collector.finishInterview(context.params.sid ?? '', input);
       return { status: 201, body: result };
-    });
+    }, { open: true });
+
+    /* ---------------------------------------------------------------- */
+    /* Subject data — persona.read scope                                 */
+    /* ---------------------------------------------------------------- */
 
     router.get('/api/subjects/:id/progress', (context) => {
+      enforceSubject(context);
       const subjectId = context.params.id ?? '';
       if (!store.getSubject(subjectId)) {
-        throw new HttpError(404, 'subject_not_found', '当事人不存在');
+        throw new HttpError(404, 'subject_not_found', 'Subject not found');
       }
       return {
         status: 200,
@@ -213,7 +304,23 @@ export const mountRestPlugin: Plugin<MountRestConfig> = {
           witnessCount: store.listWitnessesBySubject(subjectId).length,
         },
       };
-    });
+    }, { scope: 'persona.read' });
+
+    router.get('/api/subjects/:id/claims', (context) => {
+      enforceSubject(context);
+      const subjectId = context.params.id ?? '';
+      if (!store.getSubject(subjectId)) {
+        throw new HttpError(404, 'subject_not_found', 'Subject not found');
+      }
+      const claims = store
+        .listClaimsBySubject(subjectId)
+        .filter((claim) => claim.status === 'surviving');
+      return { status: 200, body: { claims } };
+    }, { scope: 'persona.read' });
+
+    /* ---------------------------------------------------------------- */
+    /* Rooms                                                             */
+    /* ---------------------------------------------------------------- */
 
     /* Coverage overview for the inviter page */
 
@@ -234,17 +341,19 @@ export const mountRestPlugin: Plugin<MountRestConfig> = {
     });
 
     router.get('/api/subjects/:id/rooms', (context) => {
+      enforceSubject(context);
       const subjectId = context.params.id ?? '';
       if (!store.getSubject(subjectId)) {
-        throw new HttpError(404, 'subject_not_found', '当事人不存在');
+        throw new HttpError(404, 'subject_not_found', 'Subject not found');
       }
       return { status: 200, body: { rooms: store.listRoomsBySubject(subjectId) } };
-    });
+    }, { scope: 'room.read' });
 
     router.post('/api/subjects/:id/rooms', async (context) => {
+      enforceSubject(context);
       const subjectId = context.params.id ?? '';
       if (!store.getSubject(subjectId)) {
-        throw new HttpError(404, 'subject_not_found', '当事人不存在');
+        throw new HttpError(404, 'subject_not_found', 'Subject not found');
       }
       const body = CreateRoomBodySchema.parse(context.body ?? {});
 
@@ -260,7 +369,7 @@ export const mountRestPlugin: Plugin<MountRestConfig> = {
         throw new HttpError(
           422,
           'room_refused',
-          `话题种子包含危机词面「${crisisWord}」,拒绝开房`,
+          `Topic seed contains crisis word "${crisisWord}"`,
         );
       }
 
@@ -275,16 +384,16 @@ export const mountRestPlugin: Plugin<MountRestConfig> = {
       if (subjectId === DEMO_SUBJECT_ID) {
         const rooms = store.listRoomsBySubject(subjectId);
         const room = rooms[rooms.length - 1];
-        if (!room) throw new HttpError(500, 'demo_missing', '演示数据未初始化');
+        if (!room) throw new HttpError(500, 'demo_missing', 'Demo data not initialized');
         return { status: 201, body: room };
       }
-      throw new HttpError(501, 'llm_unavailable', '服务器未配置语言模型');
-    });
+      throw new HttpError(501, 'llm_unavailable', 'LLM not configured');
+    }, { scope: 'room.run' });
 
     router.post('/api/rooms/:id/door', async (context) => {
       const roomId = context.params.id ?? '';
       const room = store.getRoom(roomId);
-      if (!room) throw new HttpError(404, 'room_not_found', '房间不存在');
+      if (!room) throw new HttpError(404, 'room_not_found', 'Room not found');
 
       if (hasRoom()) {
         const opened = await getRoom().openDoor(roomId);
@@ -293,22 +402,25 @@ export const mountRestPlugin: Plugin<MountRestConfig> = {
       if (room.subjectId === DEMO_SUBJECT_ID) {
         return { status: 200, body: room };
       }
-      throw new HttpError(501, 'llm_unavailable', '服务器未配置语言模型');
-    });
+      throw new HttpError(501, 'llm_unavailable', 'LLM not configured');
+    }, { scope: 'room.run' });
 
     router.get('/api/rooms/:id', (context) => {
       const room = store.getRoom(context.params.id ?? '');
-      if (!room) throw new HttpError(404, 'room_not_found', '房间不存在');
+      if (!room) throw new HttpError(404, 'room_not_found', 'Room not found');
       const subject = store.getSubject(room.subjectId);
       return { status: 200, body: { ...room, subjectDisplayName: subject?.displayName ?? '' } };
-    });
+    }, { scope: 'room.read' });
 
-    /* Court */
+    /* ---------------------------------------------------------------- */
+    /* Court                                                             */
+    /* ---------------------------------------------------------------- */
 
     router.post('/api/subjects/:id/court', async (context) => {
+      enforceSubject(context);
       const subjectId = context.params.id ?? '';
       if (!store.getSubject(subjectId)) {
-        throw new HttpError(404, 'subject_not_found', '当事人不存在');
+        throw new HttpError(404, 'subject_not_found', 'Subject not found');
       }
 
       if (hasCourt()) {
@@ -327,32 +439,30 @@ export const mountRestPlugin: Plugin<MountRestConfig> = {
       if (subjectId === DEMO_SUBJECT_ID) {
         const sessions = store.listCourtSessionsBySubject(subjectId);
         const session = sessions[sessions.length - 1];
-        if (!session) throw new HttpError(500, 'demo_missing', '演示数据未初始化');
+        if (!session) throw new HttpError(500, 'demo_missing', 'Demo data not initialized');
         return {
           status: 200,
           body: { session, claims: claimsForSession(store, subjectId, session.id) },
         };
       }
-      throw new HttpError(501, 'llm_unavailable', '服务器未配置语言模型');
-    });
+      throw new HttpError(501, 'llm_unavailable', 'LLM not configured');
+    }, { scope: 'court.run' });
 
-    router.get('/api/subjects/:id/claims', (context) => {
-      const subjectId = context.params.id ?? '';
-      if (!store.getSubject(subjectId)) {
-        throw new HttpError(404, 'subject_not_found', '当事人不存在');
-      }
-      const claims = store
-        .listClaimsBySubject(subjectId)
-        .filter((claim) => claim.status === 'surviving');
-      return { status: 200, body: { claims } };
-    });
+    router.get('/api/court/:sessionId', (context) => {
+      const session = store.getCourtSession(context.params.sessionId ?? '');
+      if (!session) throw new HttpError(404, 'session_not_found', 'Court session not found');
+      return { status: 200, body: session };
+    }, { scope: 'persona.read' });
 
-    /* Corpus, episodes, divergences */
+    /* ---------------------------------------------------------------- */
+    /* Testimony data (requires testimony.read or testimony.write)       */
+    /* ---------------------------------------------------------------- */
 
     router.post('/api/subjects/:id/corpus', (context) => {
+      enforceSubject(context);
       const subjectId = context.params.id ?? '';
       if (!store.getSubject(subjectId)) {
-        throw new HttpError(404, 'subject_not_found', '当事人不存在');
+        throw new HttpError(404, 'subject_not_found', 'Subject not found');
       }
       const { text } = z.object({ text: z.string().min(1) }).parse(context.body);
       const lines = text.split('\n').map((l) => l.trim()).filter((l) => l.length > 0);
@@ -366,30 +476,33 @@ export const mountRestPlugin: Plugin<MountRestConfig> = {
         }),
       );
       return { status: 201, body: { items } };
-    });
+    }, { scope: 'testimony.write' });
 
     router.get('/api/subjects/:id/corpus', (context) => {
+      enforceSubject(context);
       const subjectId = context.params.id ?? '';
       if (!store.getSubject(subjectId)) {
-        throw new HttpError(404, 'subject_not_found', '当事人不存在');
+        throw new HttpError(404, 'subject_not_found', 'Subject not found');
       }
       const items = store.listCorpusItemsBySubject(subjectId);
       return { status: 200, body: { items } };
-    });
+    }, { scope: 'testimony.read' });
 
     router.get('/api/subjects/:id/divergences', (context) => {
+      enforceSubject(context);
       const subjectId = context.params.id ?? '';
       if (!store.getSubject(subjectId)) {
-        throw new HttpError(404, 'subject_not_found', '当事人不存在');
+        throw new HttpError(404, 'subject_not_found', 'Subject not found');
       }
       const divergences = store.listDivergencesBySubject(subjectId);
       return { status: 200, body: { divergences } };
-    });
+    }, { scope: 'testimony.read' });
 
     router.get('/api/subjects/:id/episodes', (context) => {
+      enforceSubject(context);
       const subjectId = context.params.id ?? '';
       if (!store.getSubject(subjectId)) {
-        throw new HttpError(404, 'subject_not_found', '当事人不存在');
+        throw new HttpError(404, 'subject_not_found', 'Subject not found');
       }
       const episodes = store.listEpisodesBySubject(subjectId);
       const synthesisOnlyWitnessIds = new Set(
@@ -403,16 +516,19 @@ export const mountRestPlugin: Plugin<MountRestConfig> = {
           : ep,
       );
       return { status: 200, body: { episodes: filtered } };
-    });
+    }, { scope: 'testimony.read' });
 
-    /* Persona packages */
+    /* ---------------------------------------------------------------- */
+    /* Persona packages                                                  */
+    /* ---------------------------------------------------------------- */
 
     router.get('/api/subjects/:id/export', (context) => {
+      enforceSubject(context);
       const subjectId = context.params.id ?? '';
       const subject = store.getSubject(subjectId);
-      if (!subject) throw new HttpError(404, 'subject_not_found', '当事人不存在');
+      if (!subject) throw new HttpError(404, 'subject_not_found', 'Subject not found');
       const pkg = buildPersonaPackage(subjectId, store);
-      if (!pkg) throw new HttpError(404, 'subject_not_found', '当事人不存在');
+      if (!pkg) throw new HttpError(404, 'subject_not_found', 'Subject not found');
       const body = withholdSynthesisOnly(store, subjectId, pkg);
       return {
         status: 200,
@@ -421,35 +537,33 @@ export const mountRestPlugin: Plugin<MountRestConfig> = {
           'content-disposition': personaContentDisposition(subject.displayName, subjectId),
         },
       };
-    });
+    }, { scope: 'export' });
 
     router.post('/api/import', (context) => {
       const result = importPersonaPackage(store, context.body);
       return { status: 201, body: result };
-    });
+    }, { scope: 'admin' });
 
-    router.get('/api/court/:sessionId', (context) => {
-      const session = store.getCourtSession(context.params.sessionId ?? '');
-      if (!session) throw new HttpError(404, 'session_not_found', '法庭会话不存在');
-      return { status: 200, body: session };
-    });
+    /* ---------------------------------------------------------------- */
+    /* ASR (admin — uses server resources)                               */
+    /* ---------------------------------------------------------------- */
 
     router.get('/api/asr/available', () => ({
       status: 200,
       body: { available: isAsrAvailable(asr) },
-    }));
+    }), { scope: 'admin' });
 
     router.post('/api/asr', async (context) => {
       if (!isAsrAvailable(asr)) {
-        throw new HttpError(501, 'asr_unavailable', '服务器未配置语音转写');
+        throw new HttpError(501, 'asr_unavailable', 'ASR not configured');
       }
       const raw = context.rawBody;
       if (!raw || raw.length === 0) {
-        throw new HttpError(400, 'asr_no_audio', '没有收到音频数据');
+        throw new HttpError(400, 'asr_no_audio', 'No audio data received');
       }
       const input = await normalizeAudioInput(raw, context.contentType ?? '');
       const text = await transcribeAudio(input, asr);
       return { status: 200, body: { text } };
-    });
+    }, { scope: 'admin' });
   },
 };

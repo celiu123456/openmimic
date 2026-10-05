@@ -30,7 +30,22 @@ import {
 import { readAsrConfig, type AsrConfig } from './asr';
 import { createStaticHandler, type StaticHandler } from './static';
 import { resolvePlugin } from './plugin-resolver';
-import { requireAdmin, RateLimiter, rateLimitKey, isOpenRoute } from './auth';
+import {
+  resolveAuth,
+  requireScope,
+  requireSubjectAccess,
+  isOpenRoute,
+  RateLimiter,
+  rateLimitKey,
+  requireAdmin,
+} from './auth';
+import {
+  AUTH_ERROR_CODES,
+  deriveTokenSalt,
+  type AuthContext,
+} from './scopes';
+import { TokenStore } from './token-store';
+import { buildCapabilityDirectory, type CapabilityDeclaration } from './capabilities';
 import type { MountRestConfig } from './mount-rest';
 import type { MountOpenAIConfig } from './mount-openai';
 import type { MountMcpConfig } from './mount-mcp';
@@ -81,6 +96,11 @@ export interface StartServerOptions {
    * the server binds only to 127.0.0.1 (loopback) and all routes are open.
    */
   adminToken?: string;
+  /**
+   * Per-token rate limit for the OpenAI-compatible endpoint.
+   * Defaults to 60 requests per minute.
+   */
+  tokenRateLimit?: { maxRequests: number; windowMs: number };
 }
 
 export interface RunningServer {
@@ -130,26 +150,51 @@ async function handleRequest(
   staticHandler: StaticHandler | undefined,
   adminToken: string | undefined,
   submitLimiter: RateLimiter,
+  tokenLimiter: RateLimiter,
+  tokenStore: TokenStore | undefined,
 ): Promise<void> {
   try {
     const url = new URL(request.url ?? '/', 'http://localhost');
     const method = request.method ?? 'GET';
 
-    // Access control
-    if (adminToken) {
-      requireAdmin(request, adminToken, url.pathname);
+    // Match the route first so we know its scope declaration
+    const match = router.match(method, url.pathname);
+
+    // Determine if this is an open route (either by route declaration or prefix)
+    const routeIsOpen = match?.open ?? false;
+    const pathIsOpen = isOpenRoute(url.pathname);
+    const isOpen = routeIsOpen || pathIsOpen ||
+      (!url.pathname.startsWith('/api/') && !url.pathname.startsWith('/v1/'));
+
+    // Resolve auth context
+    const auth = resolveAuth(request, adminToken, isOpen, tokenStore);
+
+    // Scope enforcement for matched routes
+    if (match && !isOpen) {
+      // Use the route's declared scope, or default to 'admin' (fail-closed)
+      const requiredScope = match.scope ?? 'admin';
+      requireScope(auth, requiredScope);
     }
 
-    // Rate limiting for testimony/interview submission routes
-    if (method === 'POST' && isOpenRoute(url.pathname)) {
+    // Rate limiting
+    if (auth.kind === 'scoped_token') {
+      // Per-token rate limit for scoped tokens
+      const key = rateLimitKey(request, url.pathname, auth);
+      if (!tokenLimiter.check(key)) {
+        sendJson(response, 429, errorBody(AUTH_ERROR_CODES.RATE_LIMITED,
+          'Token rate limit exceeded'), store);
+        return;
+      }
+    } else if (method === 'POST' && pathIsOpen) {
+      // Legacy rate limiting for open submission routes
       const key = rateLimitKey(request, url.pathname);
       if (!submitLimiter.check(key)) {
-        sendJson(response, 429, errorBody('rate_limited', '请求太频繁,请稍后再试'), store);
+        sendJson(response, 429, errorBody(AUTH_ERROR_CODES.RATE_LIMITED,
+          'Rate limit exceeded'), store);
         return;
       }
     }
 
-    const match = router.match(method, url.pathname);
     if (!match) {
       if (!url.pathname.startsWith('/api/') && staticHandler) {
         const asset = await staticHandler(url.pathname);
@@ -158,7 +203,7 @@ async function handleRequest(
           return;
         }
       }
-      sendJson(response, 404, errorBody('not_found', '接口不存在'), store);
+      sendJson(response, 404, errorBody('not_found', 'Endpoint not found'), store);
       return;
     }
     let body: unknown;
@@ -173,6 +218,7 @@ async function handleRequest(
       body,
       ...(rawBody !== undefined ? { rawBody } : {}),
       contentType: request.headers['content-type'] ?? '',
+      auth,
     };
     const result: RouteHandlerResult = await match.handler(context);
     if (isStreamResult(result)) {
@@ -199,7 +245,7 @@ async function handleRequest(
     } else if (caught instanceof HttpError) {
       sendJson(response, caught.status, errorBody(caught.code, caught.message), store);
     } else {
-      sendJson(response, 500, errorBody('internal_error', '服务器内部错误'), store);
+      sendJson(response, 500, errorBody('internal_error', 'Internal server error'), store);
     }
   }
 }
@@ -215,7 +261,7 @@ function createEnvLLM(): OpenAICompatClient | undefined {
 /**
  * Start the collection API and resolve once it is listening.
  *
- * Internally assembles the plugin system: preset services → engine plugins →
+ * Internally assembles the plugin system: preset services -> engine plugins ->
  * mount plugins. The caller owns the {@link Store}; closing the server does
  * not close it.
  */
@@ -230,8 +276,14 @@ export async function startServer(options: StartServerOptions): Promise<RunningS
   const adminToken = options.adminToken ?? process.env.OPENMIMIC_ADMIN_TOKEN;
   const bindLoopbackOnly = !adminToken;
 
-  // Rate limiter: 30 requests per minute per IP/token for submission routes
+  // Token store for scoped access tokens
+  const tokenSalt = deriveTokenSalt(adminToken);
+  const tokenStore = new TokenStore(store, tokenSalt);
+
+  // Rate limiters
   const submitLimiter = new RateLimiter({ maxRequests: 30, windowMs: 60_000 });
+  const tokenRateCfg = options.tokenRateLimit ?? { maxRequests: 60, windowMs: 60_000 };
+  const tokenLimiter = new RateLimiter(tokenRateCfg);
 
   // Demo seed
   const skipDemo = options.skipDemo ?? process.env.OPENMIMIC_SKIP_DEMO === '1';
@@ -254,7 +306,7 @@ export async function startServer(options: StartServerOptions): Promise<RunningS
   // to concrete Plugin objects). Engine plugins that need llm are only
   // loaded when an LLM is available.
   const pluginConfigs: Record<string, unknown> = {
-    'mount-rest': { asr: options.asr } satisfies MountRestConfig,
+    'mount-rest': { asr: options.asr, tokenStore } satisfies MountRestConfig & { tokenStore: TokenStore },
     'mount-openai': { chat } satisfies MountOpenAIConfig,
     'mount-mcp': { chat } satisfies MountMcpConfig,
   };
@@ -282,7 +334,10 @@ export async function startServer(options: StartServerOptions): Promise<RunningS
   const staticHandler = distDir === '' ? undefined : createStaticHandler(distDir);
 
   const server = createServer((request, response) => {
-    void handleRequest(request, response, router, store, staticHandler, adminToken, submitLimiter);
+    void handleRequest(
+      request, response, router, store, staticHandler,
+      adminToken, submitLimiter, tokenLimiter, tokenStore,
+    );
   });
 
   const bindHost = bindLoopbackOnly ? '127.0.0.1' : '0.0.0.0';

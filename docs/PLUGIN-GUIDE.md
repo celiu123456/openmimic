@@ -273,6 +273,59 @@ plugins:
 
 See `docs/chatlog-import.md` for format details and examples.
 
+## Route scope declarations
+
+When a plugin registers HTTP routes via the `router`, it should declare
+the required scope for each route:
+
+```ts
+import type { Router } from '@openmimic/server';
+
+// In your plugin's apply():
+const router = ctx.get<Router>('router');
+
+// Declare the required scope as the third argument
+router.get('/api/my-data', handler, { scope: 'persona.read' });
+router.post('/api/my-action', handler, { scope: 'admin' });
+
+// Open routes (no auth required)
+router.get('/api/my-public', handler, { open: true });
+```
+
+**Fail-closed default**: routes without a scope declaration require `admin`.
+This means your plugin's routes are safe by default -- they will only be
+accessible to the admin token until you explicitly declare a more permissive
+scope.
+
+Available scopes: `persona.chat`, `persona.read`, `testimony.read`,
+`testimony.write`, `court.run`, `room.run`, `room.read`, `export`, `admin`.
+See `docs/AUTH.md` for the full scope table.
+
+## Capability declarations
+
+Plugins may declare capabilities in their manifest for the capability
+directory (`GET /api/capabilities`). This is optional but recommended for
+plugins that add user-facing features:
+
+```ts
+import type { CapabilityDeclaration } from '@openmimic/server';
+
+// Declare capabilities alongside your routes
+const MY_CAPABILITIES: CapabilityDeclaration[] = [
+  {
+    id: 'my-plugin.analyze',
+    description: 'Run analysis on a subject.',
+    requiredScope: 'admin',
+    route: 'POST /api/subjects/:id/analyze',
+    idempotent: false,
+    errorCodes: ['unauthorized', 'forbidden_scope'],
+  },
+];
+```
+
+The capability directory is publicly readable and contains only the catalog
+(no data). It helps API consumers discover what an instance can do.
+
 ## Unloading
 
 `PluginHost.unload(name)` runs the dispose callback, removes provided services, collector/scenario registrations, and event listeners. It refuses to unload a plugin if another loaded plugin depends on one of its services.
