@@ -199,7 +199,21 @@ describe('room API with an injected LLM', () => {
   });
 
   it('runs behind and door through the injected FakeLLM, and door is idempotent', async () => {
-    const llm = new FakeLLM([line('背后第一句'), line('背后第二句'), line('当面第一句'), line('当面第二句')]);
+    // Two witnesses are needed to meet MIN_FRONT_TEXT_WITNESSES = 2.
+    // Use a function-based FakeLLM to handle variable call counts from
+    // no-talk list, compose-line, and contradiction-check calls.
+    let composeCount = 0;
+    const llm = new FakeLLM(
+      Array.from({ length: 30 }, () => (req: { system: string; user: string }) => {
+        // No-talk list calls expect a JSON array
+        if (req.system.includes('保密') || req.user.includes('不该知道')) return '[]';
+        // Contradiction check calls
+        if (req.system.includes('矛盾判定器')) return '否';
+        // composeLine calls
+        composeCount++;
+        return line(`第${composeCount}句`);
+      }),
+    );
     server = await startServer({ port: 0, store, llm, webDistDir: '' });
     base = server.url;
 
@@ -212,17 +226,24 @@ describe('room API with an injected LLM', () => {
       subjectId,
       answers: [{ qid: 'q1', behindText: '背后的记忆', frontText: '当面的说法' }],
     });
+    store.putWitness({ id: 'w-2', subjectId, relation: '同事', consentLevel: 'quotable' });
+    store.addTestimony({
+      id: 't-2',
+      witnessId: 'w-2',
+      subjectId,
+      answers: [{ qid: 'q1', behindText: '同事的记忆', frontText: '同事当面说' }],
+    });
 
     const rooms = await api(base, 'POST', `/api/subjects/${subjectId}/rooms`, {});
     expect(rooms.status).toBe(201);
-    expect(rooms.body.behindTranscript).toHaveLength(2);
+    expect((rooms.body.behindTranscript as unknown[]).length).toBeGreaterThanOrEqual(2);
     expect(rooms.body.topicSeed).toBe('最近怎么看 TA');
 
     const roomId = rooms.body.id as string;
     const opened = await api(base, 'POST', `/api/rooms/${roomId}/door`);
     expect(opened.status).toBe(200);
     expect(opened.body.status).toBe('door_opened');
-    expect(opened.body.frontTranscript).toHaveLength(2);
+    expect((opened.body.frontTranscript as unknown[]).length).toBeGreaterThanOrEqual(2);
 
     const callsAfterOpen = llm.calls.length;
     const again = await api(base, 'POST', `/api/rooms/${roomId}/door`);

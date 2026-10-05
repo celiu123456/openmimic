@@ -245,8 +245,10 @@ describe('persona verification integration', () => {
       webDistDir: '',
     });
 
+    // Use a question that does NOT overlap with any private topic content chars.
+    // Avoid chars present in limo fixture's private topic labels (话/借/万/辞/etc).
     const res = await streamApi(
-      server.url, '/v1/chat/completions', chatBody('他是不是不太爱说话?', true),
+      server.url, '/v1/chat/completions', chatBody('你感觉怎样?', true),
     );
     expect(res.status).toBe(200);
     expect(res.headers.get('content-type')).toContain('text/event-stream');
@@ -356,5 +358,126 @@ describe('persona verification integration', () => {
     expect(res.status).toBe(200);
     // Verify was still called (1 call = verify pass, response has fact signals)
     expect(fakeLlm.calls.length).toBeGreaterThanOrEqual(1);
+  });
+
+  it('non-stream: private topic confirmation is deflected via excludedPrivateTopics', async () => {
+    store = new Store();
+    seedDemo(store);
+
+    // The persona confirms borrowing — "借过,后来还了"
+    // The verifier's pre-LLM private topic check should catch this
+    // because limo fixture contains "借了两万...千万别跟他妈提" which
+    // produces excludedPrivateTopics including "借" content chars.
+    // No FakeLLM calls needed: the pattern match fires before LLM.
+    const fakeLlm = new FakeLLM([]);
+
+    server = await startServer({
+      port: 0,
+      store,
+      chat: fakeChat('借过,后来还了。'),
+      llm: fakeLlm,
+      webDistDir: '',
+    });
+
+    const res = await api(
+      server.url, '/v1/chat/completions',
+      chatBody('听说你之前借过钱,到底怎么回事?'),
+    );
+    expect(res.status).toBe(200);
+    const content = (
+      (res.body.choices as Array<Record<string, unknown>>)?.[0]?.message as Record<string, unknown>
+    )?.content;
+    // Must NOT contain the confirmation; should be deflected
+    expect(content).not.toContain('借过');
+    expect(content).toContain('不方便说');
+    expect(res.headers.get('x-openmimic-verify')).toBe('rewritten');
+  });
+
+  it('non-stream: private topic denial is also deflected', async () => {
+    store = new Store();
+    seedDemo(store);
+
+    // The persona denies it: "没有的事,你听谁说的。"
+    // "没有" matches CONFIRM_DENY_PATTERNS → deflected.
+    const fakeLlm = new FakeLLM([]);
+
+    server = await startServer({
+      port: 0,
+      store,
+      chat: fakeChat('没有的事,你听谁说的。'),
+      llm: fakeLlm,
+      webDistDir: '',
+    });
+
+    const res = await api(
+      server.url, '/v1/chat/completions',
+      chatBody('听说你之前借过钱,到底怎么回事?'),
+    );
+    expect(res.status).toBe(200);
+    const content = (
+      (res.body.choices as Array<Record<string, unknown>>)?.[0]?.message as Record<string, unknown>
+    )?.content;
+    expect(content).not.toContain('没有的事');
+    expect(content).toContain('不方便说');
+    expect(res.headers.get('x-openmimic-verify')).toBe('rewritten');
+  });
+
+  it('stream: private topic confirmation is deflected in streaming mode', async () => {
+    store = new Store();
+    seedDemo(store);
+
+    const fakeLlm = new FakeLLM([]);
+
+    server = await startServer({
+      port: 0,
+      store,
+      chat: fakeChat('借过,后来还了。'),
+      llm: fakeLlm,
+      webDistDir: '',
+    });
+
+    const res = await streamApi(
+      server.url, '/v1/chat/completions',
+      chatBody('听说你之前借过钱?', true),
+    );
+    expect(res.status).toBe(200);
+    expect(res.headers.get('x-openmimic-verify')).toMatch(/buffered-rewritten/);
+
+    // Extract streamed content
+    const contentParts: string[] = [];
+    for (const evt of res.events) {
+      const payload = evt.replace('data: ', '').trim();
+      if (payload === '[DONE]') continue;
+      try {
+        const parsed = JSON.parse(payload);
+        const c = parsed?.choices?.[0]?.delta?.content;
+        if (typeof c === 'string') contentParts.push(c);
+      } catch { /* skip */ }
+    }
+    const fullText = contentParts.join('');
+    expect(fullText).not.toContain('借过');
+    expect(fullText).toContain('不方便说');
+  });
+
+  it('entry-level regression: every safety-related optional field on verifyPersonaResponse is passed at the call site', async () => {
+    // Structural guard: read the mount-openai source and confirm that
+    // excludedPrivateTopics (the only optional safety field currently)
+    // is actually passed to verifyPersonaResponse at both call sites.
+    // This test reads the source code to catch future omissions.
+    const { readFileSync } = await import('node:fs');
+    const { join } = await import('node:path');
+    const source = readFileSync(
+      join(__dirname, '..', 'src', 'mount-openai.ts'),
+      'utf-8',
+    );
+
+    // Find all verifyPersonaResponse call sites
+    const callSites = [...source.matchAll(/verifyPersonaResponse\(\{[\s\S]*?\}\)/g)];
+    expect(callSites.length).toBeGreaterThanOrEqual(2); // non-stream + stream
+
+    // Every call site must include excludedPrivateTopics
+    for (const match of callSites) {
+      expect(match[0]).toContain('excludedPrivateTopics');
+    }
   });
 });

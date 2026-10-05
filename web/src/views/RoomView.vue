@@ -186,6 +186,9 @@ function skipReplay(): void {
 }
 
 function describeDoorError(caught: unknown): string {
+  if (caught instanceof ApiError && caught.status === 422 && caught.code === 'front_unavailable') {
+    return `门推不开:${caught.message} 可以请朋友补充"当面会怎么说"。`;
+  }
   if (caught instanceof ApiError && caught.status === 501) {
     return '这间房要等服务器配置好模型,门才推得开。';
   }

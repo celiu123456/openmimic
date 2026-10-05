@@ -13,6 +13,7 @@
  *   7. Front frontText anchor rate (front lines sourced from frontText)
  *   8. Half-truth check (exactly 1 front line echoes behindText, short)
  *   9. Front third-person reference rate (front lines using 他/她 for subject)
+ *  10. Anchor contradiction count (quote/paraphrase lines contradicting their testimony)
  */
 
 import type { RoomUtterance, UtteranceTier } from '@openmimic/shared';
@@ -668,6 +669,12 @@ export interface FullReport {
   frontTextAnchoring: { anchored: number; total: number; rate: number } | null;
   halfTruth: HalfTruthResult | null;
   frontThirdPerson: { thirdPersonCount: number; total: number; rate: number } | null;
+  /**
+   * Lines that contradicted their anchored testimony and were rewritten or
+   * dropped during room generation. Populated from {@link RoomStats}; absent
+   * when the report is built from a stored transcript without runtime stats.
+   */
+  anchorContradictionCount?: number;
 }
 
 export function buildReport(
@@ -815,6 +822,15 @@ export function formatReport(report: FullReport): string {
     lines.push('');
   }
 
+  if (report.anchorContradictionCount !== undefined) {
+    lines.push('### Anchor Contradiction');
+    lines.push('');
+    lines.push(`| Metric | Value |`);
+    lines.push(`|--------|-------|`);
+    lines.push(`| contradictions caught | ${report.anchorContradictionCount} |`);
+    lines.push('');
+  }
+
   return lines.join('\n');
 }
 
@@ -932,6 +948,15 @@ export function checkCriteria(report: FullReport): PassFail[] {
       name: 'front-evaluative-ratio',
       pass: avgEval <= 0.15,
       detail: `${(avgEval * 100).toFixed(0)}% avg (target <=15%)`,
+    });
+  }
+
+  // 10. Anchor contradiction count (informational, no pass/fail threshold)
+  if (report.anchorContradictionCount !== undefined) {
+    checks.push({
+      name: 'anchor-contradictions',
+      pass: true, // informational: every contradiction was already handled at generation time
+      detail: `${report.anchorContradictionCount} caught and rewritten/dropped`,
     });
   }
 

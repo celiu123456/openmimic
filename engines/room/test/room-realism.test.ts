@@ -238,7 +238,7 @@ describe('front room constraints', () => {
     const room = await runBehindRoom('s1', store, behindLlm, { maxTurnsPerWitness: 1 });
 
     const frontLlm = new FakeLLM([line('来了啊')]);
-    await openDoor(room.id, store, frontLlm, { maxTurnsPerWitness: 1 });
+    await openDoor(room.id, store, frontLlm, { maxTurnsPerWitness: 1, minFrontTextWitnesses: 1 });
 
     // Front mode should contain courtesy + second-person + frontText instructions
     expect(frontLlm.calls[0]!.system).toContain('不会当面评价');
@@ -268,5 +268,123 @@ describe('front room constraints', () => {
     expect(secondComposeCall).toBeDefined();
     expect(secondComposeCall!.user).toContain('刚刚');
     expect(secondComposeCall!.user).toContain('第一句话');
+  });
+});
+
+describe('anchor contradiction guard', () => {
+  let store: Store;
+
+  beforeEach(() => {
+    store = new Store();
+  });
+
+  afterEach(() => {
+    store.close();
+  });
+
+  it('catches a line that contradicts its anchored testimony and rewrites it', async () => {
+    // Mother's testimony says he always comes when asked; the generated line
+    // says he rarely shows up -- direct contradiction.
+    seedSubject(store, [
+      {
+        id: 'w-mom',
+        relation: '母亲',
+        behind: [
+          '我说你周末回来吃饭,他说好,就真回来。刮风下雨也回来。',
+        ],
+      },
+    ]);
+
+    // Script:
+    //   call 0: composeLine → contradicting line (cites q1, shares "回来" with testimony → paraphrase)
+    //   call 1: llmVerifyContradiction → "是" (contradiction detected)
+    //   call 2: composeLine rewrite → non-contradicting rewrite
+    //   call 3: llmVerifyContradiction re-check → "否" (no contradiction)
+    const llm = new FakeLLM([
+      // First composeLine: contradicting line. Cite q1 so the anchor validates.
+      line('一个月才露一回脸,让他回来吃饭他总推', ['q1']),
+      // Contradiction check: 是 = contradicts
+      '是',
+      // Rewrite: a non-contradicting version
+      line('让他回来吃饭,风雨无阻。说到做到。', ['q1']),
+      // Re-check: 否 = no contradiction
+      '否',
+    ]);
+
+    const room = await runBehindRoom('s1', store, llm, {
+      maxTurnsPerWitness: 1,
+    });
+
+    // The contradicting first line should have been replaced by the rewrite
+    expect(room.behindTranscript.length).toBe(1);
+    const utt = room.behindTranscript[0]!;
+    expect(utt.text).not.toContain('一个月才露一回');
+    expect(utt.text).toContain('回来吃饭');
+
+    // The contradiction check calls should have been made
+    const contradictionCalls = llm.calls.filter(
+      (c) => c.system.includes('矛盾判定器'),
+    );
+    expect(contradictionCalls.length).toBe(2);
+  });
+
+  it('downgrades to stage direction when rewrite still contradicts', async () => {
+    seedSubject(store, [
+      {
+        id: 'w-mom',
+        relation: '母亲',
+        behind: [
+          '我说你周末回来吃饭,他说好,就真回来。刮风下雨也回来。',
+        ],
+      },
+    ]);
+
+    const llm = new FakeLLM([
+      // composeLine: contradicting
+      line('一个月才露一回脸,让他回来他总推', ['q1']),
+      // Contradiction check: 是
+      '是',
+      // Rewrite: still contradicting
+      line('他不爱回来,叫也叫不动', ['q1']),
+      // Re-check: still 是
+      '是',
+    ]);
+
+    const room = await runBehindRoom('s1', store, llm, {
+      maxTurnsPerWitness: 1,
+    });
+
+    // Should have been downgraded to a stage direction
+    expect(room.behindTranscript.length).toBe(1);
+    const utt = room.behindTranscript[0]!;
+    expect(utt.kind).toBe('stage');
+  });
+
+  it('passes through non-contradicting anchored lines', async () => {
+    seedSubject(store, [
+      {
+        id: 'w-mom',
+        relation: '母亲',
+        behind: [
+          '我说你周末回来吃饭,他说好,就真回来。刮风下雨也回来。',
+        ],
+      },
+    ]);
+
+    const llm = new FakeLLM([
+      // composeLine: consistent with testimony
+      line('让他回来吃饭,风雨无阻,说到做到', ['q1']),
+      // Contradiction check: 否 = no contradiction
+      '否',
+    ]);
+
+    const room = await runBehindRoom('s1', store, llm, {
+      maxTurnsPerWitness: 1,
+    });
+
+    expect(room.behindTranscript.length).toBe(1);
+    const utt = room.behindTranscript[0]!;
+    expect(utt.kind).toBe('speech');
+    expect(utt.text).toContain('风雨无阻');
   });
 });

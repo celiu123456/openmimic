@@ -10,7 +10,7 @@ import {
   OpenAICompatClient,
   type ChatMessage,
 } from '@openmimic/engine-court';
-import { RoomRefusedError, type LLMClient } from '@openmimic/engine-room';
+import { FrontUnavailableError, RoomRefusedError, type LLMClient } from '@openmimic/engine-room';
 import {
   InterviewSessionInvalidError,
   InterviewStateError,
@@ -239,6 +239,8 @@ async function handleRequest(
       sendJson(response, 410, errorBody('session_invalid', caught.message), store);
     } else if (caught instanceof InterviewStateError) {
       sendJson(response, 409, errorBody('interview_state', caught.message), store);
+    } else if (caught instanceof FrontUnavailableError) {
+      sendJson(response, 422, errorBody('front_unavailable', caught.reason), store);
     } else if (caught instanceof RoomRefusedError) {
       sendJson(response, 422, errorBody('room_refused', caught.message), store);
     } else if (caught instanceof UnknownRoomError) {

@@ -227,7 +227,7 @@ export const mountOpenaiPlugin: Plugin<MountOpenAIConfig> = {
 
       const lastUser = [...body.messages].reverse().find((m) => m.role === 'user');
       const query = typeof lastUser?.content === 'string' ? lastUser.content : undefined;
-      const { systemPrompt } = await assemblePersonaContext(subjectId, store, {
+      const { systemPrompt, excludedPrivateTopics } = await assemblePersonaContext(subjectId, store, {
         query,
         interlocutor: body.metadata?.interlocutor,
       });
@@ -292,6 +292,7 @@ export const mountOpenaiPlugin: Plugin<MountOpenAIConfig> = {
                     response: cleaned,
                     llm: llm as VerifyLLM,
                     displayName,
+                    excludedPrivateTopics,
                   });
                   cleaned = vResult.finalResponse;
                   if (vResult.verified && !vResult.passed) {
@@ -439,6 +440,7 @@ export const mountOpenaiPlugin: Plugin<MountOpenAIConfig> = {
                 response: finalText,
                 llm: llm as VerifyLLM,
                 displayName,
+                excludedPrivateTopics,
               });
               finalText = vResult.finalResponse;
               if (vResult.verified && !vResult.passed) {

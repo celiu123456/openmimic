@@ -7,7 +7,9 @@ import {
   DIAGNOSIS_WORDS,
   FIXED_STAGE_LINES,
   FakeLLM,
+  FrontUnavailableError,
   MENTAL_HEALTH_WORDS,
+  MIN_FRONT_TEXT_WITNESSES,
   RoomRefusedError,
   containsConsentOverlap,
   openDoor,
@@ -294,8 +296,10 @@ describe('openDoor', () => {
 
     // Front room now builds its own no-talk list (1 LLM call for 2 witnesses),
     // plus 1 call for the witness who has frontText
+    // minFrontTextWitnesses: 1 because this test intentionally has only one
+    // witness with frontText to verify stage-direction-only behavior for the other
     const llm = new FakeLLM(['[]', line('甲当着面说了一句')]);
-    const opened = await openDoor(behind.id, store, llm, { maxTurnsPerWitness: 1 });
+    const opened = await openDoor(behind.id, store, llm, { maxTurnsPerWitness: 1, minFrontTextWitnesses: 1 });
 
     expect(opened.status).toBe('door_opened');
     expect(llm.calls).toHaveLength(2); // no-talk list + 1 witness with front text
@@ -329,7 +333,7 @@ describe('openDoor', () => {
     expect(behindLlm.calls[0]?.user).not.toContain('当面-可以说的话ABC');
 
     const frontLlm = new FakeLLM([line('当面那句')]);
-    await openDoor(room.id, store, frontLlm, { maxTurnsPerWitness: 1 });
+    await openDoor(room.id, store, frontLlm, { maxTurnsPerWitness: 1, minFrontTextWitnesses: 1 });
     expect(frontLlm.calls[0]?.user).toContain('当面-可以说的话ABC');
     expect(frontLlm.calls[0]?.user).not.toContain('背后-绝密内容XYZ');
     expect(frontLlm.calls[0]?.system).toContain('坐在面前');
@@ -337,6 +341,54 @@ describe('openDoor', () => {
 
   it('rejects an unknown room', async () => {
     await expect(openDoor('nope', store, new FakeLLM())).rejects.toBeInstanceOf(UnknownRoomError);
+  });
+
+  it('throws FrontUnavailableError when fewer than threshold witnesses have frontText', async () => {
+    // All witnesses have behind text but NO frontText
+    seedSubject(store, [
+      { id: 'w-a', relation: '发小', behind: ['甲的记忆'] },
+      { id: 'w-b', relation: '前任', behind: ['乙的记忆'] },
+      { id: 'w-c', relation: '母亲', behind: ['丙的记忆'] },
+    ]);
+    const behind = await runBehindRoom('s1', store, new FakeLLM([
+      '[]', line('甲'), line('乙'), line('丙'),
+    ]), { maxTurnsPerWitness: 1 });
+
+    await expect(openDoor(behind.id, store, new FakeLLM()))
+      .rejects.toBeInstanceOf(FrontUnavailableError);
+  });
+
+  it('throws FrontUnavailableError when only 1 witness has frontText (threshold = 2)', async () => {
+    seedSubject(store, [
+      { id: 'w-a', relation: '发小', behind: ['甲的记忆'], front: ['甲当面说'] },
+      { id: 'w-b', relation: '前任', behind: ['乙的记忆'] },
+    ]);
+    const behind = await runBehindRoom('s1', store, new FakeLLM([
+      '[]', line('甲'), line('乙'),
+    ]), { maxTurnsPerWitness: 1 });
+
+    // Default threshold is MIN_FRONT_TEXT_WITNESSES = 2
+    expect(MIN_FRONT_TEXT_WITNESSES).toBe(2);
+    await expect(openDoor(behind.id, store, new FakeLLM()))
+      .rejects.toBeInstanceOf(FrontUnavailableError);
+  });
+
+  it('FrontUnavailableError carries a human-readable reason', async () => {
+    seedSubject(store, [
+      { id: 'w-a', relation: '发小', behind: ['甲的记忆'] },
+      { id: 'w-b', relation: '前任', behind: ['乙的记忆'] },
+    ]);
+    const behind = await runBehindRoom('s1', store, new FakeLLM([
+      '[]', line('甲'), line('乙'),
+    ]), { maxTurnsPerWitness: 1 });
+
+    try {
+      await openDoor(behind.id, store, new FakeLLM());
+      expect.unreachable('should have thrown');
+    } catch (err) {
+      expect(err).toBeInstanceOf(FrontUnavailableError);
+      expect((err as FrontUnavailableError).reason).toContain('当面');
+    }
   });
 });
 

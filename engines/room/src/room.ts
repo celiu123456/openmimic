@@ -13,7 +13,7 @@ import {
   type Witness,
 } from '@openmimic/shared';
 import { UnknownRoomError, computeFingerprint, type Store } from '@openmimic/kernel';
-import { RoomRefusedError } from './errors';
+import { FrontUnavailableError, RoomRefusedError } from './errors';
 import type { LLMClient, LLMCompletionRequest } from './llm';
 import { classifyUtterance, deriveExpressionTier, filterByKnowledgeBoundary, type WitnessTestimony } from './tier';
 import { findCrisisWord, findDiagnosisWord } from './wordlist';
@@ -30,6 +30,14 @@ export const DEFAULT_MAX_UTTERANCES = 12;
 
 /** Each witness speaks at most twice; `opts` may only lower it. */
 export const DEFAULT_MAX_TURNS_PER_WITNESS = 2;
+
+/**
+ * Minimum number of witnesses with `frontText` required to generate a
+ * front room. Below this threshold, `openDoor` throws
+ * {@link FrontUnavailableError} rather than producing a transcript that
+ * consists entirely of stage directions.
+ */
+export const MIN_FRONT_TEXT_WITNESSES = 2;
 
 /**
  * The overlap guard now lives in `@openmimic/shared` so the HTTP layer can
@@ -158,6 +166,12 @@ export interface OpenDoorOptions {
   maxUtterances?: number;
   /** Upper bound on turns per witness; values above 2 are clamped down. */
   maxTurnsPerWitness?: number;
+  /**
+   * Minimum witnesses with `frontText` to open the door (default
+   * {@link MIN_FRONT_TEXT_WITNESSES}). Below this threshold,
+   * `openDoor` throws {@link FrontUnavailableError}.
+   */
+  minFrontTextWitnesses?: number;
 }
 
 /* ------------------------------------------------------------------ */
@@ -506,6 +520,8 @@ export interface RoomStats {
   /** Warning when no-talk list generation failed or produced an empty list
    *  despite the presence of explicit secrecy markers. Undefined when healthy. */
   noTalkListWarning?: string;
+  /** Number of lines that contradicted their anchored testimony and were rewritten or dropped. */
+  anchorContradictionCount: number;
 }
 
 /**
@@ -1152,6 +1168,39 @@ export async function llmVerifyLeak(
 }
 
 /**
+ * Check whether a room utterance contradicts the testimony text it is anchored to.
+ *
+ * Only called for `quote` or `paraphrase` tier lines that have at least one
+ * anchor. Returns `true` when the line's content says the opposite of
+ * what the witness originally said. Shares the same `room-verify` LLM
+ * call budget to avoid extra cost.
+ *
+ * Fail-open: only an unambiguous "是" is treated as a contradiction.
+ * When the LLM is uncertain, the line passes (it is better to keep a
+ * potentially-fine line than to drop it).
+ */
+export async function llmVerifyContradiction(
+  llm: LLMClient,
+  utteranceText: string,
+  anchoredTestimonyText: string,
+): Promise<boolean> {
+  const system = '你是一个矛盾判定器。只回答"是"或"否",不要其他文字。';
+  const user = [
+    `证人的原话是:${wrapUntrusted('testimony', anchoredTestimonyText.slice(0, 300))}`,
+    `基于这段原话生成的台词是:"${utteranceText}"`,
+    '问题:台词的意思是否与证人原话**相反或矛盾**?',
+    '注意:台词可以省略细节、换个说法或只说一部分,这些不算矛盾。',
+    '只有台词表达的意思和原话**相反**才算矛盾(例如原话说"他每周回来",台词却说"一个月才来一回")。',
+    '只回答"是"或"否"。',
+  ].join('\n');
+
+  const resp = await llm.complete({ system, user, purpose: 'room-verify' });
+  const trimmed = resp.trim();
+  // Fail-open: only an unambiguous "是" is a contradiction
+  return trimmed.startsWith('是');
+}
+
+/**
  * Generate one line for one persona, enforcing the three guards.
  *
  * Order of operations:
@@ -1454,6 +1503,8 @@ interface ScheduleStats {
   rewriteSuccessCount: number;
   stageFromNoTalk: number;
   totalLlmCalls: number;
+  /** Lines found to contradict their anchored testimony and rewritten/dropped. */
+  anchorContradictionCount: number;
 }
 
 async function runSchedule(
@@ -1896,9 +1947,116 @@ async function runSchedule(
     const tier = TIER_RANK[classified.tier] > TIER_RANK[maxTier]
       ? maxTier
       : classified.tier;
-    const anchors = tier === 'extrapolate' && classified.tier !== 'extrapolate'
+    let finalAnchors = tier === 'extrapolate' && classified.tier !== 'extrapolate'
       ? [] // downgraded to extrapolate → anchors no longer meaningful
       : classified.anchors;
+
+    // Anchor-contradiction guard: for quote/paraphrase lines with anchors,
+    // verify the line doesn't say the opposite of its anchored testimony.
+    // Uses the same verify budget to avoid runaway LLM calls.
+    const MAX_CONTRADICTION_CALLS_PER_ROOM = 8;
+    if (
+      (tier === 'quote' || tier === 'paraphrase') &&
+      finalAnchors.length > 0 &&
+      line.kind === 'speech' &&
+      verifyCallsUsed < MAX_VERIFY_CALLS_PER_ROOM
+    ) {
+      // Collect the anchored testimony text
+      const anchoredTexts: string[] = [];
+      for (const anchor of finalAnchors) {
+        const testimony = draft.witnessTestimonies.find(
+          (t) => t.testimonyId === anchor.testimonyId,
+        );
+        if (!testimony) continue;
+        const answer = testimony.answers.find((a) => a.qid === anchor.qid);
+        if (!answer) continue;
+        const text = mode === 'front' ? (answer.frontText ?? answer.behindText) : answer.behindText;
+        if (text) anchoredTexts.push(text);
+      }
+
+      if (anchoredTexts.length > 0) {
+        const combinedTestimony = anchoredTexts.join(' ');
+        let isContradiction = false;
+        try {
+          verifyCallsUsed += 1;
+          if (stats) stats.verifyCallCount += 1;
+          isContradiction = await llmVerifyContradiction(llm, line.text, combinedTestimony);
+        } catch {
+          // LLM call failed: pass through (fail-open for contradiction)
+          isContradiction = false;
+        }
+
+        if (isContradiction) {
+          if (stats) stats.anchorContradictionCount += 1;
+          // Try one rewrite
+          const rewriteResult = await composeLine(
+            llm, context, mode, topicSeed, utterances,
+            actionHint, witnessPrivateTexts, secretLeakBudget, extra, witnessPrivateElements,
+          );
+          if (rewriteResult && rewriteResult.kind === 'speech') {
+            // Re-check contradiction on the rewrite
+            let stillContradicts = false;
+            if (verifyCallsUsed < MAX_VERIFY_CALLS_PER_ROOM) {
+              try {
+                verifyCallsUsed += 1;
+                if (stats) stats.verifyCallCount += 1;
+                stillContradicts = await llmVerifyContradiction(
+                  llm, rewriteResult.text, combinedTestimony,
+                );
+              } catch {
+                stillContradicts = false;
+              }
+            }
+            if (!stillContradicts) {
+              line.text = rewriteResult.text;
+              line.qids = rewriteResult.qids;
+              // Re-classify after rewrite
+              const reclassified = classifyUtterance({
+                text: line.text,
+                kind: line.kind,
+                witnessId: draft.witness.id,
+                consentLevel: draft.witness.consentLevel,
+                citedAnchors: line.qids.flatMap((qid) =>
+                  draft.witnessTestimonies.map((t) => ({
+                    testimonyId: t.testimonyId, qid,
+                  })),
+                ),
+                testimonies: draft.witnessTestimonies,
+                pronounNormalize: mode === 'front',
+              });
+              finalAnchors = reclassified.anchors;
+            } else {
+              // Still contradicts: downgrade to stage direction
+              if (stageDirectionCount < maxStageDirections) {
+                line.kind = 'stage';
+                line.text = stageLine();
+                line.qids = [];
+                stageDirectionCount += 1;
+                finalAnchors = [];
+              } else {
+                // At cap: skip this turn entirely
+                turnCounts.set(draft.witness.id, (turnCounts.get(draft.witness.id) ?? 0) + 1);
+                lastWasHalfTruth = false;
+                continue;
+              }
+            }
+          } else {
+            // Rewrite failed: downgrade to stage direction
+            if (stageDirectionCount < maxStageDirections) {
+              line.kind = 'stage';
+              line.text = stageLine();
+              line.qids = [];
+              stageDirectionCount += 1;
+              finalAnchors = [];
+            } else {
+              turnCounts.set(draft.witness.id, (turnCounts.get(draft.witness.id) ?? 0) + 1);
+              lastWasHalfTruth = false;
+              continue;
+            }
+          }
+        }
+      }
+    }
 
     utterances.push({
       witnessId: draft.witness.id,
@@ -1907,7 +2065,7 @@ async function runSchedule(
       kind: line.kind,
       at: now(),
       tier,
-      anchors,
+      anchors: finalAnchors,
     });
     turnCounts.set(draft.witness.id, (turnCounts.get(draft.witness.id) ?? 0) + 1);
   }
@@ -2106,6 +2264,7 @@ export async function runBehindRoom(
     rewriteSuccessCount: 0,
     stageFromNoTalk: 0,
     totalLlmCalls: 0,
+    anchorContradictionCount: 0,
   };
 
   let stageCursor = 0;
@@ -2176,6 +2335,7 @@ export async function runBehindRoom(
       stageDirectionCount: totalStageDirections,
       totalLlmCalls,
       noTalkListWarning,
+      anchorContradictionCount: scheduleStats.anchorContradictionCount,
     });
   }
 
@@ -2232,6 +2392,16 @@ export async function openDoor(
       })),
     };
   });
+
+  // Pre-check: enough witnesses must have frontText to produce a meaningful
+  // front room. A room of pure stage directions has no value.
+  const threshold = options.minFrontTextWitnesses ?? MIN_FRONT_TEXT_WITNESSES;
+  const witnessesWithFront = drafts.filter((d) => d.memory.length > 0).length;
+  if (witnessesWithFront < threshold) {
+    throw new FrontUnavailableError(
+      '多数朋友没有填写当面会怎么说',
+    );
+  }
 
   // Build behind-room memory for half-truth selection
   const behindMemoryByWit = new Map<string, MemoryEntry[]>();
