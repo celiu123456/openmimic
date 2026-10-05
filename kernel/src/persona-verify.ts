@@ -141,6 +141,7 @@ function buildRewriteSystem(fragments: string[]): string {
   return [
     '你是人格回答改写器。去除下列无据或答非所问的片段,保留有据部分,保持口吻。',
     '如果去除后什么都不剩,输出一句该人格口吻的回避("记不太清了""这事不方便说")。',
+    '★重要:不要用"没有"去否认用户问到的事——否认本身是一个事实断言。如果素材里找不到用户问的那件事,说"记不太清了"而不是否认。',
     '',
     `需去除的片段:${fragments.join(', ')}`,
   ].join('\n');
@@ -280,6 +281,22 @@ export async function verifyPersonaResponse(
   const reUnfounded = getUnfounded(reCats);
 
   if (reUnfounded.length === 0) {
+    // Safety check: if the rewrite still contains a bare denial ("没有") and the
+    // original response had off_topic or unsupported fragments, fall back to the
+    // conservative response. A denial is itself a factual assertion and should not
+    // survive when the original was flagged.
+    const rewrittenTrimmed = rewritten.trim();
+    const startsWithDenial = /^没有[,，。]?/.test(rewrittenTrimmed) || /^不是[,，。]/.test(rewrittenTrimmed);
+    if (startsWithDenial && (cats.offTopic.length > 0 || cats.unsupported.length > 0)) {
+      return {
+        verified: true,
+        passed: false,
+        unfoundedFragments: unfounded,
+        finalResponse: FALLBACK_RESPONSE,
+        verifyCallCount: callCount,
+      };
+    }
+
     return {
       verified: true,
       passed: false,

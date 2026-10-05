@@ -753,3 +753,153 @@ describe('regression: no-talk leak scenarios', () => {
     expect(result).toBe(false);
   });
 });
+
+/* ------------------------------------------------------------------ */
+/* Regression: front room leak detection (Issue #1, 2026-10-07)        */
+/* ------------------------------------------------------------------ */
+
+describe('front room no-talk enforcement (regression)', () => {
+  let store: Store;
+
+  beforeEach(() => {
+    store = new Store();
+  });
+
+  afterEach(() => {
+    store.close();
+  });
+
+  it('blocks a front-room line that reveals a no-talk topic to the blind witness', async () => {
+    // Setup: 发小 knows about resignation, 母亲 does not
+    store.putSubject({ id: 's1', displayName: '林默' });
+    store.putWitness({ id: 'w-faxiao', subjectId: 's1', relation: '发小', consentLevel: 'quotable' });
+    store.putWitness({ id: 'w-mother', subjectId: 's1', relation: '母亲', consentLevel: 'quotable' });
+    store.addTestimony({
+      id: 't-faxiao',
+      witnessId: 'w-faxiao',
+      subjectId: 's1',
+      answers: [
+        {
+          qid: 'q10',
+          behindText: '就他辞职那天。他谁都没说。说完他笑了一下,说"你可别跟我妈说"。',
+          frontText: '你辞职那事我最气，不是辞，是你憋到最后一刻才说。',
+        },
+      ],
+    });
+    store.addTestimony({
+      id: 't-mother',
+      witnessId: 'w-mother',
+      subjectId: 's1',
+      answers: [
+        { qid: 'q1', behindText: '他现在工作忙。上个月他还跟我说公司器重他。', frontText: '你说话算话,这点随你爸。' },
+      ],
+    });
+
+    // Build behind room first (required for openDoor)
+    const behindLlm = new FakeLLM([
+      // no-talk list generation
+      JSON.stringify([{
+        topic: '已离职',
+        keywords: ['辞职', '离职', '不干了', '走了'],
+        knowingWitnessIds: ['w-faxiao'],
+        blindWitnessId: 'w-mother',
+        blindClaim: '公司器重他',
+        sourceFragment: '你可别跟我妈说',
+        severity: 'high',
+        reason: '明确嘱托保密',
+      }]),
+      // behind room utterances
+      line('他最近挺忙的'),
+      line('嗯，他忙'),
+    ]);
+    const { openDoor } = await import('@openmimic/engine-room');
+    const behind = await runBehindRoom('s1', store, behindLlm, { maxTurnsPerWitness: 1 });
+
+    // Now open the door with a line that leaks
+    const frontLlm = new FakeLLM([
+      // no-talk list for front room
+      JSON.stringify([{
+        topic: '已离职',
+        keywords: ['辞职', '离职', '不干了', '走了'],
+        knowingWitnessIds: ['w-faxiao'],
+        blindWitnessId: 'w-mother',
+        blindClaim: '公司器重他',
+        sourceFragment: '你可别跟我妈说',
+        severity: 'high',
+        reason: '明确嘱托保密',
+      }]),
+      // 发小 tries to say something about resignation (should be blocked)
+      line('你辞职那事我最气'),
+      // verify call says it IS a leak
+      '是',
+      // rewrite attempt (still leaks)
+      line('你走那天我真生气'),
+      // 母亲's turn
+      line('你说话算话'),
+    ]);
+    const opened = await openDoor(behind.id, store, frontLlm, { maxTurnsPerWitness: 1 });
+
+    // The 发小's leaked line should have been blocked (stage direction or rewritten)
+    const faxiaoUtterances = opened.frontTranscript?.filter((u) => u.witnessId === 'w-faxiao') ?? [];
+    for (const u of faxiaoUtterances) {
+      // If it's speech, it should not contain resignation-related keywords
+      if (u.kind === 'speech') {
+        expect(u.text).not.toContain('辞职');
+        expect(u.text).not.toContain('离职');
+      }
+    }
+  });
+});
+
+/* ------------------------------------------------------------------ */
+/* Regression: euphemism detection in llmVerifyLeak (Issue #2)          */
+/* ------------------------------------------------------------------ */
+
+describe('llmVerifyLeak with euphemistic expressions (regression)', () => {
+  it('sends blind witness cognition and time-farewell hint to the model', async () => {
+    const llm = new FakeLLM(['是']); // model says it IS a leak
+
+    const result = await llmVerifyLeak(
+      llm,
+      '他走那天给我发微信说谢谢我这四年',
+      '已离职/想歇一段',
+      '母亲',
+      '公司器重他',
+      '他现在工作忙,上个月他还跟我说公司器重他',
+    );
+
+    // The prompt should contain the blind witness's cognition
+    expect(llm.calls[0]?.user).toContain('公司器重他');
+    // The prompt should contain the time-farewell hint
+    expect(llm.calls[0]?.user).toContain('时间性的告别');
+    // Model judged it as a leak
+    expect(result).toBe(true);
+  });
+});
+
+/* ------------------------------------------------------------------ */
+/* Regression: buildNoTalkListFallback keyword quality (Issue #4)       */
+/* ------------------------------------------------------------------ */
+
+describe('buildNoTalkListFallback keyword extraction (regression)', () => {
+  it('does not include generic actions like "打电话" as keywords', () => {
+    const drafts = [
+      {
+        witness: { id: 'w-sister', subjectId: 's1', relation: '姐姐', consentLevel: 'quotable' as const },
+        memory: [{ qid: 'q1', text: '她在电话里哭了好久,最后跟我说,姐你别告诉爸,他心脏不好,知道了受不了。' }],
+      },
+      {
+        witness: { id: 'w-father', subjectId: 's1', relation: '父亲', consentLevel: 'quotable' as const },
+        memory: [{ qid: 'q1', text: '上个月打电话回来说升职了。' }],
+      },
+    ];
+
+    const items = buildNoTalkListFallback(drafts);
+    expect(items.length).toBeGreaterThan(0);
+
+    // "打电话" should NOT be a keyword (too generic — would match father's innocent line)
+    for (const item of items) {
+      expect(item.keywords).not.toContain('打电话');
+    }
+  });
+});

@@ -832,7 +832,7 @@ export async function generateNoTalkList(
     '',
     '对每一条,给出:',
     '- topic: 简短描述(10字以内)',
-    '- keywords: 3-6个标志性词/短语,涵盖直接说法和间接/委婉说法,用于检测',
+    '- keywords: 3-6个标志性词/短语,必须同时包含直接说法(如"辞职""确诊")和常见的委婉/旁敲侧击的说法(如"走了""不干了""那天""这几年""身体出问题"),用于检测',
     '- knowingWitnessIds: 知情证人id列表',
     '- blindWitnessId: 不该知道的在场证人id',
     '- blindClaim: 该证人目前相信的版本(20字以内)',
@@ -846,11 +846,17 @@ export async function generateNoTalkList(
 
   const user = `在场证人:\n${witnessSummaries}`;
 
-  const parseOne = (resp: string): NoTalkItem[] => {
+  const parseOne = (resp: string, logTag?: string): NoTalkItem[] => {
     try {
       const jsonMatch = resp.match(/\[[\s\S]*\]/);
-      if (!jsonMatch) return [];
+      if (!jsonMatch) {
+        if (logTag) console.warn(`[no-talk-list] ${logTag}: LLM response contained no JSON array`);
+        return [];
+      }
       const parsed = NO_TALK_LIST_SCHEMA.parse(JSON.parse(jsonMatch[0]));
+      if (parsed.length === 0 && logTag) {
+        console.warn(`[no-talk-list] ${logTag}: LLM returned empty no-talk list`);
+      }
       return parsed.map((item) => ({
         ...item,
         elements: {
@@ -860,7 +866,8 @@ export async function generateNoTalkList(
           nouns: item.keywords.slice(),
         },
       }));
-    } catch {
+    } catch (e) {
+      if (logTag) console.warn(`[no-talk-list] ${logTag}: parse failed: ${e instanceof Error ? e.message : String(e)}`);
       return [];
     }
   };
@@ -874,8 +881,8 @@ export async function generateNoTalkList(
       llm.complete({ system, user, purpose: 'room-notalk' }),
       llm.complete({ system, user, purpose: 'room-notalk' }),
     ]);
-    const items1 = parseOne(resp1);
-    const items2 = parseOne(resp2);
+    const items1 = parseOne(resp1, `${subjectName}-gen1`);
+    const items2 = parseOne(resp2, `${subjectName}-gen2`);
     const seen = new Map<string, NoTalkItem>();
     for (const item of [...items1, ...items2]) {
       const key = `${item.topic}::${item.blindWitnessId}`;
@@ -887,7 +894,7 @@ export async function generateNoTalkList(
     items = [...seen.values()];
   } else {
     const resp = await llm.complete({ system, user, purpose: 'room-notalk' });
-    items = parseOne(resp);
+    items = parseOne(resp, subjectName);
   }
 
   // Sort by severity (high first), then cap
@@ -931,12 +938,18 @@ export function buildNoTalkListFallback(
         // Derive topic from the marker sentence itself (what should be kept secret)
         const topic = sentence.substring(0, 40);
 
-        // Derive keywords from extracted elements (amounts, verbs, nouns)
+        // Derive keywords from extracted elements (amounts, verbs, nouns).
+        // Generic action verbs alone (打电话, 借, 说) are not useful as keywords
+        // because they appear in unrelated sentences. Only include verbs that
+        // combine with a specific noun or amount to form a meaningful signal.
+        const GENERIC_ACTIONS = new Set(['打电话', '说', '讲', '问', '告诉', '提', '聊']);
         const keywords = [
           ...elements.amounts,
-          ...elements.verbs,
+          ...elements.verbs.filter((v) => !GENERIC_ACTIONS.has(v)),
           ...elements.nouns,
         ];
+        // If all specific elements were filtered out, keep the topic text
+        // as-is for LLM-based verification (no keywords = rely on LLM judgment)
 
         // Identify who should NOT know this based on the marker sentence
         const blindTargets: string[] = [];
@@ -1014,7 +1027,8 @@ export async function llmVerifyLeak(
     `在场的"${blindWitnessRelation}"目前相信的版本是:${wrapUntrusted('blind_claim', blindClaim)}。${contextLine}`,
     `以下这句话如果在聊天室里被说出来,${blindWitnessRelation}会不会因此得知或起疑事实并非如此——也就是发现"${topic}"?`,
     `台词:"${utteranceText}"`,
-    '即使没有说出全部事实,只要这句话会让其**起疑或推断出**事实的一部分(例如说出要换城市、要走、不干了、身体出了问题),也算"是"。',
+    '即使没有说出全部事实,只要这句话会让其**起疑或推断出**事实的一部分,也算"是"。',
+    '尤其注意:时间性的告别/离开表述(如"走那天""最后一天""临走前""这几年""谢完就走")若指向被瞒事实(如离职、分手、搬走),也算泄露。',
     '但纯情绪/状态的含糊表达(累、想歇歇、想换个节奏、最近不太开心)不算——这类话不包含可推断的具体事实。',
     '只回答"是"或"否"。',
   ].join('\n');
@@ -1442,12 +1456,11 @@ async function runSchedule(
       }
     }
 
-    // Get private texts for this specific witness's testimony
-    const witnessPrivateTexts = mode === 'behind'
-      ? privateTexts
-      : []; // front mode: no private content to guard (frontText is already filtered)
-
-    const witnessPrivateElements = mode === 'behind' ? privateElements : [];
+    // Both behind and front rooms need private content guarding.
+    // Front room: the no-talk list still applies — the subject being present
+    // does not change what each witness knows or doesn't know.
+    const witnessPrivateTexts = privateTexts;
+    const witnessPrivateElements = privateElements;
 
     const line = await composeLine(
       llm,
@@ -1489,7 +1502,7 @@ async function runSchedule(
     const MAX_VERIFY_PER_LINE = 3;
     const MAX_VERIFY_CALLS_PER_ROOM = 15;
     const MAX_REWRITE_ATTEMPTS = 2;
-    if (mode === 'behind' && line.kind === 'speech' && noTalkList.length > 0) {
+    if (line.kind === 'speech' && noTalkList.length > 0) {
       const isSubstantive = line.text.length >= 8;
       let verifyCount = 0;
       let leakedItem: NoTalkItem | undefined;
@@ -1588,7 +1601,14 @@ async function runSchedule(
         }
 
         if (!rewritten) {
-          // All rewrites failed: fall back to stage direction
+          // All rewrites failed: fall back to stage direction if under cap
+          if (stageDirectionCount >= maxStageDirections) {
+            // Stage direction cap reached: skip this turn entirely
+            turnCounts.set(draft.witness.id, (turnCounts.get(draft.witness.id) ?? 0) + 1);
+            if (stats) stats.stageFromNoTalk += 1;
+            lastWasHalfTruth = false;
+            continue;
+          }
           if (secretLeakBudget.remaining > 0) {
             secretLeakBudget.remaining -= 1;
             line.kind = 'stage';
@@ -1624,7 +1644,12 @@ async function runSchedule(
         // Use the retry
         Object.assign(line, retryLine);
       } else {
-        // Still a dup: fall back to stage direction
+        // Still a dup: fall back to stage direction (skip if at cap)
+        if (stageDirectionCount >= maxStageDirections) {
+          turnCounts.set(draft.witness.id, (turnCounts.get(draft.witness.id) ?? 0) + 1);
+          lastWasHalfTruth = false;
+          continue;
+        }
         line.kind = 'stage';
         line.text = stageLine();
         line.qids = [];
@@ -1642,7 +1667,12 @@ async function runSchedule(
       if (retryLine && retryLine.kind === 'speech' && !hasFrontThirdPerson(retryLine.text)) {
         Object.assign(line, retryLine);
       } else {
-        // Still using third person: fall back to stage direction
+        // Still using third person: fall back to stage direction (skip if at cap)
+        if (stageDirectionCount >= maxStageDirections) {
+          turnCounts.set(draft.witness.id, (turnCounts.get(draft.witness.id) ?? 0) + 1);
+          lastWasHalfTruth = false;
+          continue;
+        }
         line.kind = 'stage';
         line.text = stageLine();
         line.qids = [];
@@ -1705,7 +1735,12 @@ async function runSchedule(
         if (retryLine && retryLine.kind === 'speech' && !looksLikeHalfTruth(retryLine.text)) {
           Object.assign(line, retryLine);
         } else {
-          // Still echoes: fall back to stage direction to avoid metric fail
+          // Still echoes: fall back to stage direction (skip if at cap)
+          if (stageDirectionCount >= maxStageDirections) {
+            turnCounts.set(draft.witness.id, (turnCounts.get(draft.witness.id) ?? 0) + 1);
+            lastWasHalfTruth = false;
+            continue;
+          }
           line.kind = 'stage';
           line.text = stageLine();
           line.qids = [];
@@ -2093,6 +2128,91 @@ export async function openDoor(
     behindMemory: behindMemoryByWit,
   };
 
+  // ---- Front room leak protection (Issue #1) ----
+  // The no-talk list from the behind room still applies: the subject being
+  // present does not change what each witness knows or doesn't know.
+  // Build the same private texts and no-talk list used in the behind room.
+  const rawBehindDrafts = witnesses.map((witness) => {
+    const witTestimonies = testimonies.filter((t) => t.witnessId === witness.id);
+    return {
+      witness,
+      memory: witTestimonies
+        .flatMap((testimony) =>
+          testimony.answers
+            .filter((answer) => answer.behindText.length > 0)
+            .map((answer) => ({ qid: answer.qid, text: answer.behindText })),
+        ),
+      witnessTestimonies: witTestimonies.map((t) => ({
+        testimonyId: t.id,
+        witnessId: t.witnessId,
+        answers: t.answers,
+      })),
+    };
+  }).filter((d) => d.memory.length > 0);
+
+  const frontPrivateTexts: string[] = [];
+  const frontPrivateElements: PrivateFactElements[] = [];
+  for (const draft of rawBehindDrafts) {
+    for (const mem of draft.memory) {
+      const sentences = extractPrivateSentences(mem.text);
+      frontPrivateTexts.push(...sentences);
+      for (const s of sentences) {
+        frontPrivateElements.push(extractFactElements(s));
+      }
+    }
+  }
+
+  let frontNoTalkList: NoTalkItem[] = [];
+  if (rawBehindDrafts.length >= 2) {
+    let llmItems: NoTalkItem[] = [];
+    try {
+      llmItems = await generateNoTalkList(llm, subjectName, rawBehindDrafts);
+    } catch {
+      // LLM failed; fallback only
+    }
+    const fallbackItems = buildNoTalkListFallback(rawBehindDrafts);
+    const mergedFallback = fallbackItems.map((fb) => {
+      const llmMatch = llmItems.find(
+        (li) => li.blindWitnessId === fb.blindWitnessId
+          && (li.sourceFragment.includes(fb.sourceFragment.substring(0, 8))
+            || fb.sourceFragment.includes(li.sourceFragment.substring(0, 8))),
+      );
+      if (llmMatch) {
+        const mergedKeywords = [...new Set([...fb.keywords, ...llmMatch.keywords])];
+        return {
+          ...fb,
+          keywords: mergedKeywords,
+          elements: {
+            ...fb.elements,
+            nouns: [...new Set([...fb.elements.nouns, ...llmMatch.elements.nouns])],
+          },
+        };
+      }
+      return fb;
+    });
+    const extraLlm = llmItems.filter((item) => {
+      return !fallbackItems.some(
+        (f) => f.blindWitnessId === item.blindWitnessId
+          && (item.sourceFragment.includes(f.sourceFragment.substring(0, 8))
+            || f.sourceFragment.includes(item.sourceFragment.substring(0, 8))),
+      );
+    });
+    frontNoTalkList = [...mergedFallback, ...extraLlm];
+  }
+  for (const item of frontNoTalkList) {
+    frontPrivateElements.push(item.elements);
+    for (const kw of item.keywords) {
+      if (kw.length >= 2 && !frontPrivateElements.some((pe) => pe.nouns.includes(kw))) {
+        frontPrivateElements.push({
+          text: item.sourceFragment,
+          amounts: [],
+          verbs: [],
+          nouns: [kw],
+        });
+      }
+    }
+  }
+
   let stageCursor = 0;
   const frontTranscript = await runSchedule(
     drafts,
@@ -2109,8 +2229,10 @@ export async function openDoor(
       return line;
     },
     displayLabels,
-    [], // no private texts in front mode
+    frontPrivateTexts,
     frontConfig,
+    frontPrivateElements,
+    frontNoTalkList,
   );
 
   return store.updateRoomFront(roomId, frontTranscript);

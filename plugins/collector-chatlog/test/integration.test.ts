@@ -367,7 +367,12 @@ describe('integration: delete import route', () => {
     const delRes = await env.dispatch('DELETE', `/api/subjects/s1/chatlog/imports/${importId}`);
     expect(delRes.status).toBe(200);
     expect((delRes.body as any).deleted).toBe(true);
-    expect((delRes.body as any).corpusItemIdsToDelete).toBeInstanceOf(Array);
+    expect((delRes.body as any).corpusItemsDeleted).toBeGreaterThanOrEqual(0);
+    expect((delRes.body as any).corpusItemIdsRequested).toBeGreaterThan(0);
+
+    // Verify corpus items are actually deleted from the store
+    const corpusAfter = env.store.listCorpusItemsBySubject('s1');
+    expect(corpusAfter).toHaveLength(0);
 
     // Verify import is gone from list
     const listRes = await env.dispatch('GET', '/api/subjects/s1/chatlog/imports');

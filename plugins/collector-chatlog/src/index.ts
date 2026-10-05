@@ -326,6 +326,9 @@ export const collectorChatlogPlugin: Plugin<ChatlogConfig> = {
       const row = rows[0]!;
       const corpusItemIds = JSON.parse(row.corpus_item_ids as string) as string[];
 
+      // Delete the actual corpus items from the kernel store
+      const deletedCount = store.deleteCorpusItems(corpusItemIds);
+
       // Delete the import record
       importTable.delete('id = ?', [importId]);
 
@@ -334,8 +337,8 @@ export const collectorChatlogPlugin: Plugin<ChatlogConfig> = {
         body: {
           deleted: true,
           importId,
-          corpusItemIdsToDelete: corpusItemIds,
-          note: '导入记录已删除。语料条目的删除需要内核支持 Store.deleteCorpusItem()，该方法尚未实现。',
+          corpusItemsDeleted: deletedCount,
+          corpusItemIdsRequested: corpusItemIds.length,
         },
       };
     });

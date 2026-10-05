@@ -250,4 +250,34 @@ describe('verifyPersonaResponse', () => {
     expect(result.finalResponse).toBe('不是一个人,但具体谁帮了记不太清了。');
     expect(result.verifyCallCount).toBe(3);
   });
+
+  /* ---------------------------------------------------------------- */
+  /* Regression: denial degradation (Issue #5, 2026-10-07)             */
+  /* ---------------------------------------------------------------- */
+
+  it('falls back to conservative response when rewrite starts with denial "没有"', async () => {
+    // Scenario: user asks "帮周野搬过家?" but the persona denies it even though
+    // evidence exists. The rewrite still starts with "没有" — that denial is
+    // itself a factual assertion and should be degraded to the fallback.
+    const result = await verifyPersonaResponse({
+      systemPrompt: SAMPLE_SYSTEM_PROMPT,
+      userMessage: '听说你帮周野搬过家？',
+      response: '没有，是许岚搬家那次我去了。搬完就走了。',
+      llm: fakeLLM([
+        // First verify: finds off_topic fragments
+        '{"contradicts":[],"unsupported":[],"off_topic":["许岚搬家那次我去了","搬完就走了"],"user_premise":[]}',
+        // Rewrite: still starts with denial
+        '没有，是许岚搬家那次我去了。',
+        // Re-verify: passes (the rewrite is "grounded" per the verifier)
+        '{"contradicts":[],"unsupported":[],"off_topic":[],"user_premise":[]}',
+      ]),
+      displayName: '林默',
+    });
+
+    expect(result.verified).toBe(true);
+    expect(result.passed).toBe(false);
+    // The denial should be caught and degraded to fallback
+    expect(result.finalResponse).toBe('记不太清了。');
+    expect(result.verifyCallCount).toBe(3);
+  });
 });

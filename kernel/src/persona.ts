@@ -334,27 +334,54 @@ async function rankEpisodes(
   episodes: Episode[],
   claims: Claim[],
   opts: PersonaAssemblyOptions,
+  nameHintMap?: Map<string, string[]>,
+  witnessMap?: Map<string, string>,
 ): Promise<Episode[]> {
   if (episodes.length === 0) return [];
 
+  // When the query mentions a name that matches a witness's name hint or
+  // relation, episodes from that witness get a relevance boost.
+  // This ensures that asking "帮周野搬过家?" boosts 发小(周野)'s episodes.
+  const nameBoostWitnesses = new Set<string>();
+  if (opts.query && (nameHintMap || witnessMap)) {
+    const q = opts.query;
+    if (nameHintMap) {
+      for (const [wid, names] of nameHintMap) {
+        if (names.some((name) => q.includes(name))) {
+          nameBoostWitnesses.add(wid);
+        }
+      }
+    }
+    if (witnessMap) {
+      for (const [wid, relation] of witnessMap) {
+        if (q.includes(relation)) {
+          nameBoostWitnesses.add(wid);
+        }
+      }
+    }
+  }
+  const NAME_BOOST = 0.3; // added to score for matching witness's episodes
+
   if (opts.query && opts.embedding) {
-    // Embedding-based ranking
+    // Embedding-based ranking (with name boost)
     const texts = [opts.query, ...episodes.map((e) => e.text)];
     const vectors = await opts.embedding.embed(texts);
     const queryVec = vectors[0]!;
     const scored = episodes.map((ep, i) => ({
       ep,
-      score: cosine(queryVec, vectors[i + 1]!),
+      score: cosine(queryVec, vectors[i + 1]!)
+        + (nameBoostWitnesses.has(ep.witnessId) ? NAME_BOOST : 0),
     }));
     scored.sort((a, b) => b.score - a.score);
     return scored.map((s) => s.ep);
   }
 
   if (opts.query) {
-    // Keyword fallback
+    // Keyword fallback (with name boost)
     const scored = episodes.map((ep) => ({
       ep,
-      score: keywordOverlap(opts.query!, ep.text),
+      score: keywordOverlap(opts.query!, ep.text)
+        + (nameBoostWitnesses.has(ep.witnessId) ? NAME_BOOST : 0),
     }));
     scored.sort((a, b) => b.score - a.score);
     return scored.map((s) => s.ep);
@@ -764,16 +791,18 @@ export async function assemblePersonaContext(
   const allEpisodes = store
     .listEpisodesBySubject(subjectId)
     .filter((ep) => quotableWitnessIds.has(ep.witnessId));
-  let rankedEpisodes = await rankEpisodes(allEpisodes, eligible, opts);
 
-  // Witness relation map
+  // Witness relation map (built early because rankEpisodes uses it)
   const witnessMap = new Map<string, string>();
   for (const witness of store.listWitnessesBySubject(subjectId)) {
     witnessMap.set(witness.id, witness.relation);
   }
 
   // Name hints: extract how the subject addresses each witness from quoted speech
+  // (built early because rankEpisodes uses it for name-based relevance boosting)
   const nameHintMap = buildNameHintMap(store, subjectId, [...quotableWitnessIds]);
+
+  let rankedEpisodes = await rankEpisodes(allEpisodes, eligible, opts, nameHintMap, witnessMap);
 
   // Divergences: factual and unresolved only for the prompt
   const allDivergences = store.listDivergencesBySubject(subjectId);

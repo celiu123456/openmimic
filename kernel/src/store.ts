@@ -1076,6 +1076,40 @@ export class Store {
       .map((row) => this.rowToCorpusItem(row));
   }
 
+  /**
+   * Delete a single corpus item by id.
+   *
+   * The corpus_items table is NOT append-only (unlike testimonies) — it holds
+   * imported/pasted language samples that the subject or operator may revoke.
+   * Testimonies and their triggers are never touched by this method.
+   *
+   * @returns true if the item existed and was deleted, false if not found.
+   */
+  deleteCorpusItem(id: string): boolean {
+    const result = this.db
+      .prepare<[string]>('DELETE FROM corpus_items WHERE id = ?')
+      .run(id);
+    return result.changes > 0;
+  }
+
+  /**
+   * Delete multiple corpus items by their ids.
+   *
+   * Convenience wrapper for batch revocation (e.g. undoing a chatlog import).
+   * Same safety boundary as {@link deleteCorpusItem}: only corpus_items are
+   * touched; the testimony ledger and its triggers remain intact.
+   *
+   * @returns the number of items actually deleted.
+   */
+  deleteCorpusItems(ids: readonly string[]): number {
+    if (ids.length === 0) return 0;
+    let count = 0;
+    for (const id of ids) {
+      if (this.deleteCorpusItem(id)) count++;
+    }
+    return count;
+  }
+
   /* ---------------------------------------------------------------- */
   /* Plugin storage — sandboxed tables for plugin-specific data        */
   /* ---------------------------------------------------------------- */

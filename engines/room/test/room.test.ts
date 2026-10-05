@@ -292,11 +292,13 @@ describe('openDoor', () => {
       maxTurnsPerWitness: 1,
     });
 
-    const llm = new FakeLLM([line('甲当着面说了一句')]);
+    // Front room now builds its own no-talk list (1 LLM call for 2 witnesses),
+    // plus 1 call for the witness who has frontText
+    const llm = new FakeLLM(['[]', line('甲当着面说了一句')]);
     const opened = await openDoor(behind.id, store, llm, { maxTurnsPerWitness: 1 });
 
     expect(opened.status).toBe('door_opened');
-    expect(llm.calls).toHaveLength(1); // only the witness who has front text
+    expect(llm.calls).toHaveLength(2); // no-talk list + 1 witness with front text
     const staged = opened.frontTranscript?.filter((u) => u.witnessId === 'w-b') ?? [];
     expect(staged.length).toBeGreaterThan(0);
     for (const utterance of staged) {

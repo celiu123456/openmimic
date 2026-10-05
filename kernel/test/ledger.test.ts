@@ -118,10 +118,49 @@ describe('append-only testimony ledger', () => {
     // sanctioned exception on the Store surface: a room is a generated
     // artifact, not evidence, so opening its door may update it in place
     // without ever touching the append-only testimonies table.
+    // Sanctioned exceptions to the no-mutator rule:
+    // - updateRoomFront: rooms are generated artifacts, not evidence
+    // - deleteCorpusItem(s): corpus_items are imported language samples (not
+    //   testimony); they have no append-only triggers and may be revoked
+    const allowed = new Set(['updateRoomFront', 'deleteCorpusItem', 'deleteCorpusItems']);
     const mutators = methods.filter(
-      (name) => /^(update|delete|remove|edit)/i.test(name) && name !== 'updateRoomFront',
+      (name) => /^(update|delete|remove|edit)/i.test(name) && !allowed.has(name),
     );
     expect(mutators).toEqual([]);
+  });
+
+  /* ---------------------------------------------------------------- */
+  /* Regression: deleteCorpusItem(s) (Issue #6, 2026-10-07)            */
+  /* ---------------------------------------------------------------- */
+
+  it('deleteCorpusItem removes a corpus item and leaves others intact', () => {
+    store.putSubject({ id: 's1', displayName: 'Test' });
+    store.putCorpusItem({ id: 'c1', subjectId: 's1', text: 'hello', source: 'imported', createdAt: new Date().toISOString() });
+    store.putCorpusItem({ id: 'c2', subjectId: 's1', text: 'world', source: 'imported', createdAt: new Date().toISOString() });
+
+    expect(store.listCorpusItemsBySubject('s1')).toHaveLength(2);
+
+    const deleted = store.deleteCorpusItem('c1');
+    expect(deleted).toBe(true);
+    expect(store.getCorpusItem('c1')).toBeUndefined();
+    expect(store.getCorpusItem('c2')).toBeDefined();
+    expect(store.listCorpusItemsBySubject('s1')).toHaveLength(1);
+  });
+
+  it('deleteCorpusItem returns false for non-existent item', () => {
+    expect(store.deleteCorpusItem('nonexistent')).toBe(false);
+  });
+
+  it('deleteCorpusItems batch-deletes and returns count', () => {
+    store.putSubject({ id: 's1', displayName: 'Test' });
+    store.putCorpusItem({ id: 'c1', subjectId: 's1', text: 'a', source: 'imported', createdAt: new Date().toISOString() });
+    store.putCorpusItem({ id: 'c2', subjectId: 's1', text: 'b', source: 'imported', createdAt: new Date().toISOString() });
+    store.putCorpusItem({ id: 'c3', subjectId: 's1', text: 'c', source: 'imported', createdAt: new Date().toISOString() });
+
+    const count = store.deleteCorpusItems(['c1', 'c3', 'nonexistent']);
+    expect(count).toBe(2);
+    expect(store.listCorpusItemsBySubject('s1')).toHaveLength(1);
+    expect(store.getCorpusItem('c2')).toBeDefined();
   });
 
   it('emits testimony.added for every appended entry', () => {
