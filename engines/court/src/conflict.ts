@@ -395,14 +395,17 @@ function hasMutualExclusion(textA: string, textB: string): boolean {
 function isRefinement(textA: string, textB: string): boolean {
   const tokensA = tokenize(textA);
   const tokensB = tokenize(textB);
-  if (tokensA.size <= tokensB.size) return false;
+  // A must be strictly larger (more detail) and B must be non-trivial.
+  // Minimum 5 tokens on the shorter claim avoids false positives from
+  // shared CJK bigrams like "林默", "他的", "不是" etc.
+  if (tokensA.size <= tokensB.size || tokensB.size < 5) return false;
 
   let containedCount = 0;
   for (const t of tokensB) {
     if (tokensA.has(t)) containedCount++;
   }
-  // B must be substantially contained in A
-  return tokensB.size >= 2 && containedCount >= tokensB.size * 0.8;
+  // B must be almost entirely contained in A (90% for tighter matching)
+  return containedCount >= tokensB.size * 0.9;
 }
 
 export interface ClassifyPairOptions {
