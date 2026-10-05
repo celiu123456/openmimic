@@ -191,6 +191,49 @@ Guardrails:
 - `appendOnly: true` disables `update()` and `delete()` at the API level,
   guaranteeing immutability (used by meta-perception predictions).
 
+## Output biography plugin
+
+The `output-biography` plugin generates a short biography of the subject
+written from friends' testimonies. It draws material from testimony answers
+and episodes, groups them into chapters, and validates every quoted sentence
+against a whitelist of verbatim excerpts.
+
+**Routes:**
+
+| Method | Path | Purpose |
+|--------|------|---------|
+| `POST` | `/api/subjects/:id/biography` | Generate biography (requires LLM) |
+| `GET` | `/api/subjects/:id/biography` | Retrieve generated biography |
+| `POST` | `/api/biography/:id/sections/:sid/remove` | Subject vetoes a section |
+
+**Key rules:**
+
+- Quotation marks may only contain verbatim text from `quotable` witnesses.
+  The plugin validates every quoted string against the quotable index and
+  rejects the chapter if any quote cannot be traced.
+- `synthesis_only` witnesses' raw text (8+ consecutive characters) must not
+  appear in the output. A leakage check runs after generation.
+- Contested or retired claims' testimony evidence is excluded from material.
+- The subject can remove any section; the data is not deleted, only flagged,
+  and a fixed note replaces the content in the API output.
+- When the `silence-signal` plugin is active and signals exist, a deterministic
+  silence paragraph is appended (fixed text, no model involved).
+- The final chapter contains only the subject's own words from the corpus.
+  If no corpus exists, a fixed placeholder is shown.
+- Quality review checks five dimensions: omniscient narrator language,
+  speculative language, sensitive diagnostic terms, over-praise, and
+  cross-chapter duplication.
+
+**Config (in `openmimic.yml`):**
+
+```yaml
+plugins:
+  - use: "./plugins/output-biography"
+    config:
+      minWitnesses: 3       # minimum witnesses to generate
+      qualityThreshold: 75  # below this score => requires rewrite
+```
+
 ## Unloading
 
 `PluginHost.unload(name)` runs the dispose callback, removes provided services, collector/scenario registrations, and event listeners. It refuses to unload a plugin if another loaded plugin depends on one of its services.
