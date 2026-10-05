@@ -1097,4 +1097,56 @@ describe('three-identity status code matrix', () => {
     const res = await api(base, 'GET', `/api/subjects/${subjectId}/coverage`, undefined, bearer(ADMIN));
     expect(res.status).toBe(200);
   });
+
+  /* --- New pages: chatlog, meta-perception, character card --- */
+
+  it('no token: chatlog imports list blocked', async () => {
+    const res = await api(base, 'GET', `/api/subjects/${subjectId}/chatlog/imports`);
+    expect(res.status).toBe(401);
+  });
+
+  // Plugin routes: when plugin is loaded, scope enforcement applies.
+  // When plugin is not loaded (skipDemo), 404 is returned before scope check.
+  // Both 403 and 404 mean the chat token cannot access the resource.
+
+  it('chat token: chatlog imports list blocked (needs admin or not loaded)', async () => {
+    const res = await api(base, 'GET', `/api/subjects/${subjectId}/chatlog/imports`, undefined, bearer(chatToken));
+    expect([403, 404]).toContain(res.status);
+  });
+
+  it('admin: chatlog imports list allowed or not loaded', async () => {
+    const res = await api(base, 'GET', `/api/subjects/${subjectId}/chatlog/imports`, undefined, bearer(ADMIN));
+    // 200 or 404 (plugin may not be loaded), but not 401/403
+    expect([200, 404]).toContain(res.status);
+  });
+
+  it('no token: meta-perception blocked or not loaded', async () => {
+    const res = await api(base, 'GET', `/api/subjects/${subjectId}/meta-perception/questions`);
+    expect([401, 404]).toContain(res.status);
+  });
+
+  it('chat token: meta-perception blocked (needs admin or not loaded)', async () => {
+    const res = await api(base, 'GET', `/api/subjects/${subjectId}/meta-perception/questions`, undefined, bearer(chatToken));
+    expect([403, 404]).toContain(res.status);
+  });
+
+  it('no token: character card export blocked or not loaded', async () => {
+    const res = await api(base, 'GET', `/api/subjects/${subjectId}/export/character-card`);
+    expect([401, 404]).toContain(res.status);
+  });
+
+  it('chat token: character card export blocked (needs export or not loaded)', async () => {
+    const res = await api(base, 'GET', `/api/subjects/${subjectId}/export/character-card`, undefined, bearer(chatToken));
+    expect([403, 404]).toContain(res.status);
+  });
+
+  it('testimony.read token: can read claims', async () => {
+    const tok = await api(base, 'POST', '/api/tokens', {
+      name: 'testimony-reader',
+      scopes: ['testimony.read'],
+    }, bearer(ADMIN));
+    const tToken = tok.body.token as string;
+    const res = await api(base, 'GET', `/api/subjects/${subjectId}/claims`, undefined, bearer(tToken));
+    expect(res.status).toBe(200);
+  });
 });
