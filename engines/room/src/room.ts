@@ -3,6 +3,7 @@ import { z } from 'zod';
 import {
   CONSENT_OVERLAP_LENGTH,
   containsConsentOverlap,
+  normalizeProviderError,
   wrapUntrusted,
   appendGuardInstruction,
   type Room,
@@ -204,6 +205,10 @@ export function parseRoomText(raw: string): string {
 
 type Attempt<T> = { ok: true; value: T } | { ok: false; error: Error };
 
+/**
+ * Attempt an LLM call, retrying only on retryable errors.
+ * Non-retryable errors (402 quota, 401 auth) surface immediately.
+ */
 async function attemptResponse(
   llm: LLMClient,
   request: LLMCompletionRequest,
@@ -215,6 +220,11 @@ async function attemptResponse(
       return { ok: true, value: parseRoomResponse(await llm.complete(request)) };
     } catch (caught) {
       error = caught instanceof Error ? caught : new Error(String(caught));
+      // Non-retryable provider errors: stop immediately
+      const normalized = normalizeProviderError('llm', caught);
+      if (!normalized.retryable) {
+        return { ok: false, error: normalized };
+      }
     }
   }
   return { ok: false, error };

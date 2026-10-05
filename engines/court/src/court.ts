@@ -2,6 +2,8 @@ import { randomUUID } from 'node:crypto';
 import { z } from 'zod';
 import {
   CONVICTION_UNCHALLENGED_CAP,
+  extractJson,
+  normalizeProviderError,
   wrapUntrusted,
   appendGuardInstruction,
   type Claim,
@@ -145,6 +147,14 @@ function toError(caught: unknown): Error {
   return caught instanceof Error ? caught : new Error(String(caught));
 }
 
+/**
+ * Attempt an LLM call that should return parseable JSON.
+ *
+ * Only retries on *retryable* errors (rate limit, timeout, upstream 5xx).
+ * Non-retryable errors (402 quota, 401 auth, 400 bad request) are
+ * surfaced immediately — the old implementation blindly retried all
+ * errors, burning budget on calls that could never succeed.
+ */
 async function attemptJson<T>(
   llm: LLMClient,
   request: LLMCompletionRequest,
@@ -158,49 +168,19 @@ async function attemptJson<T>(
       return { ok: true, value: parse(text) };
     } catch (caught) {
       error = toError(caught);
+      // Non-retryable errors: stop immediately
+      const normalized = normalizeProviderError('llm', caught);
+      if (!normalized.retryable) {
+        return { ok: false, error: normalized };
+      }
     }
   }
   return { ok: false, error };
 }
 
-/**
- * Extract a JSON value from a possibly chatty LLM response: tolerates
- * markdown fences and surrounding prose.
- */
-export function extractJson(text: string): unknown {
-  const trimmed = text.trim();
-  try {
-    return JSON.parse(trimmed) as unknown;
-  } catch {
-    /* fall through to more forgiving extraction */
-  }
-
-  const fenced = /```(?:json)?\s*([\s\S]*?)```/i.exec(trimmed);
-  if (fenced?.[1]) {
-    try {
-      return JSON.parse(fenced[1].trim()) as unknown;
-    } catch {
-      /* fall through */
-    }
-  }
-
-  const start = trimmed.search(/[[{]/);
-  if (start >= 0) {
-    const candidate = trimmed.slice(start);
-    for (const closing of [']', '}'] as const) {
-      const end = candidate.lastIndexOf(closing);
-      if (end > 0) {
-        try {
-          return JSON.parse(candidate.slice(0, end + 1)) as unknown;
-        } catch {
-          /* try the other bracket */
-        }
-      }
-    }
-  }
-
-  throw new Error('LLM response did not contain parseable JSON');
-}
+// extractJson re-exported from the import above for backward compatibility.
+// New code should import from @openmimic/shared directly.
+export { extractJson };
 
 const clamp01 = (value: number): number => Math.min(1, Math.max(0, value));
 const round2 = (value: number): number => Math.round(value * 100) / 100;

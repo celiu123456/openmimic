@@ -1,5 +1,4 @@
-import type { Claim, Testimony } from '@openmimic/shared';
-import { wrapUntrusted, appendGuardInstruction } from '@openmimic/shared';
+import { tryExtractJson, wrapUntrusted, appendGuardInstruction, type Claim, type Testimony } from '@openmimic/shared';
 import { cosine, type EmbeddingClient } from '@openmimic/kernel';
 import type { LLMClient } from './llm';
 
@@ -247,7 +246,7 @@ export class LLMClaimPairFinder implements ClaimPairFinder {
         purpose: 'court-pairing',
       });
 
-      const raw = tryParseJson(response);
+      const raw = tryExtractJson(response);
       if (!Array.isArray(raw)) {
         // LLM returned unparseable output, fall back to keyword pairing
         return new KeywordClaimPairFinder().findPairs(claims);
@@ -285,27 +284,4 @@ export class LLMClaimPairFinder implements ClaimPairFinder {
   }
 }
 
-/** Minimal JSON extraction for the pair finder (avoids circular import). */
-function tryParseJson(text: string): unknown {
-  const trimmed = text.trim();
-  try {
-    return JSON.parse(trimmed);
-  } catch { /* fall through */ }
-
-  const fenced = /```(?:json)?\s*([\s\S]*?)```/i.exec(trimmed);
-  if (fenced?.[1]) {
-    try { return JSON.parse(fenced[1].trim()); } catch { /* fall through */ }
-  }
-
-  const start = trimmed.search(/[[{]/);
-  if (start >= 0) {
-    const candidate = trimmed.slice(start);
-    for (const closing of [']', '}'] as const) {
-      const end = candidate.lastIndexOf(closing);
-      if (end > 0) {
-        try { return JSON.parse(candidate.slice(0, end + 1)); } catch { /* try next */ }
-      }
-    }
-  }
-  return undefined;
-}
+// tryParseJson was replaced by tryExtractJson from @openmimic/shared
