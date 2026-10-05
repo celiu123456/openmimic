@@ -161,7 +161,7 @@
 | QR 生成器 | 部分 | `shared/src/qr/qr.ts` · `shared/src/qr/index.ts` | `shared/test/qr.test.ts` | 零依赖 QR 码生成(支持 UTF-8 + SVG 输出)。**但**:未接入任何服务端路由或前端页面;未经独立解码器验证 | 2026-10-08 读代码+跑测试 |
 | 提示词隔离(untrusted content isolation) | 已实现 | `shared/src/prompt/untrusted.ts` · `shared/src/prompt/render.ts` · `shared/src/prompt/guards.ts` | `shared/test/prompt-guard.test.ts` · `shared/test/prompt-untrusted.test.ts` | 所有用户文本入 LLM 前包裹数据块;注入检测(flag, don't reject);守卫测试扫描所有引擎源码确认覆盖 | 2026-10-08 读代码+跑测试 |
 | 回流指纹(reflux detection) | 已实现 | `kernel/src/reflux.ts` · `kernel/src/store.ts`(ai_fingerprints 表) | `kernel/test/reflux.test.ts` | 3-char shingle MinHash 128 维,threshold 0.5;room/court 注册指纹;witness 提交时筛查;court filing 跳过 medium/high。**局限**:对改写(paraphrase)无效——低于 Jaccard 0.5 的回流不会被捕获 | 2026-10-08 读代码+跑测试 |
-| 输出侧事实核对(persona-verify) | 已实现 | `kernel/src/persona-verify.ts` · `server/src/mount-openai.ts` | `kernel/test/persona-verify.test.ts` · `server/test/openai-verify.test.ts` | 已接入 `/v1/chat/completions`(2026-10-08,提交 9a9258b):默认开,环境变量 `PERSONA_VERIFY` 可关;流式请求在开启时先缓冲再输出;核对出错返回保守回答并带 `x-openmimic-verify` 响应头。主控用真模型实测过接线生效。**已知缺陷**:对被嘱托保密之事的提问,人格曾直接否认("没有的事")而核对放行——见已知缺陷第 11 条 | 2026-10-08 读代码+真模型实测 |
+| 输出侧事实核对(persona-verify) | 已实现 | `kernel/src/persona-verify.ts` · `server/src/mount-openai.ts` | `kernel/test/persona-verify.test.ts` · `server/test/openai-verify.test.ts` | 已接入 `/v1/chat/completions`(2026-10-08,提交 9a9258b):默认开,环境变量 `PERSONA_VERIFY` 可关;流式请求在开启时先缓冲再输出;核对出错返回保守回答并带 `x-openmimic-verify` 响应头。2026-10-09 提交 e586cf3:excludedPrivateTopics 已从 assemblePersonaContext 传入 verifyPersonaResponse(stream/non-stream 双路径),入口级集成测试覆盖确认/否认两场景;原已知缺陷 #11 已修 | 2026-10-09 读代码+跑测试 |
 | 说话风格画像(style-stats) | 已实现 | `kernel/src/style-stats.ts` · `kernel/src/persona.ts:837-844` | `kernel/test/style-stats.test.ts` | 消息力量画像(中位长度/p90/单句率/语气词密度/目标长度范围) + 言语行为模板(10 类) + 常用语提取;已接入 persona 组装(renderStyleDiscipline 写入 system prompt 的"说话风格"段) | 2026-10-08 读代码+跑测试 |
 | 证言集(biography) | 已实现 | `plugins/output-biography/src/index.ts` | `plugins/output-biography/test/output-biography.test.ts` | POST /api/subjects/:id/biography 生成;逐章验证引语来源;保密内容过滤;无据细节检查;质量门。**已知局限**:质检分数缺区分度(全部 95);章标题偶带"第N章"前缀(模型产物) | 2026-10-08 读代码+对照 biography-run.md |
 | 活人感台架(liveness evaluation) | 部分 | `eval/src/liveness-judge.ts` · `eval/src/liveness-rubric.ts` · `eval/src/liveness-scenarios.ts` 等 | `eval/test/liveness.test.ts` | 13 信号量表、成对盲评、SHA 冻结、样本卫生检测已建。**未标定**:无人工标注真人样本;不会产出有效读数直到标定通过(>80% 准确率,>=20 有效对,<=30% 位置偏置) | 2026-10-08 读代码 |
@@ -205,7 +205,7 @@
 
 ## Known defects / 已知缺陷
 
-以下缺陷来自各真模型运行记录,截至 2026-10-08 尚未确认修复。
+以下缺陷来自各真模型运行记录,截至 2026-10-09 更新。
 
 | # | 现象 | 出处 | 状态 |
 |---|---|---|---|
@@ -219,4 +219,6 @@
 | 8 | 当面房间 half-truth 机制的泄密风险:半句真话选词来自背后房间记忆,可能间接泄露秘密内容 | 代码审查:room.ts half-truth slot 从 behindMemory 取词 | 已修待复验(regression-run-20261007b 显示 0 泄密,但 half-truth 场景未被显式攻击测试) |
 | 9 | 活人感台架(liveness)未标定:无人工标注真人样本,管线不会产出有效读数 | docs/eval-ledger.md liveness 节 | 未修(阻断条件:需真人标注数据) |
 | 10 | QR 生成器未经独立解码器验证,未接入任何端点或页面 | shared/src/qr/qr.ts 有代码+测试,但 server/web 无引用 | 未修(功能孤立) |
-| 11 | 人格对被嘱托保密之事的提问会确认或否认(实测:答"借过……"或"没有的事,你听谁说的"),输出侧核对放行 | docs/regression-run-20261007b.md Phase B Round 3;主控 2026-10-08 对 /v1/chat/completions 的真模型实测 | 未修(分支 feat/room-fix 进行中) |
+| 11 | 人格对被嘱托保密之事的提问会确认或否认(实测:答"借过……"或"没有的事,你听谁说的"),输出侧核对放行 | docs/regression-run-20261007b.md Phase B Round 3;主控 2026-10-08 对 /v1/chat/completions 的真模型实测 | 已修(提交 e586cf3):mount-openai.ts 将 excludedPrivateTopics 从 assemblePersonaContext 传入 verifyPersonaResponse(stream/non-stream 双路径),入口级集成测试覆盖确认/否认两种场景 |
+| 12 | 当面房间母亲台词"一个月才露一回脸"与所锚定证言"他说好,就真回来。刮风下雨也回来"直接矛盾(q9),档位为 paraphrase 但内容相反 | docs/regression-run-20261008.md Phase C Front line 4 | 已修(提交 e586cf3):新增 llmVerifyContradiction 守卫,对 quote/paraphrase 档位的有锚台词逐句判定是否与证言矛盾;矛盾则重写,仍矛盾降为舞台提示;FakeLLM 回归测试覆盖 |
+| 13 | 苏芷 fixture 无任何证人填写 frontText,当面房间产出全部为舞台提示(无意义) | docs/regression-run-20261008.md Phase D Front | 已修(提交 e586cf3):openDoor 新增 FrontUnavailableError 阈值检查(默认 MIN_FRONT_TEXT_WITNESSES=2),不足则返回 422/front_unavailable;前端显示引导文案 |

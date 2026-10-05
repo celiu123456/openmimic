@@ -153,8 +153,36 @@ system prompt. Wired into the live `/v1/chat/completions` endpoint in
 - Toggle: `PERSONA_VERIFY` env (default on; `0`/`off`/`false` to disable)
 - LLM calls tagged `persona-verify` in usage ledger
 - `x-openmimic-verify` response header reports outcome
+- **Private topic deflection**: `excludedPrivateTopics` (short labels extracted
+  from testimony marked with secrecy markers) are passed from
+  `assemblePersonaContext` through to `verifyPersonaResponse` in both stream
+  and non-stream paths. The verifier catches confirmations ("借过") and denials
+  ("没有的事") via pattern matching + content-char overlap, replacing them with
+  a safe fallback response.
 
 See docs/AUTH.md "Output-side persona verification" for full specification.
+
+### Front room availability gate (engines/room/src/room.ts)
+
+`openDoor` checks that at least `MIN_FRONT_TEXT_WITNESSES` (default 2) witnesses
+have provided `frontText` (what they would say to the subject's face). A room of
+pure stage directions has no value, so the engine throws `FrontUnavailableError`
+instead. The server maps this to HTTP 422 with code `front_unavailable`; the
+frontend shows a message guiding witnesses to fill in their "to their face" text.
+
+### Anchor-contradiction guard (engines/room/src/room.ts)
+
+For room utterances classified as `quote` or `paraphrase` (with valid anchors),
+`llmVerifyContradiction` checks whether the line says the opposite of its
+anchored testimony text. Uses the same LLM verify budget as the no-talk leak
+guard (capped at `MAX_VERIFY_CALLS_PER_ROOM`). On contradiction:
+
+1. Rewrite once via `composeLine`
+2. Re-check the rewrite
+3. If still contradicts, downgrade to stage direction or skip
+
+The `anchorContradictionCount` is tracked in `RoomStats` and reported in
+`scripts/room-metrics.ts` (metric #10).
 
 ### Evidence basis classification (engines/witness/src/basis.ts)
 
