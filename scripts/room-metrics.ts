@@ -12,9 +12,11 @@
  *   6. Repetition rate (pairwise ≥5-char contiguous overlap between utterances)
  *   7. Front frontText anchor rate (front lines sourced from frontText)
  *   8. Half-truth check (exactly 1 front line echoes behindText, short)
+ *   9. Front third-person reference rate (front lines using 他/她 for subject)
  */
 
 import type { RoomUtterance, UtteranceTier } from '@openmimic/shared';
+import { hasFrontThirdPerson } from '@openmimic/engine-room';
 
 /* ------------------------------------------------------------------ */
 /* 1. Tier distribution                                                */
@@ -514,10 +516,22 @@ export interface HalfTruthResult {
   details: string[];
 }
 
+/** Patterns that indicate an interrupted / self-censored half-truth ending. */
+const HALF_TRUTH_ENDINGS = ['……', '...', '算了', '不说了', '没什么', '不提了', '别说了', '罢了'];
+
+/**
+ * Check whether a line ends with a self-interruption pattern
+ * (ellipsis, "算了", "不说了", etc.).
+ */
+export function hasInterruptedEnding(text: string): boolean {
+  const trimmed = text.replace(/[。！？，、；：""''（）「」\s]+$/g, '');
+  return HALF_TRUTH_ENDINGS.some((e) => trimmed.endsWith(e));
+}
+
 /**
  * Check the "half-truth" rule for the front room:
  * - Exactly 1 front speech line should have ≥4-char overlap with its witness's
- *   behindText AND be ≤25 chars long.
+ *   behindText, be ≤25 chars long, and end with a self-interruption pattern.
  * - No other front speech line should have ≥8-char overlap with behindText.
  */
 export function halfTruthCheck(
@@ -544,11 +558,12 @@ export function halfTruthCheck(
 
     // Check for ≥8 char overlap (heavy echo - forbidden for non-half-truth lines)
     const has8 = witBehind.some((bt) => hasContiguousOverlap(u.text, bt, 8));
-    // Check for ≥4 char overlap + ≤25 chars (half-truth candidate)
+    // Check for ≥4 char overlap + ≤25 chars + interrupted ending (half-truth candidate)
     const has4 = witBehind.some((bt) => hasContiguousOverlap(u.text, bt, 4));
     const isShort = u.text.length <= 25;
+    const isInterrupted = hasInterruptedEnding(u.text);
 
-    if (has4 && isShort) {
+    if (has4 && isShort && isInterrupted) {
       halfTruthCount++;
       details.push(`half-truth: "${u.text}" (${u.witnessId})`);
     } else if (has8) {
@@ -562,6 +577,34 @@ export function halfTruthCheck(
     heavyEchoCount,
     pass: halfTruthCount === 1 && heavyEchoCount === 0,
     details,
+  };
+}
+
+/* ------------------------------------------------------------------ */
+/* 9. Front third-person reference rate                                */
+/* ------------------------------------------------------------------ */
+
+/**
+ * Fraction of front-room speech utterances that use 他/她 to refer to the
+ * subject (who is present). Target: 0%.
+ */
+export function frontThirdPersonRate(front: readonly RoomUtterance[]): {
+  thirdPersonCount: number;
+  total: number;
+  rate: number;
+} {
+  const speeches = front.filter((u) => u.kind === 'speech');
+  if (speeches.length === 0) return { thirdPersonCount: 0, total: 0, rate: 0 };
+
+  let thirdPersonCount = 0;
+  for (const u of speeches) {
+    if (hasFrontThirdPerson(u.text)) thirdPersonCount++;
+  }
+
+  return {
+    thirdPersonCount,
+    total: speeches.length,
+    rate: thirdPersonCount / speeches.length,
   };
 }
 
@@ -584,6 +627,7 @@ export interface FullReport {
   divergence: WitnessDivergence[];
   frontTextAnchoring: { anchored: number; total: number; rate: number } | null;
   halfTruth: HalfTruthResult | null;
+  frontThirdPerson: { thirdPersonCount: number; total: number; rate: number } | null;
 }
 
 export function buildReport(
@@ -626,12 +670,15 @@ export function buildReport(
   const divergence =
     front && front.length > 0 ? witnessDivergence(behind, front) : [];
 
+  const ftp = front && front.length > 0 ? frontThirdPersonRate(front) : null;
+
   return {
     behind: behindReport,
     front: frontReport,
     divergence,
     frontTextAnchoring: frontAnchoring,
     halfTruth: ht,
+    frontThirdPerson: ftp,
   };
 }
 
@@ -713,6 +760,18 @@ export function formatReport(report: FullReport): string {
         lines.push(`- ${d}`);
       }
     }
+    lines.push('');
+  }
+
+  if (report.frontThirdPerson) {
+    const tp = report.frontThirdPerson;
+    lines.push('### Front Third-Person Reference');
+    lines.push('');
+    lines.push(`| Metric | Value |`);
+    lines.push(`|--------|-------|`);
+    lines.push(`| third-person lines | ${tp.thirdPersonCount} |`);
+    lines.push(`| total front speeches | ${tp.total} |`);
+    lines.push(`| third-person rate | ${(tp.rate * 100).toFixed(0)}% (target: 0%) |`);
     lines.push('');
   }
 
@@ -805,7 +864,16 @@ export function checkCriteria(report: FullReport): PassFail[] {
     });
   }
 
-  // 8. Behind/front divergence: overlap < 50%
+  // 8. Front third-person rate: 0%
+  if (report.frontThirdPerson) {
+    checks.push({
+      name: 'front-third-person',
+      pass: report.frontThirdPerson.thirdPersonCount === 0,
+      detail: `${report.frontThirdPerson.thirdPersonCount}/${report.frontThirdPerson.total} lines (target: 0)`,
+    });
+  }
+
+  // 9. Behind/front divergence: overlap < 50%
   if (report.divergence.length > 0) {
     const avgOverlap =
       report.divergence.reduce((s, d) => s + d.overlapRatio, 0) /

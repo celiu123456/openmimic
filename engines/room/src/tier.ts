@@ -88,19 +88,36 @@ function tokenOverlap(a: Set<string>, b: Set<string>): number {
 /* ------------------------------------------------------------------ */
 
 /**
+ * Normalize pronouns for front-mode tier comparison: replace 他/她/TA with 你.
+ * This ensures that a front-room line using second person ("你") can still
+ * match against frontText that was originally written in third person ("他").
+ */
+export function normalizePronoun(text: string): string {
+  return text.replace(/他|她|TA/g, '你');
+}
+
+/**
  * Check if `text` contains a contiguous run of at least `length` characters
  * from any of `sources`.
+ *
+ * When `pronounNormalize` is true, both text and sources are pronoun-normalised
+ * (他/她/TA → 你) before comparison. This is used for front-room tier
+ * classification where the generated line uses second person but the original
+ * frontText may use third person.
  */
 export function hasVerbatimOverlap(
   text: string,
   sources: readonly string[],
   length: number = QUOTE_OVERLAP_LENGTH,
+  pronounNormalize: boolean = false,
 ): boolean {
-  if (text.length < length) return false;
+  const compareText = pronounNormalize ? normalizePronoun(text) : text;
+  if (compareText.length < length) return false;
   for (const source of sources) {
-    if (source.length < length) continue;
-    for (let start = 0; start + length <= source.length; start++) {
-      if (text.includes(source.slice(start, start + length))) return true;
+    const compareSource = pronounNormalize ? normalizePronoun(source) : source;
+    if (compareSource.length < length) continue;
+    for (let start = 0; start + length <= compareSource.length; start++) {
+      if (compareText.includes(compareSource.slice(start, start + length))) return true;
     }
   }
   return false;
@@ -182,6 +199,12 @@ export interface ClassifyInput {
   citedAnchors: readonly UtteranceAnchor[];
   /** All testimonies for this witness. */
   testimonies: readonly WitnessTestimony[];
+  /**
+   * When true, pronoun-normalize (他/她/TA → 你) before verbatim overlap
+   * comparison. Used for front-room lines where the generated text uses second
+   * person but the source frontText may use third person.
+   */
+  pronounNormalize?: boolean;
 }
 
 export interface ClassifyResult {
@@ -236,7 +259,7 @@ export function classifyUtterance(input: ClassifyInput): ClassifyResult {
       if (answer.followupText) anchoredTexts.push(answer.followupText);
     }
 
-    if (hasVerbatimOverlap(input.text, anchoredTexts, QUOTE_OVERLAP_LENGTH)) {
+    if (hasVerbatimOverlap(input.text, anchoredTexts, QUOTE_OVERLAP_LENGTH, input.pronounNormalize)) {
       return { tier: 'quote', anchors: validAnchors };
     }
   }

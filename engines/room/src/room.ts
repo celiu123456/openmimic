@@ -296,25 +296,25 @@ function buildSystem(
       );
     }
   } else {
-    // Front mode: use frontText as primary material
+    // Front mode: use frontText as primary material, second person
     lines.push(
       `你是${subjectName}的${witness.relation}。${subjectName}刚走进来,一屋子人都在。`,
       '你只说你自己亲眼见过、亲耳听过的事,不要编造。',
       '当面说话要自然。说话像真正碰面时会说的话:短句、口语。一次最多一句。',
       '不要提"证言""问卷""数据""分析"这类词。',
       `${subjectName}就坐在面前,你不会当面评价TA、不会翻旧账、不会说重话。`,
+      `★最重要的规则:你是对着${subjectName}说话,所以称呼必须用"你"或名字(${subjectName}),绝对不能用"他/她/TA"来指代${subjectName}。你的素材里可能是第三人称写的,你要改成第二人称说出来。`,
     );
 
     if (extra.halfTruthSlot) {
-      // This witness is chosen to let slip one short line that subtly echoes their behind-the-back talk
+      // This witness is chosen to let slip a half-sentence echoing behind-room talk
       lines.push(
-        '你忍不住了——用很短的一句(不超过15个字)说出一个你背后提过的细节片段。',
-        '要求:你记忆里有"(你背后说过:……)"的内容——从中挑一个4-6个字的短语,原封不动地放进你这句话里。',
-        '整句不超过15个字,说完就像差点说漏嘴的感觉。',
+        `你忍不住了——用一个不完整的句子(不超过20字)暗示你背后提过的一件事,但话说到一半就自己收住了。`,
+        '要求:句子必须不完整,以"……""算了""不说了""没什么"之类收尾,像是说漏了嘴赶紧刹车的感觉。',
+        '从你背后说过的内容里选一个分量中等的细节(不要选最重的判断),用第二人称("你")说出来。',
         'qids给空数组。',
       );
     } else if (extra.deflectAfterHalfTruth) {
-      // The person right after the half-truth should change the subject
       lines.push(
         '刚才有人差点说漏嘴了,你赶紧岔开话题,说点完全不相关的事。不要追问刚才的话。',
         'qids给空数组。',
@@ -323,14 +323,13 @@ function buildSystem(
       lines.push(
         '这轮你只需要自然地接一句,不要说实质内容。qids给空数组。',
         '注意:不要说"坐吧""喝口水"之类的招呼话——前面已经有人说过了。说点具体的。',
+        `记住:对着${subjectName}说话,用"你",不要用"他"。`,
       );
     } else {
-      // contribute: draw from frontText
       lines.push(
-        '你的记忆里有你曾经想好"当面会怎么说"的话——请以那些内容为素材,用你自己的口吻说出来。',
+        '你的记忆里有你曾经想好"当面会怎么说"的话——请以那些内容为素材,改成对他本人说的话(用"你")说出来。',
         '不要泛泛寒暄、不要说"坐吧""喝口水"之类所有人都会说的话。说点只有你才会说的内容。',
       );
-      // Opening style for first utterance
       const style = extra.openingStyle
         ? OPENING_STYLES.find((s) => s.tag === extra.openingStyle)
         : undefined;
@@ -409,13 +408,13 @@ function buildUser(
     }
   } else {
     if (extra.halfTruthSlot) {
-      parts.push(`${context.subjectName}就坐在面前。你忍不住了,从你背后说过的话里挑一个4-6字的短语,放进一句不超过15字的话里说出来。`);
+      parts.push(`${context.subjectName}就坐在面前。你忍不住了,用一句不完整的话暗示一下你背后提过的事,但话到一半就收住。用"你"称呼${context.subjectName}。`);
     } else if (extra.deflectAfterHalfTruth) {
       parts.push(`${context.subjectName}就坐在面前。赶紧岔开话题,说点别的。`);
     } else if (actionHint === 'react') {
-      parts.push(`${context.subjectName}就坐在面前,自然地接一句。不要说"坐吧""喝口水"。`);
+      parts.push(`${context.subjectName}就坐在面前,对着TA自然地接一句。用"你"称呼,不要用"他"。`);
     } else {
-      parts.push(`${context.subjectName}就坐在面前,根据你想好的当面话,说一句。用你自己的方式说出来,不要照搬原文。`);
+      parts.push(`${context.subjectName}就坐在面前,根据你想好的当面话,对着TA说一句。用"你"称呼,不要照搬原文里的第三人称。`);
     }
   }
 
@@ -630,6 +629,35 @@ function decideActionHint(
   return turnIndex % 2 === 1 ? 'react' : 'contribute';
 }
 
+/**
+ * Check if a front-room line uses third-person pronouns (他/她) to refer to
+ * the subject who is present. Returns true if the subject's name appears in a
+ * "他/她 + verb" pattern or "他" is used as subject pronoun.
+ *
+ * Simple heuristic: if the text contains 他 or 她 (not inside quoted speech
+ * marked by 「」), it's likely referring to the subject in third person.
+ * We exclude cases where 他/她 is part of words like 其他/他们/她们.
+ */
+export function hasFrontThirdPerson(text: string): boolean {
+  // Remove quoted text (「...」) to avoid false positives
+  const cleaned = text.replace(/「[^」]*」/g, '');
+  // Check for standalone 他/她 not part of compound words: 他们/她们/其他/他处
+  // Note: "他人" (other people) is excluded, but "他" followed by most other
+  // characters is a pronoun reference to the subject.
+  for (let i = 0; i < cleaned.length; i++) {
+    const char = cleaned[i];
+    if (char !== '他' && char !== '她') continue;
+    const prev = i > 0 ? cleaned[i - 1] : '';
+    const next = i < cleaned.length - 1 ? cleaned[i + 1] : '';
+    // Skip: 其他, 另他
+    if (prev === '其' || prev === '另') continue;
+    // Skip: 他们, 她们, 他处
+    if (next === '们' || next === '处') continue;
+    return true;
+  }
+  return false;
+}
+
 /** Check if `text` has ≥minLen contiguous character overlap with any existing speech. */
 function hasDedupConflict(
   text: string,
@@ -781,13 +809,15 @@ async function runSchedule(
         witTurns >= 1 // second turn
       ) {
         extra.halfTruthSlot = true;
-        // Give this persona their behind-room memory for the half-truth hint
+        // Give this persona a random subset of their behind-room memory
+        // (2-3 items, shuffled) for variety across runs
         const behindMem = frontConfig.behindMemory.get(draft.witness.id) ?? [];
         if (behindMem.length > 0) {
-          // Add behind memory as temporary context (doesn't go into the official memory)
+          const shuffled = shuffleArray(behindMem);
+          const subset = shuffled.slice(0, Math.min(3, shuffled.length));
           context.memory = [
             ...context.memory,
-            ...behindMem.map((m) => ({ qid: m.qid, text: `(你背后说过:${m.text})` })),
+            ...subset.map((m) => ({ qid: m.qid, text: `(你背后说过:${m.text})` })),
           ];
         }
       }
@@ -840,6 +870,23 @@ async function runSchedule(
         Object.assign(line, retryLine);
       } else {
         // Still a dup: fall back to stage direction
+        line.kind = 'stage';
+        line.text = stageLine();
+        line.qids = [];
+      }
+    }
+
+    // Third-person pronoun guard (front mode only): lines must not use 他/她
+    // to refer to the subject who is present in the room
+    if (mode === 'front' && line.kind === 'speech' && hasFrontThirdPerson(line.text)) {
+      const retryLine = await composeLine(
+        llm, context, mode, topicSeed, utterances,
+        actionHint, witnessPrivateTexts, secretLeakBudget, extra,
+      );
+      if (retryLine && retryLine.kind === 'speech' && !hasFrontThirdPerson(retryLine.text)) {
+        Object.assign(line, retryLine);
+      } else {
+        // Still using third person: fall back to stage direction
         line.kind = 'stage';
         line.text = stageLine();
         line.qids = [];
@@ -901,6 +948,8 @@ async function runSchedule(
       consentLevel: draft.witness.consentLevel,
       citedAnchors,
       testimonies: draft.witnessTestimonies,
+      // Front mode: allow pronoun-normalised comparison (他→你) for tier
+      pronounNormalize: mode === 'front',
     });
 
     utterances.push({

@@ -10,6 +10,8 @@ import {
   hasContiguousOverlap,
   frontTextAnchorRate,
   halfTruthCheck,
+  hasInterruptedEnding,
+  frontThirdPersonRate,
   buildReport,
   checkCriteria,
 } from '../../../scripts/room-metrics';
@@ -292,11 +294,33 @@ describe('frontTextAnchorRate', () => {
   });
 });
 
+describe('hasInterruptedEnding', () => {
+  it('detects ellipsis ending', () => {
+    expect(hasInterruptedEnding('你走那会儿我其实……')).toBe(true);
+  });
+
+  it('detects "算了" ending', () => {
+    expect(hasInterruptedEnding('你那时候……算了')).toBe(true);
+  });
+
+  it('detects "不说了" ending', () => {
+    expect(hasInterruptedEnding('你那件事……不说了')).toBe(true);
+  });
+
+  it('rejects complete sentences', () => {
+    expect(hasInterruptedEnding('他走的方式,像个逃兵。')).toBe(false);
+  });
+
+  it('rejects regular endings', () => {
+    expect(hasInterruptedEnding('最近还好吗')).toBe(false);
+  });
+});
+
 describe('halfTruthCheck', () => {
-  it('passes with exactly 1 half-truth and no heavy echoes', () => {
+  it('passes with exactly 1 interrupted half-truth and no heavy echoes', () => {
     const front = [
-      u({ text: '来了快坐', witnessId: 'w-a' }), // no overlap with behind
-      u({ text: '他从小就这样', witnessId: 'w-b' }), // 4-char overlap "从小就这", ≤25 chars
+      u({ text: '来了快坐', witnessId: 'w-a' }),
+      u({ text: '你从小就这样……算了', witnessId: 'w-b' }), // 4-char overlap, ≤25 chars, interrupted
       u({ text: '喝杯茶', witnessId: 'w-c' }),
     ];
     const behindTexts = [
@@ -306,6 +330,17 @@ describe('halfTruthCheck', () => {
     expect(r.halfTruthCount).toBe(1);
     expect(r.heavyEchoCount).toBe(0);
     expect(r.pass).toBe(true);
+  });
+
+  it('rejects a short overlap line without interrupted ending', () => {
+    const front = [
+      u({ text: '你从小就这样。', witnessId: 'w-b' }), // overlap but no interruption
+    ];
+    const behindTexts = [
+      { witnessId: 'w-b', qid: 'q1', behindText: '他从小就这样的' },
+    ];
+    const r = halfTruthCheck(front, behindTexts);
+    expect(r.halfTruthCount).toBe(0); // not counted as half-truth without interruption
   });
 
   it('fails with 0 half-truths', () => {
@@ -322,8 +357,7 @@ describe('halfTruthCheck', () => {
   });
 
   it('fails with heavy echo (≥8 char overlap)', () => {
-    // 26 chars (>25), so not a half-truth; has ≥8 char overlap with behind
-    const longText = '他借了两万还嘱咐我千万别跟别人提这事啊咱们都要注意一下'; // 26 chars
+    const longText = '他借了两万还嘱咐我千万别跟别人提这事啊咱们都要注意一下';
     const front = [
       u({ text: longText, witnessId: 'w-a' }),
     ];
@@ -334,19 +368,45 @@ describe('halfTruthCheck', () => {
     expect(r.heavyEchoCount).toBe(1);
     expect(r.pass).toBe(false);
   });
+});
 
-  it('fails with 2 half-truths', () => {
+describe('frontThirdPersonRate', () => {
+  it('counts lines using 他/她 for the subject', () => {
     const front = [
-      u({ text: '他从小就这样', witnessId: 'w-a' }),
-      u({ text: '性格从小就这样', witnessId: 'w-b' }),
+      u({ text: '你最近忙不忙', witnessId: 'w-a' }), // second person - OK
+      u({ text: '他人挺好的', witnessId: 'w-b' }), // third person - bad
+      u({ text: '默哥来了啊', witnessId: 'w-c' }), // name - OK
     ];
-    const behindTexts = [
-      { witnessId: 'w-a', qid: 'q1', behindText: '他从小就这样没法改' },
-      { witnessId: 'w-b', qid: 'q1', behindText: '她性格从小就这样的' },
+    const r = frontThirdPersonRate(front);
+    expect(r.thirdPersonCount).toBe(1);
+    expect(r.total).toBe(3);
+    expect(r.rate).toBeCloseTo(1 / 3, 2);
+  });
+
+  it('returns 0 for all second-person lines', () => {
+    const front = [
+      u({ text: '你最近怎么样', witnessId: 'w-a' }),
+      u({ text: '你吃了没', witnessId: 'w-b' }),
     ];
-    const r = halfTruthCheck(front, behindTexts);
-    expect(r.halfTruthCount).toBe(2);
-    expect(r.pass).toBe(false);
+    const r = frontThirdPersonRate(front);
+    expect(r.thirdPersonCount).toBe(0);
+    expect(r.rate).toBe(0);
+  });
+
+  it('allows 他们 without counting as third-person', () => {
+    const front = [
+      u({ text: '他们都在等你', witnessId: 'w-a' }),
+    ];
+    const r = frontThirdPersonRate(front);
+    expect(r.thirdPersonCount).toBe(0);
+  });
+
+  it('skips stage directions', () => {
+    const front = [
+      u({ text: '他低头喝了口水', kind: 'stage', witnessId: 'w-a' }),
+    ];
+    const r = frontThirdPersonRate(front);
+    expect(r.total).toBe(0);
   });
 });
 
