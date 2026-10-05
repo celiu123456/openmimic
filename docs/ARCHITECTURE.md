@@ -46,6 +46,7 @@ Core processing pipelines. Each provides a named service:
 | `witnessPlugin` | `witness` (WitnessCollector) | store |
 | `courtPlugin` | `court` (CourtEngine) | store, llm |
 | `roomPlugin` | `room` (RoomEngine) | store, llm |
+| `graphPlugin` | `graph` (GraphEngine) | store |
 
 ### Collectors (kind: 'collector')
 
@@ -202,7 +203,7 @@ engines/
   witness/        WitnessEngine plugin (testimony collection, invites, interview, basis,
                   coverage scheduling, short invite codes)
                   Interview strategy migrated from the author's earlier platform project.
-  graph/          (planned) GraphEngine
+  graph/          GraphEngine (event-driven incremental recompute)
   gate/           GateEngine (contest/uncontest, claim permission wall, re-raise)
 server/           HTTP server, mount-rest, mount-openai, mount-mcp
 web/              browser client
@@ -242,7 +243,43 @@ room opened
   → RoomEngine assembles persona prompts
   → behind mode: witnesses discuss subject
   → openDoor: subject enters, tone shifts
+
+testimony submitted / claim contested
+  → GraphEngine marks affected dependencies dirty
+  → downstream outputs (rooms, biographies) marked stale
+  → auto mode: quiet-period timer fires graph.auto_trigger
+  → manual mode: initiator requests POST /api/subjects/:id/graph/recompute
+    → court re-run → claim matching (exact / bigram Jaccard / optional LLM)
+    → dirty marks resolved → persona version recorded
+    → events.emit('graph.recomputed', { subjectId, sessionId })
 ```
+
+### GraphEngine (engines/graph/)
+
+Event-driven incremental recompute engine that tracks which court outputs
+depend on which testimonies.
+
+**Non-determinism caveat**: court output is non-deterministic (~47% overlap
+between identical runs). The graph engine handles this via 3-pass claim
+matching (exact text, character bigram Jaccard >= 0.5, optional LLM semantic
+match). Claims are classified as retained, merged, added, or retired.
+
+**Trigger strategies**:
+- `manual` (default): marks parts dirty; recompute requires explicit API call.
+  Default because court runs cost tokens and non-determinism means
+  auto-triggering churns the persona.
+- `auto`: fires after a quiet period (default 30s) with no new events, subject
+  to a daily limit (default 5 per subject).
+
+**Plugin tables** (4 tables, all prefixed `plugin_graph_`):
+- `deps`: court output (claim/episode/divergence) -> testimony dependency edges
+- `persona_versions`: snapshots of which claims compose each persona version
+- `output_versions`: downstream outputs with a stale flag
+- `dirty_marks`: dirty mark log with reason, scope, and resolution tracking
+
+**API routes**:
+- `GET /api/subjects/:id/graph` (scope: `testimony.read`) -- dependency overview
+- `POST /api/subjects/:id/graph/recompute` (scope: `court.run`) -- manual trigger
 
 ## Interview subsystem
 

@@ -24,6 +24,7 @@ export default defineConfig({
       '@openmimic/output-biography': resolveSource('./plugins/output-biography/src/index.ts'),
       '@openmimic/collector-chatlog': resolveSource('./plugins/collector-chatlog/src/index.ts'),
       '@openmimic/bridge-sillytavern': resolveSource('./plugins/bridge-sillytavern/src/index.ts'),
+      '@openmimic/engine-graph': resolveSource('./engines/graph/src/index.ts'),
     },
   },
   test: {

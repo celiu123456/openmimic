@@ -20,7 +20,8 @@
       "@openmimic/silence-signal": ["./plugins/silence-signal/src/index.ts"],
       "@openmimic/output-biography": ["./plugins/output-biography/src/index.ts"],
       "@openmimic/collector-chatlog": ["./plugins/collector-chatlog/src/index.ts"],
-      "@openmimic/bridge-sillytavern": ["./plugins/bridge-sillytavern/src/index.ts"]
+      "@openmimic/bridge-sillytavern": ["./plugins/bridge-sillytavern/src/index.ts"],
+      "@openmimic/engine-graph": ["./engines/graph/src/index.ts"]
     }
   },
   "include": [

@@ -4,6 +4,12 @@ import type { CourtSession, Testimony } from '@openmimic/shared';
 export interface KernelEventMap {
   'testimony.added': Testimony;
   'court.finished': CourtSession;
+  /** Emitted by GraphEngine when parts of a subject become dirty. */
+  'graph.dirty': { subjectId: string; reason: string };
+  /** Emitted by GraphEngine when a recompute finishes. */
+  'graph.recomputed': { subjectId: string; sessionId: string };
+  /** Internal: auto-trigger timer fired (graph engine handles this). */
+  'graph.auto_trigger': { subjectId: string };
 }
 
 export type KernelEventName = keyof KernelEventMap;
