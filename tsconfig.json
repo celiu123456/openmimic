@@ -17,7 +17,8 @@
       "@openmimic/eval": ["./eval/src/index.ts"],
       "@openmimic/engine-gate": ["./engines/gate/src/index.ts"],
       "@openmimic/meta-perception": ["./plugins/meta-perception/src/index.ts"],
-      "@openmimic/silence-signal": ["./plugins/silence-signal/src/index.ts"]
+      "@openmimic/silence-signal": ["./plugins/silence-signal/src/index.ts"],
+      "@openmimic/output-biography": ["./plugins/output-biography/src/index.ts"]
     }
   },
   "include": [

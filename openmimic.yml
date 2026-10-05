@@ -20,3 +20,4 @@ plugins:
   - use: "./plugins/meta-perception"
   - use: "./engines/gate"
   - use: "./plugins/silence-signal"
+  - use: "./plugins/output-biography"
