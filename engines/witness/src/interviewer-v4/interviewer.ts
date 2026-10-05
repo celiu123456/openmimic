@@ -21,7 +21,7 @@ import {
   buildSystemPrompt,
   buildMessages,
   validateSystemPrompt,
-  REPAIR_INSTRUCTION,
+  buildRepairInstruction,
   RETREAT_BOUNDARY_INJECTION,
   type PromptContext,
 } from './prompt';
@@ -254,7 +254,7 @@ export async function startChat(
   const failure = checkGuards(sanitised, []);
   if (failure) {
     // Repair once
-    const repairCtx: PromptContext = { ...ctx, repairInjection: REPAIR_INSTRUCTION };
+    const repairCtx: PromptContext = { ...ctx, repairInjection: buildRepairInstruction(sanitised) };
     const repairSystem = buildSystemPrompt(repairCtx);
     const repairRaw = await callLLM(options.llm, repairSystem, '', state);
     const repairSanitised = sanitiseOutput(repairRaw);
@@ -354,7 +354,7 @@ export async function say(
   state = addAssistantTurn(state, rejectedId, sanitised, now, true);
 
   // One repair attempt
-  const repairCtx: PromptContext = { ...ctx, repairInjection: REPAIR_INSTRUCTION };
+  const repairCtx: PromptContext = { ...ctx, repairInjection: buildRepairInstruction(sanitised) };
   const repairSystem = buildSystemPrompt(repairCtx);
   const repairRaw = await callLLM(options.llm, repairSystem, text, state);
   const repairSanitised = sanitiseOutput(repairRaw);

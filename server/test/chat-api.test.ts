@@ -67,7 +67,7 @@ describe('v4 chat API routes', () => {
 
   it('POST /api/invites/:token/chat starts a chat session', async () => {
     const { token } = await newInvite(base);
-    llm.push('嗨，随便聊聊，能说说你们是怎么认识的吗？');
+    llm.push('你好，我是访谈员，这段对话用来更完整地理解林小满，随时可以停。你们是怎么认识的？');
 
     const opened = await api(base, 'POST', `/api/invites/${token}/chat`);
     expect(opened.status).toBe(201);
@@ -78,11 +78,11 @@ describe('v4 chat API routes', () => {
 
   it('POST /api/chat/:sid/say returns a message', async () => {
     const { token } = await newInvite(base);
-    llm.push('聊聊你们是怎么认识的吧？');
+    llm.push('你好，我是访谈员。你们是怎么认识的？');
     const opened = await api(base, 'POST', `/api/invites/${token}/chat`);
     const sid = opened.body.sessionId as string;
 
-    llm.push('大学啊，那你们经常一起做什么？');
+    llm.push('大学啊。你们经常一起做什么？');
     const step = await api(base, 'POST', `/api/chat/${sid}/say`, {
       text: '大学认识的',
     });
@@ -92,7 +92,7 @@ describe('v4 chat API routes', () => {
 
   it('POST /api/chat/:sid/say returns 503 on generation failure', async () => {
     const { token } = await newInvite(base);
-    llm.push('聊聊你们是怎么认识的吧？');
+    llm.push('你好，我是访谈员。你们是怎么认识的？');
     const opened = await api(base, 'POST', `/api/invites/${token}/chat`);
     const sid = opened.body.sessionId as string;
 
@@ -111,7 +111,7 @@ describe('v4 chat API routes', () => {
 
   it('POST /api/chat/:sid/finish submits testimony', async () => {
     const { token, subjectId } = await newInvite(base);
-    llm.push('聊聊你们是怎么认识的吧？');
+    llm.push('你好，我是访谈员。你们是怎么认识的？');
     const opened = await api(base, 'POST', `/api/invites/${token}/chat`);
     const sid = opened.body.sessionId as string;
 
@@ -129,7 +129,7 @@ describe('v4 chat API routes', () => {
 
   it('GET /api/chat/:sid returns session history', async () => {
     const { token } = await newInvite(base);
-    llm.push('聊聊你们是怎么认识的吧？');
+    llm.push('你好，我是访谈员。你们是怎么认识的？');
     const opened = await api(base, 'POST', `/api/invites/${token}/chat`);
     const sid = opened.body.sessionId as string;
 

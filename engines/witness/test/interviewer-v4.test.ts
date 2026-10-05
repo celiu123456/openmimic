@@ -18,14 +18,14 @@ import {
   validateSystemPrompt,
   sanitiseOutput,
   checkGuards,
-  acknowledgementContainsQuestion,
+  isAcknowledgementPlusQuestion,
+  buildRepairInstruction,
   createChatSession,
   addAssistantTurn,
   addUserTurn,
   addCautiousTopic,
   removeCautiousTopic,
   askedQuestions,
-  REPAIR_INSTRUCTION,
   RETREAT_BOUNDARY_INJECTION,
   type PromptContext,
   type ChatInterviewOptions,
@@ -47,7 +47,8 @@ function createSubjectAndInvite(store: Store): { subjectId: string; token: strin
   return { subjectId, token: invite.token };
 }
 
-const VALID_QUESTION = '能聊聊你们是怎么认识的吗？';
+const VALID_OPENING = '你好，我是访谈员，这段对话用来更完整地理解林小满，随时可以停。你们是怎么认识的？';
+const VALID_ACK_QUESTION = '听起来那天挺难的。你后来是怎么跟他说的？';
 const VALID_QUESTION_2 = '你觉得他是一个怎样的人？';
 const VALID_QUESTION_3 = '他有什么特别的习惯吗？';
 const VALID_FOLLOWUP = '你能举个例子吗？';
@@ -118,6 +119,34 @@ describe('system prompt rendering', () => {
     const prompt = buildSystemPrompt(ctx);
     expect(prompt).not.toContain('参考');
     expect(prompt).not.toContain('还没聊到');
+  });
+
+  it('renders relationship direction as "如何理解" not raw relation label', () => {
+    const ctx: PromptContext = {
+      mode: 'informant',
+      respondentName: '张三',
+      relatedName: '李四',
+      relation: '朋友',
+      uncoveredAspects: [],
+      isOpening: false,
+    };
+    const prompt = buildSystemPrompt(ctx);
+    expect(prompt).toContain('张三如何理解李四');
+    expect(prompt).toContain('（李四的朋友）');
+    expect(prompt).not.toContain('关系方向始终是 朋友');
+  });
+
+  it('renders self relationship direction as "如何理解自己"', () => {
+    const ctx: PromptContext = {
+      mode: 'self',
+      respondentName: '林小满',
+      relatedName: '林小满',
+      relation: '自己',
+      uncoveredAspects: [],
+      isOpening: false,
+    };
+    const prompt = buildSystemPrompt(ctx);
+    expect(prompt).toContain('林小满如何理解自己');
   });
 
   it('throws on unresolved {Anchor} placeholders', () => {
@@ -250,13 +279,45 @@ describe('guards', () => {
     expect(result).toBe('not_single_question');
   });
 
-  it('rejects acknowledgement containing question mark', () => {
-    expect(acknowledgementContainsQuestion('是吗？那后来你们怎么样了？')).toBe(true);
-    expect(acknowledgementContainsQuestion('嗯嗯。你们怎么认识的？')).toBe(false);
+  it('isAcknowledgementPlusQuestion accepts valid acknowledgement + question', () => {
+    expect(isAcknowledgementPlusQuestion('听起来那天挺难的。你后来是怎么跟他说的？')).toBe('你后来是怎么跟他说的？');
+    expect(isAcknowledgementPlusQuestion('你觉得他是一个怎样的人？')).toBe('你觉得他是一个怎样的人？');
+  });
+
+  it('isAcknowledgementPlusQuestion rejects question mark in acknowledgement', () => {
+    expect(isAcknowledgementPlusQuestion('他挺好的？那具体呢？')).toBeUndefined();
+  });
+
+  it('isAcknowledgementPlusQuestion rejects two acknowledgement sentences', () => {
+    expect(isAcknowledgementPlusQuestion('原来如此。真有意思。你后来呢？')).toBeUndefined();
+  });
+
+  it('isAcknowledgementPlusQuestion rejects newline', () => {
+    expect(isAcknowledgementPlusQuestion('嗯嗯。\n你后来呢？')).toBeUndefined();
   });
 
   it('passes a valid single question', () => {
-    expect(checkGuards(VALID_QUESTION, [])).toBeUndefined();
+    expect(checkGuards(VALID_QUESTION_2, [])).toBeUndefined();
+  });
+
+  it('passes acknowledgement + question: 听起来那天挺难的。你后来是怎么跟他说的？', () => {
+    expect(checkGuards('听起来那天挺难的。你后来是怎么跟他说的？', [])).toBeUndefined();
+  });
+
+  it('passes opening: 你好，我是访谈员…你们是怎么认识的？', () => {
+    expect(checkGuards(VALID_OPENING, [])).toBeUndefined();
+  });
+
+  it('rejects chained questions: 他挺好的？那具体呢？', () => {
+    expect(checkGuards('他挺好的？那具体呢？', [])).toBe('not_single_question');
+  });
+
+  it('rejects two acknowledgement sentences: A。B。C？', () => {
+    expect(checkGuards('原来是这样。真有意思。你后来怎么办的？', [])).toBe('not_single_question');
+  });
+
+  it('rejects newline in output', () => {
+    expect(checkGuards('听起来挺好的。\n你后来呢？', [])).toBe('not_single_question');
   });
 });
 
@@ -264,12 +325,27 @@ describe('guards', () => {
 /* 4. Repair chain                                                     */
 /* ------------------------------------------------------------------ */
 
+describe('repair and retreat text', () => {
+  it('buildRepairInstruction includes rejected output wrapped as untrusted', () => {
+    const instruction = buildRepairInstruction('坏输出没有问号');
+    expect(instruction).toContain('【仅修复本次错误输出】');
+    expect(instruction).toContain('坏输出没有问号');
+    expect(instruction).toContain('只输出一个口语化、容易回答并以问句结束的下一问');
+  });
+
+  it('RETREAT_BOUNDARY_INJECTION contains old-platform boundary signal text', () => {
+    expect(RETREAT_BOUNDARY_INJECTION).toContain('受访者边界信号');
+    expect(RETREAT_BOUNDARY_INJECTION).toContain('温和地承认对方的感受');
+    expect(RETREAT_BOUNDARY_INJECTION).toContain('转向更轻松且由受访者主导方向的问题');
+  });
+});
+
 describe('repair chain', () => {
   it('first violation triggers repair, second pass succeeds with exactly 2 calls', async () => {
     const store = newStore();
     const { token } = createSubjectAndInvite(store);
     const llm = new FakeLLM([
-      VALID_QUESTION, // opening
+      VALID_OPENING, // opening
     ]);
     const options = makeOptions(llm);
     await startChat(store, token, options);
@@ -288,7 +364,7 @@ describe('repair chain', () => {
     const store = newStore();
     const { token } = createSubjectAndInvite(store);
     const llm = new FakeLLM([
-      VALID_QUESTION, // opening
+      VALID_OPENING, // opening
     ]);
     const options = makeOptions(llm);
     const started = await startChat(store, token, options);
@@ -318,7 +394,7 @@ describe('retreat and reopen', () => {
     const store = newStore();
     const { token } = createSubjectAndInvite(store);
     const llm = new FakeLLM([
-      VALID_QUESTION, // opening
+      VALID_OPENING, // opening
     ]);
     const options = makeOptions(llm);
     await startChat(store, token, options);
@@ -329,14 +405,15 @@ describe('retreat and reopen', () => {
 
     // Check that the system prompt for the next call contained retreat injection
     const lastCall = llm.calls[llm.calls.length - 1]!;
-    expect(lastCall.system).toContain('不想聊某个话题的信号');
+    expect(lastCall.system).toContain('受访者边界信号');
+    expect(lastCall.system).toContain('不想在当前这个敏感方向上继续深入');
   });
 
   it('reopen removes cautious topic and does not inject boundary', async () => {
     const store = newStore();
     const { token } = createSubjectAndInvite(store);
     const llm = new FakeLLM([
-      VALID_QUESTION, // opening
+      VALID_OPENING, // opening
     ]);
     const options = makeOptions(llm);
     await startChat(store, token, options);
@@ -351,7 +428,7 @@ describe('retreat and reopen', () => {
 
     // The last call should NOT contain retreat injection
     const lastCall = llm.calls[llm.calls.length - 1]!;
-    expect(lastCall.system).not.toContain('不想聊某个话题的信号');
+    expect(lastCall.system).not.toContain('受访者边界信号');
   });
 });
 
@@ -364,7 +441,7 @@ describe('call count', () => {
     const store = newStore();
     const { token } = createSubjectAndInvite(store);
     const llm = new FakeLLM([
-      VALID_QUESTION, // opening
+      VALID_OPENING, // opening
     ]);
     const options = makeOptions(llm);
     await startChat(store, token, options);
@@ -384,7 +461,7 @@ describe('opening', () => {
   it('system prompt contains opening instruction when history is empty', async () => {
     const store = newStore();
     const { token } = createSubjectAndInvite(store);
-    const llm = new FakeLLM([VALID_QUESTION]);
+    const llm = new FakeLLM([VALID_OPENING]);
     const options = makeOptions(llm);
     await startChat(store, token, options);
 
@@ -401,7 +478,7 @@ describe('finish', () => {
   it('maps turns to answers with unique v4: qids and goes through submitTestimony', async () => {
     const store = newStore();
     const { subjectId, token } = createSubjectAndInvite(store);
-    const llm = new FakeLLM([VALID_QUESTION]);
+    const llm = new FakeLLM([VALID_OPENING]);
     const options = makeOptions(llm);
     const started = await startChat(store, token, options);
 
@@ -450,7 +527,7 @@ describe('low-confidence speech', () => {
   it('returns confirm for low-confidence speech, does not enter history', async () => {
     const store = newStore();
     const { token } = createSubjectAndInvite(store);
-    const llm = new FakeLLM([VALID_QUESTION]);
+    const llm = new FakeLLM([VALID_OPENING]);
     const options = makeOptions(llm);
     const started = await startChat(store, token, options);
 
@@ -474,7 +551,7 @@ describe('low-confidence speech', () => {
   it('high-confidence speech enters history normally', async () => {
     const store = newStore();
     const { token } = createSubjectAndInvite(store);
-    const llm = new FakeLLM([VALID_QUESTION, VALID_QUESTION_2]);
+    const llm = new FakeLLM([VALID_OPENING, VALID_QUESTION_2]);
     const options = makeOptions(llm);
     const started = await startChat(store, token, options);
 

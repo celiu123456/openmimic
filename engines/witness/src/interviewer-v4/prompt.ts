@@ -35,13 +35,23 @@ export interface PromptContext {
 /* Prompt skeleton                                                     */
 /* ------------------------------------------------------------------ */
 
-/** Continuation-repair instruction from old platform (v3). */
-export const REPAIR_INSTRUCTION =
-  '【仅修复本次错误输出】你上一次输出不合格（可能含多个问号、收尾语、与之前重复、不以问句结尾、或格式错误）。请重新生成：只输出一个口语化、容易回答并以问句结束的下一问。';
+/**
+ * Build the repair instruction for a rejected output.
+ *
+ * Verbatim old-platform continuation-repair text with the rejected output
+ * substituted into {RejectedOutput}. The rejected text is wrapped as
+ * untrusted content since it is model output being re-fed.
+ */
+export function buildRepairInstruction(rejectedOutput: string): string {
+  return `【仅修复本次错误输出】\n\n上一次模型输出没有形成可继续回答的问题，或错误地宣布了最后一问、总结、致谢或收尾：\n${wrapUntrusted('rejected_output', rejectedOutput)}\n\n用户没有结束访谈。请忽略上一次输出中的结束承诺，回到完整历史、场景目标和本轮用户原文。优先在尚未完成的高价值旧线索与有助于长期对话的新生活侧面之间选择一个自然方向。不要解释错误，不要道歉，不要总结，不要重复上一次输出。只输出一个口语化、容易回答并以问句结束的下一问。`;
+}
 
-/** Retreat boundary injection from old platform 2.13. */
+/**
+ * Retreat boundary injection — verbatim old-platform 2.13 text
+ * (faithful Chinese rendering preserving original semantics).
+ */
 export const RETREAT_BOUNDARY_INJECTION =
-  '【受访者刚表达了不想聊某个话题的信号】简短说一句"没关系"，立即换到一个完全不同的、轻松的方向。不要再回到这个话题，不要追问原因，不要表示理解。';
+  '受访者边界信号（内部提示，不要引用或提及）：受访者刚刚表示不想在当前这个敏感方向上继续深入。本轮请尊重这个边界：不要在该方向上追问、重问或索取细节。温和地承认对方的感受，然后给出一个自然、低压力、转向更轻松且由受访者主导方向的问题。';
 
 /**
  * Build the system prompt for one v4 turn.
@@ -55,7 +65,13 @@ export function buildSystemPrompt(ctx: PromptContext): string {
     : SELF_OBJECTIVE;
 
   // Relationship direction sentence (v13)
-  const relationDirection = `受访者是 ${ctx.respondentName}，关系对象是 ${ctx.relatedName}。关系方向始终是 ${ctx.relation}。你直接用"你"询问受访者；第一人称"我"始终指受访者。不得交换双方的行为、台词、感受或回应。`;
+  // RelationshipDirection = "{RespondentName}如何理解{RelatedName}" for informant,
+  // "{RespondentName}如何理解自己" for self.
+  const directionPhrase = ctx.mode === 'informant'
+    ? `${ctx.respondentName}如何理解${ctx.relatedName}`
+    : `${ctx.respondentName}如何理解自己`;
+  const relationLabel = ctx.relation ? `（${ctx.relatedName}的${ctx.relation}）` : '';
+  const relationDirection = `受访者是 ${ctx.respondentName}${relationLabel}，关系对象是 ${ctx.relatedName}。关系方向始终是 ${directionPhrase}。你直接用"你"询问受访者；第一人称"我"始终指受访者。不得交换双方的行为、台词、感受或回应。`;
 
   // Self-mode addendum (v3)
   const selfAddendum = ctx.mode === 'self'
