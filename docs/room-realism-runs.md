@@ -2247,3 +2247,51 @@ Model: deepseek-flash
   - [paraphrase] 前下属: "这个我信。团建他老偷偷买单，我撞见过一次，他说你一个应届生跟我抢什么。结果他自己中午就啃个八块钱的饭团。" [anchors: q1]
   - [extrapolate] 网友（认识四年,只见过一面）: "嗯……他这人就这样，对别人大方，对自己抠。"
 
+## Run 16 (limo)
+
+Date: 2026-10-05T12:11:21.316Z
+Model: deepseek-flash
+
+### Behind Room
+
+| Metric | Value |
+|--------|-------|
+| Total utterances | 12 |
+| quote | 0 |
+| paraphrase | 1 |
+| extrapolate | 11 |
+| extrapolate ratio | 92% |
+| median length (chars) | 18 |
+| mean length (chars) | 22 |
+| p90 length (chars) | 41 |
+| max length (chars) | 41 |
+| secret leaks | 0 |
+| reply chain rate | 67% (2/3) |
+| repetition rate | 0% (0/6 pairs) |
+
+
+### Criteria Checks
+
+| Check | Pass | Detail |
+|-------|------|--------|
+| behind-extrapolate-ratio | FAIL | 92% (target 40-70%, pass 30-80%) |
+| behind-median-length | PASS | 18 chars (target <=40, pass <=45) |
+| behind-secret-leaks | PASS | 0 (target <=1) |
+| behind-reply-chain | PASS | 67% (target >=30%, pass >=25%) |
+| behind-repetition | PASS | 0% (target <=10%) |
+
+### Behind Transcript (full)
+
+  - [extrapolate] 发小(欲言又止,没说下去)
+  - [extrapolate] 前任(笑了笑,把话题接给了别人)
+  - [extrapolate] 前下属(低头喝了口水)
+  - [extrapolate] 母亲: "嗯,随他吧,我也不好多问。"
+  - [extrapolate] 网友（认识四年,只见过一面）(盯着杯子没接话)
+  - [extrapolate] 前上司(换了个坐姿,看向窗外)
+  - [paraphrase] 前任: "他最近朋友圈步数一天一万多，估计又开始跑步了。以前就这样，心里有事不说，就闷头跑。" [anchors: q1]
+  - [extrapolate] 母亲: "嗯……他从小就这样，闷头跑，不吭声。"
+  - [extrapolate] 发小(打了个哈哈,说起别的事)
+  - [extrapolate] 前上司: "嗯，随他吧。他这人，闷头跑。"
+  - [extrapolate] 前下属(点了点头,没往下说)
+  - [extrapolate] 网友（认识四年,只见过一面）(笑了笑,把话题接给了别人)
+

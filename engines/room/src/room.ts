@@ -889,6 +889,11 @@ export function buildNoTalkListFallback(
  * Check whether a generated line would reveal a no-talk topic to a blind
  * witness, given what that witness currently believes.
  *
+ * The caller supplies the blind witness's current knowledge context
+ * (blindWitnessContext): a summary of their testimony — what they believe
+ * to be true. This anchors the LLM's judgment: a line is only a leak if
+ * it contradicts or extends beyond what the blind witness already knows.
+ *
  * Fail-closed: ambiguous answers (anything other than a clear "否") are
  * treated as leaks.
  *
@@ -900,10 +905,14 @@ export async function llmVerifyLeak(
   topic: string,
   blindWitnessRelation: string,
   blindClaim: string,
+  blindWitnessContext?: string,
 ): Promise<boolean> {
   const system = '你是一个隐私判定器。只回答"是"或"否",不要其他文字。';
+  const contextLine = blindWitnessContext
+    ? `\n${blindWitnessRelation}目前了解到的全部情况:"${blindWitnessContext.slice(0, 200)}"`
+    : '';
   const user = [
-    `在场的"${blindWitnessRelation}"目前相信的版本是:"${blindClaim}"。`,
+    `在场的"${blindWitnessRelation}"目前相信的版本是:"${blindClaim}"。${contextLine}`,
     `以下这句话如果在聊天室里被说出来,${blindWitnessRelation}会不会因此得知或起疑事实并非如此——也就是发现"${topic}"?`,
     `台词:"${utteranceText}"`,
     '即使只是暗示、间接提及,只要可能让其产生怀疑,就回答"是"。',
@@ -1181,6 +1190,8 @@ async function runSchedule(
   const maxPerWitness = turns;
   // At most 1 "hesitation" stage direction for secret leaks per room
   const secretLeakBudget = { remaining: mode === 'behind' ? 1 : 0 };
+  // Running count of LLM verification calls used in this room
+  let verifyCallsUsed = 0;
   // Track whether the half-truth has been spoken
   let halfTruthDone = false;
   // Track whether the previous turn was the half-truth (so next person deflects)
@@ -1278,14 +1289,34 @@ async function runSchedule(
       continue;
     }
 
-    // LLM-based no-talk verification: for speech lines in behind mode,
-    // check against the no-talk list. Two trigger paths:
-    //   (a) keyword hit: always verify
-    //   (b) substantive line (>= 8 chars): verify if the no-talk list is
-    //       non-empty, to catch euphemisms and indirect references
+    // Two-level no-talk leak detection for behind-mode speech lines:
+    //
+    //   Level 1 — keyword fast-scan: if any no-talk item's keywords appear
+    //   verbatim in the line, send it for LLM verification.
+    //
+    //   Level 2 — LLM semantic judgment: for substantive lines (>= 8 chars),
+    //   even without a keyword hit, the LLM checks whether the line would
+    //   reveal the secret to the blind witness. This catches euphemisms and
+    //   indirect references that keyword matching misses.
+    //
+    // The LLM receives the blind witness's current knowledge context —
+    // their full testimony summary — so it can judge whether the line
+    // adds information beyond what that witness already knows.
+    //
     // Skip: if the speaker IS the blind witness (they can't leak to themselves).
-    // Cap: at most MAX_VERIFY_PER_LINE items checked per line.
+    //
+    // Hard caps (rationale: a behind room has ~12 utterances. With N
+    // no-talk items and K witnesses, uncapped verification would be
+    // O(utterances * N) LLM calls. We cap at MAX_VERIFY_PER_LINE = 3
+    // per line and MAX_VERIFY_CALLS_PER_ROOM = 15 per room to keep
+    // latency and cost bounded — 15 is enough to verify every line
+    // against 1-2 items, which covers realistic fixtures).
     const MAX_VERIFY_PER_LINE = 3;
+    // Hard-cap: total LLM verification calls per room. Beyond this,
+    // fall back to keyword-only detection (no LLM semantic check).
+    // Rationale: prevents runaway LLM costs on rooms with many no-talk
+    // items or many turns; 15 covers 12 utterances x 1.25 avg checks.
+    const MAX_VERIFY_CALLS_PER_ROOM = 15;
     if (mode === 'behind' && line.kind === 'speech' && noTalkList.length > 0) {
       const isSubstantive = line.text.length >= 8;
       let verifyCount = 0;
@@ -1294,16 +1325,42 @@ async function runSchedule(
         // Skip: the blind witness speaking can't leak to themselves
         if (draft.witness.id === item.blindWitnessId) continue;
         const keywordHit = item.keywords.some((kw) => line.text.includes(kw));
+
+        // When LLM budget is exhausted, degrade to keyword-only detection:
+        // only keyword hits trigger blocking, no semantic check.
+        if (verifyCallsUsed >= MAX_VERIFY_CALLS_PER_ROOM) {
+          if (keywordHit) {
+            // Block directly on keyword match (no LLM call)
+            if (secretLeakBudget.remaining > 0) {
+              secretLeakBudget.remaining -= 1;
+              line.kind = 'stage';
+              line.text = SECRET_LEAK_FALLBACK_STAGE;
+              line.qids = [];
+            } else {
+              line.kind = 'stage';
+              line.text = stageLine();
+              line.qids = [];
+            }
+            break;
+          }
+          continue;
+        }
+
         // Send for verification if: keyword hit, OR line is substantive
         if (!keywordHit && !isSubstantive) continue;
 
-        // Find the blind witness's relation for the LLM prompt
+        // Find the blind witness's relation and full knowledge context
         const blindDraft = drafts.find((d) => d.witness.id === item.blindWitnessId);
         const blindRelation = blindDraft?.witness.relation ?? '在场的人';
+        const blindWitnessContext = blindDraft
+          ? blindDraft.memory.map((m) => m.text).join(' ').slice(0, 200)
+          : undefined;
         try {
           verifyCount += 1;
+          verifyCallsUsed += 1;
           const isLeak = await llmVerifyLeak(
             llm, line.text, item.topic, blindRelation, item.blindClaim,
+            blindWitnessContext,
           );
           if (isLeak) {
             // Block this line: rewrite or fall back to stage direction

@@ -5,14 +5,25 @@
  * 2. Witness count curve: for n=2..N, sample subsets -> stability vs n
  *
  * Claim matching uses character bigram Jaccard by default (injectable).
+ *
+ * Supports incremental checkpointing so a crash/timeout does not lose
+ * partial progress.
  */
 
-import type { LLMClient } from '@openmimic/engine-court';
+import { readFileSync, writeFileSync, existsSync } from 'node:fs';
+import { execSync } from 'node:child_process';
+import { dirname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
+import { createHash } from 'node:crypto';
+import { z } from 'zod';
+import type { LLMClient, LLMCompletionRequest } from '@openmimic/engine-court';
 import type { Store } from '@openmimic/kernel';
 import type { Claim } from '@openmimic/shared';
 import { adapterRunCourt } from './engine-adapter';
 import { getJudgePromptSha, verifyJudgePromptSha } from './judge';
 import { requireCalibration, writeRun, type RunRecord } from './ledger';
+
+const __dirname = dirname(fileURLToPath(import.meta.url));
 
 /* ------------------------------------------------------------------ */
 /* Similarity: character bigram Jaccard                                */
@@ -41,6 +52,144 @@ export function bigramJaccard(a: string, b: string): number {
 }
 
 /* ------------------------------------------------------------------ */
+/* LLM-based claim matching (same-facet judge)                         */
+/* ------------------------------------------------------------------ */
+
+export const CLAIM_MATCH_PROMPT_FILE = join(__dirname, 'claim-match-prompt.txt');
+
+export function loadClaimMatchPrompt(): string {
+  return readFileSync(CLAIM_MATCH_PROMPT_FILE, 'utf-8');
+}
+
+export function getClaimMatchPromptSha(): string {
+  return createHash('sha256').update(loadClaimMatchPrompt(), 'utf-8').digest('hex');
+}
+
+const ClaimMatchResponseSchema = z.object({
+  verdict: z.enum(['same', 'different']),
+  reason: z.string(),
+});
+
+/**
+ * Ask an LLM whether two claims describe the same facet.
+ * Position-swapped: run twice with A/B then B/A; inconsistent = different.
+ */
+export async function llmClaimMatch(
+  llm: LLMClient,
+  claimA: string,
+  claimB: string,
+): Promise<boolean> {
+  const prompt = loadClaimMatchPrompt();
+
+  async function call(textA: string, textB: string): Promise<'same' | 'different' | null> {
+    const user = `## 论断 A\n${textA}\n\n## 论断 B\n${textB}`;
+    const request: LLMCompletionRequest = { system: prompt, user };
+    for (let attempt = 0; attempt < 2; attempt++) {
+      try {
+        const raw = await llm.complete(request);
+        const trimmed = raw.trim();
+        let parsed: unknown;
+        try { parsed = JSON.parse(trimmed); } catch {
+          const fenced = /```(?:json)?\s*([\s\S]*?)```/i.exec(trimmed);
+          if (fenced?.[1]) parsed = JSON.parse(fenced[1].trim());
+          else {
+            const start = trimmed.search(/[{[]/);
+            if (start >= 0) {
+              const sub = trimmed.slice(start);
+              const end = sub.lastIndexOf('}');
+              if (end > 0) parsed = JSON.parse(sub.slice(0, end + 1));
+            }
+          }
+        }
+        if (!parsed) continue;
+        const result = ClaimMatchResponseSchema.parse(parsed);
+        return result.verdict;
+      } catch {
+        // retry once
+      }
+    }
+    return null; // parse failure => treat as different
+  }
+
+  const run1 = await call(claimA, claimB);
+  if (run1 !== 'same') return false; // different or parse failure => not matched
+
+  const run2 = await call(claimB, claimA);
+  if (run2 !== 'same') return false; // position swap disagrees => not matched
+
+  return true; // both directions agree: same facet
+}
+
+/** How many bigram-nearest candidates to check via LLM per claim. */
+const LLM_MATCH_TOP_K = 3;
+
+/**
+ * Match claims from two runs using LLM judge with bigram pre-filter.
+ *
+ * For each claim in A, the top-K nearest claims in B (by bigram Jaccard)
+ * are tested via LLM judge (position-swapped). This reduces LLM calls
+ * from O(n*m) to O(n*K) while retaining semantic matching power.
+ */
+export async function matchClaimsLlm(
+  claimsA: Claim[],
+  claimsB: Claim[],
+  llm: LLMClient,
+): Promise<number> {
+  const survivingA = claimsA.filter((c) => c.status === 'surviving');
+  const survivingB = claimsB.filter((c) => c.status === 'surviving');
+
+  if (survivingA.length === 0 && survivingB.length === 0) return 1;
+  if (survivingA.length === 0 || survivingB.length === 0) return 0;
+
+  const usedB = new Set<number>();
+  let matched = 0;
+
+  for (const claimA of survivingA) {
+    // Rank B claims by bigram similarity, take top-K not already used
+    const candidates: Array<{ idx: number; sim: number }> = [];
+    for (let j = 0; j < survivingB.length; j++) {
+      if (usedB.has(j)) continue;
+      candidates.push({ idx: j, sim: bigramJaccard(claimA.text, survivingB[j].text) });
+    }
+    candidates.sort((a, b) => b.sim - a.sim);
+    const topK = candidates.slice(0, LLM_MATCH_TOP_K);
+
+    for (const { idx } of topK) {
+      const isSame = await llmClaimMatch(llm, claimA.text, survivingB[idx].text);
+      if (isSame) {
+        matched++;
+        usedB.add(idx);
+        break;
+      }
+    }
+  }
+
+  return survivingA.length > 0 ? matched / survivingA.length : 0;
+}
+
+/**
+ * Compute all pairwise overlap rates using LLM judge and return mean +/- stddev.
+ */
+export async function pairwiseOverlapLlm(
+  claimSets: Claim[][],
+  llm: LLMClient,
+): Promise<{ mean: number; stddev: number; pairs: number }> {
+  const rates: number[] = [];
+  for (let i = 0; i < claimSets.length; i++) {
+    for (let j = i + 1; j < claimSets.length; j++) {
+      const rateAB = await matchClaimsLlm(claimSets[i], claimSets[j], llm);
+      const rateBA = await matchClaimsLlm(claimSets[j], claimSets[i], llm);
+      rates.push((rateAB + rateBA) / 2);
+    }
+  }
+  if (rates.length === 0) return { mean: 0, stddev: 0, pairs: 0 };
+
+  const mean = rates.reduce((s, r) => s + r, 0) / rates.length;
+  const variance = rates.reduce((s, r) => s + (r - mean) ** 2, 0) / rates.length;
+  return { mean, stddev: Math.sqrt(variance), pairs: rates.length };
+}
+
+/* ------------------------------------------------------------------ */
 /* Claim matching across runs                                          */
 /* ------------------------------------------------------------------ */
 
@@ -55,9 +204,6 @@ export function matchClaims(
   claimsB: Claim[],
   similarity: SimilarityFn = bigramJaccard,
 ): number {
-  if (claimsA.length === 0 && claimsB.length === 0) return 1;
-  if (claimsA.length === 0 || claimsB.length === 0) return 0;
-
   const survivingA = claimsA.filter((c) => c.status === 'surviving');
   const survivingB = claimsB.filter((c) => c.status === 'surviving');
 
@@ -84,7 +230,6 @@ export function matchClaims(
     }
   }
 
-  // Symmetric: average of A-matched-in-B and B-matched-in-A fractions
   const rateAinB = survivingA.length > 0 ? matched / survivingA.length : 0;
   return rateAinB;
 }
@@ -112,6 +257,18 @@ export function pairwiseOverlap(
 }
 
 /* ------------------------------------------------------------------ */
+/* Helpers                                                             */
+/* ------------------------------------------------------------------ */
+
+function getCommitSha(): string {
+  try {
+    return execSync('git rev-parse HEAD', { encoding: 'utf-8' }).trim();
+  } catch {
+    return 'unknown';
+  }
+}
+
+/* ------------------------------------------------------------------ */
 /* Stability types                                                     */
 /* ------------------------------------------------------------------ */
 
@@ -119,12 +276,17 @@ export interface StabilityRepeatResult {
   K: number;
   claimCounts: number[];
   overlap: { mean: number; stddev: number; pairs: number };
+  /** LLM judge overlap (same-facet matching). Only present if matchLlm was provided. */
+  overlapLlm?: { mean: number; stddev: number; pairs: number };
+  courtStats: Array<{ claimCount: number; durationMs: number }>;
 }
 
 export interface StabilityCurvePoint {
   n: number;
   subsets: number;
   overlap: { mean: number; stddev: number; pairs: number };
+  /** Witness IDs for each subset (enables post-hoc decomposition). */
+  witnessIdSets: string[][];
 }
 
 export interface StabilityResult {
@@ -145,6 +307,56 @@ export interface StabilityOptions {
   skipCalibrationCheck?: boolean;
   /** Similarity function override */
   similarity?: SimilarityFn;
+  /** Path to checkpoint file for incremental save/resume */
+  progressFile?: string;
+  /** LLM client for LLM-judge claim matching (optional; if set, both methods are reported). */
+  matchLlm?: LLMClient;
+}
+
+/* ------------------------------------------------------------------ */
+/* Checkpoint                                                          */
+/* ------------------------------------------------------------------ */
+
+interface StabilityCheckpoint {
+  /** Serialized claim sets for completed repeat runs */
+  repeatClaimTexts: string[][];
+  /** Completed curve points */
+  curve: StabilityCurvePoint[];
+  /** Subset claim texts for in-progress curve point n */
+  currentN?: number;
+  currentSubsetClaimTexts?: string[][];
+  /** Per-run court stats from repeat phase */
+  repeatCourtStats?: Array<{ claimCount: number; durationMs: number }>;
+}
+
+function loadStabilityCheckpoint(file: string): StabilityCheckpoint | null {
+  if (!existsSync(file)) return null;
+  try {
+    return JSON.parse(readFileSync(file, 'utf-8'));
+  } catch {
+    return null;
+  }
+}
+
+function saveStabilityCheckpoint(file: string, cp: StabilityCheckpoint): void {
+  writeFileSync(file, JSON.stringify(cp, null, 2), 'utf-8');
+}
+
+/** Serialize claim sets as text arrays (claims are re-created from text for matching). */
+function claimsToTexts(claims: Claim[]): string[] {
+  return claims.filter((c) => c.status === 'surviving').map((c) => c.text);
+}
+
+function textsToMinimalClaims(texts: string[]): Claim[] {
+  return texts.map((text, i) => ({
+    id: `restored-${i}`,
+    subjectId: 'restored',
+    text,
+    conviction: 0.5,
+    evidence: [],
+    status: 'surviving' as const,
+    courtSessionId: 'restored',
+  }));
 }
 
 /* ------------------------------------------------------------------ */
@@ -195,7 +407,7 @@ function combinations<T>(items: T[], k: number): T[][] {
 export async function runStability(
   subjectId: string,
   store: Store,
-  llm: LLMClient,
+  courtLlm: LLMClient,
   StoreClass: new () => Store,
   options: StabilityOptions,
 ): Promise<StabilityResult> {
@@ -212,10 +424,18 @@ export async function runStability(
   const witnesses = store.listWitnessesBySubject(subjectId);
   const allTestimonies = store.listBySubject(subjectId);
 
-  /* ---- Repeat runs (full data, K times) ---- */
-  const repeatClaimSets: Claim[][] = [];
+  // Load checkpoint
+  const checkpoint = options.progressFile ? loadStabilityCheckpoint(options.progressFile) : null;
 
-  for (let run = 0; run < K; run++) {
+  /* ---- Repeat runs (full data, K times) ---- */
+  const repeatClaimSets: Claim[][] = checkpoint
+    ? checkpoint.repeatClaimTexts.map(textsToMinimalClaims)
+    : [];
+  const courtStatsArr: Array<{ claimCount: number; durationMs: number }> =
+    checkpoint?.repeatCourtStats ?? [];
+
+  for (let run = repeatClaimSets.length; run < K; run++) {
+    console.error(`[Stability] Repeat run ${run + 1}/${K}...`);
     const tempStore = new StoreClass();
     const subject = store.getSubject(subjectId);
     if (subject) tempStore.putSubject(subject);
@@ -223,28 +443,68 @@ export async function runStability(
     for (const t of allTestimonies) tempStore.addTestimony(t);
 
     try {
-      await adapterRunCourt(subjectId, tempStore, llm);
+      const courtStart = Date.now();
+      await adapterRunCourt(subjectId, tempStore, courtLlm);
+      const courtDurationMs = Date.now() - courtStart;
+
       const claims = tempStore.listClaimsBySubject(subjectId);
+      const survivingCount = claims.filter((c) => c.status === 'surviving').length;
+      console.error(`[Stability]   Run ${run + 1}: ${survivingCount} surviving claims (${claims.length} total) in ${(courtDurationMs / 1000).toFixed(1)}s`);
+
+      if (survivingCount === 0) {
+        throw new Error(
+          `Stability repeat run ${run + 1}/${K} produced 0 surviving claims. ` +
+          `Overlap measurements with 0 claims are degenerate. Aborting. ` +
+          `Check that the court LLM client correctly disables thinking for DeepSeek models.`,
+        );
+      }
+
       repeatClaimSets.push(claims);
+      courtStatsArr.push({ claimCount: survivingCount, durationMs: courtDurationMs });
+
+      // Checkpoint
+      if (options.progressFile) {
+        saveStabilityCheckpoint(options.progressFile, {
+          repeatClaimTexts: repeatClaimSets.map(claimsToTexts),
+          curve: checkpoint?.curve ?? [],
+          repeatCourtStats: courtStatsArr,
+        });
+      }
     } finally {
       tempStore.close();
     }
   }
 
+  const overlapBigram = pairwiseOverlap(repeatClaimSets, similarity);
+  const overlapLlm = options.matchLlm
+    ? await pairwiseOverlapLlm(repeatClaimSets, options.matchLlm)
+    : undefined;
+
   const repeat: StabilityRepeatResult = {
     K,
-    claimCounts: repeatClaimSets.map((c) => c.length),
-    overlap: pairwiseOverlap(repeatClaimSets, similarity),
+    claimCounts: repeatClaimSets.map((c) => c.filter((cl) => cl.status === 'surviving').length),
+    overlap: overlapBigram,
+    ...(overlapLlm ? { overlapLlm } : {}),
+    courtStats: courtStatsArr,
   };
 
   /* ---- Witness count curve ---- */
-  const curve: StabilityCurvePoint[] = [];
+  const curve: StabilityCurvePoint[] = checkpoint?.curve ?? [];
+  const completedNs = new Set(curve.map((p) => p.n));
 
   for (let n = 2; n <= witnesses.length; n++) {
+    if (completedNs.has(n)) {
+      console.error(`[Stability] Curve n=${n}: already done, skipping`);
+      continue;
+    }
+
+    console.error(`[Stability] Curve n=${n}...`);
     const subsets = randomSubsets(witnesses, n, maxSubsets);
     const subsetClaimSets: Claim[][] = [];
 
-    for (const subset of subsets) {
+    for (let si = 0; si < subsets.length; si++) {
+      const subset = subsets[si];
+      console.error(`[Stability]   Subset ${si + 1}/${subsets.length} (n=${n})...`);
       const subsetIds = new Set(subset.map((w) => w.id));
       const tempStore = new StoreClass();
       const subject = store.getSubject(subjectId);
@@ -255,8 +515,21 @@ export async function runStability(
       }
 
       try {
-        await adapterRunCourt(subjectId, tempStore, llm);
+        const courtStart = Date.now();
+        await adapterRunCourt(subjectId, tempStore, courtLlm);
+        const courtDurationMs = Date.now() - courtStart;
+
         const claims = tempStore.listClaimsBySubject(subjectId);
+        const survivingCount = claims.filter((c) => c.status === 'surviving').length;
+        console.error(`[Stability]     ${survivingCount} surviving claims in ${(courtDurationMs / 1000).toFixed(1)}s`);
+
+        if (survivingCount === 0) {
+          throw new Error(
+            `Stability curve n=${n} subset ${si + 1}/${subsets.length} produced 0 surviving claims. ` +
+            `Aborting. Check that the court LLM client correctly disables thinking for DeepSeek models.`,
+          );
+        }
+
         subsetClaimSets.push(claims);
       } finally {
         tempStore.close();
@@ -267,7 +540,17 @@ export async function runStability(
       n,
       subsets: subsets.length,
       overlap: pairwiseOverlap(subsetClaimSets, similarity),
+      witnessIdSets: subsets.map((s) => s.map((w) => w.id)),
     });
+
+    // Checkpoint
+    if (options.progressFile) {
+      saveStabilityCheckpoint(options.progressFile, {
+        repeatClaimTexts: repeatClaimSets.map(claimsToTexts),
+        curve,
+        repeatCourtStats: courtStatsArr,
+      });
+    }
   }
 
   const result: StabilityResult = {
@@ -279,11 +562,11 @@ export async function runStability(
   };
 
   // Write run log
-  const run: RunRecord = {
+  const runRecord: RunRecord = {
     kind: 'stability',
     modelName: options.modelName,
     promptSha,
-    commitSha: 'unknown',
+    commitSha: getCommitSha(),
     params: { subjectId, K, maxSubsets },
     results: {
       repeat: {
@@ -291,17 +574,23 @@ export async function runStability(
         claimCounts: repeat.claimCounts,
         overlapMean: repeat.overlap.mean,
         overlapStddev: repeat.overlap.stddev,
+        ...(repeat.overlapLlm ? {
+          overlapLlmMean: repeat.overlapLlm.mean,
+          overlapLlmStddev: repeat.overlapLlm.stddev,
+        } : {}),
+        courtStats: repeat.courtStats,
       },
       curve: curve.map((p) => ({
         n: p.n,
         subsets: p.subsets,
         overlapMean: p.overlap.mean,
         overlapStddev: p.overlap.stddev,
+        witnessIdSets: p.witnessIdSets,
       })),
     },
     details: [],
   };
-  writeRun(run);
+  writeRun(runRecord);
 
   return result;
 }

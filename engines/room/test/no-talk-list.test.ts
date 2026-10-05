@@ -220,6 +220,62 @@ describe('suzhi fixture', () => {
 });
 
 /* ------------------------------------------------------------------ */
+/* Two-level leak detection: euphemism, normal speech, degradation     */
+/* ------------------------------------------------------------------ */
+
+describe('two-level leak detection', () => {
+  it('blocks euphemistic leak that bypasses keywords but is caught by LLM', async () => {
+    // "走得让我别扭" does not contain any keyword from the no-talk list,
+    // but it euphemistically refers to the resignation secret.
+    const llm = new FakeLLM([
+      '是',  // LLM says: yes, this line would reveal the secret
+    ]);
+    const result = await llmVerifyLeak(
+      llm,
+      '走得让我别扭',
+      '辞职',
+      '母亲',
+      '他工作很稳定',
+      '他工作挺好的,公司器重他,刚升了职。',
+    );
+    // The euphemism should be caught by LLM verification
+    expect(result).toBe(true);
+    // Verify the LLM was given the blind witness context
+    expect(llm.calls[0]!.user).toContain('他工作挺好的');
+  });
+
+  it('does not falsely block normal speech unrelated to the secret', async () => {
+    const llm = new FakeLLM([
+      '否',  // LLM says: no, this line is safe
+    ]);
+    const result = await llmVerifyLeak(
+      llm,
+      '今天天气不错啊',
+      '辞职',
+      '母亲',
+      '他工作很稳定',
+      '他工作挺好的。',
+    );
+    // Normal speech should not be blocked
+    expect(result).toBe(false);
+  });
+
+  it('degrades to keyword-only when LLM call throws (no API key scenario)', async () => {
+    // Simulate no-API-key: FakeLLM with empty script throws on call
+    const llm = new FakeLLM([]);
+    // llmVerifyLeak should throw, and the caller (runSchedule) catches
+    // it and treats the line as a leak (fail-closed)
+    await expect(
+      llmVerifyLeak(llm, '她辞职了', '辞职', '母亲', '工作稳定'),
+    ).rejects.toThrow();
+    // This proves that the caller must catch and handle: when there is
+    // no API key, generateNoTalkList also throws -> falls back to
+    // buildNoTalkListFallback (keyword-only), and if llmVerifyLeak
+    // is never called, the system runs in keyword-only mode.
+  });
+});
+
+/* ------------------------------------------------------------------ */
 /* Integration: behind room with no-talk list                          */
 /* ------------------------------------------------------------------ */
 
@@ -323,5 +379,52 @@ describe('behind room with LLM no-talk list', () => {
     // "她去做了体检而已" should have been allowed through
     const speeches = room.behindTranscript.filter((u) => u.kind === 'speech');
     expect(speeches.some((s) => s.text === '她去做了体检而已')).toBe(true);
+  });
+
+  it('degrades to keyword-only (fallback) when no-talk LLM generation throws', async () => {
+    // When the LLM is unavailable (no API key, network error), the
+    // no-talk list generation throws and runBehindRoom falls back to
+    // buildNoTalkListFallback (keyword-only, explicit markers only).
+    // The room should still complete and any explicit secrecy markers
+    // should still be caught by the fallback.
+    store.putSubject({ id: 's1', displayName: '苏芷' });
+    store.putWitness({ id: 'w-sister', subjectId: 's1', relation: '姐姐', consentLevel: 'quotable' });
+    store.putWitness({ id: 'w-mother', subjectId: 's1', relation: '母亲', consentLevel: 'quotable' });
+    store.addTestimony({
+      id: 't-sister',
+      witnessId: 'w-sister',
+      subjectId: 's1',
+      answers: [{ qid: 'q1', behindText: '她查出来一个东西,千万别跟他妈提。' }],
+    });
+    store.addTestimony({
+      id: 't-mother',
+      witnessId: 'w-mother',
+      subjectId: 's1',
+      answers: [{ qid: 'q1', behindText: '她升职了。' }],
+    });
+
+    // First call: generateNoTalkList throws (simulating no API key).
+    // Subsequent calls are for composeLine (regular line generation).
+    const llm = new FakeLLM([
+      // No-talk list LLM call will throw — FakeLLM throws when script
+      // provides a function that throws.
+      ((_req) => { throw new Error('No API key configured'); }) as (req: { system: string; user: string }) => string,
+      // composeLine calls for the behind room (safe lines)
+      line('她最近挺好的'),   // sister
+      line('是挺好的'),       // mother
+      line('对吧'),           // sister
+      line('嗯'),             // mother
+    ]);
+
+    const room = await runBehindRoom('s1', store, llm, {
+      maxTurnsPerWitness: 2,
+    });
+
+    // Room should complete despite LLM no-talk generation failure
+    expect(room.behindTranscript.length).toBeGreaterThan(0);
+    // The fallback should have detected the explicit "千万别跟他妈提" marker
+    // and built a rule-based no-talk list targeting the mother witness.
+    // (The actual keyword check at room level would only fire if lines
+    // happened to contain keywords from the fallback list.)
   });
 });

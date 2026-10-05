@@ -3,11 +3,14 @@
  * CLI: npm run eval:lowo -- --subject <id>
  *
  * Runs Leave-One-Witness-Out evaluation for a subject.
+ * Supports incremental checkpointing via --progress <file>.
+ * Supports --ablation-episodes-only for the ablation arm.
  */
 
 import { loadEnv } from './env';
 loadEnv();
 import { createEvalLLM } from './eval-llm';
+import { OpenAICompatClient } from '@openmimic/engine-court';
 import { Store } from '@openmimic/kernel';
 import { seedDemo, DEMO_SUBJECT_ID } from '@openmimic/fixtures';
 import { runLowo } from './lowo';
@@ -20,15 +23,23 @@ async function main(): Promise<void> {
   const maxQIdx = args.indexOf('--max-questions');
   const maxQuestionsPerWitness = maxQIdx >= 0 && args[maxQIdx + 1] ? parseInt(args[maxQIdx + 1], 10) : 3;
 
-  const client = createEvalLLM();
+  const progressIdx = args.indexOf('--progress');
+  const progressFile = progressIdx >= 0 && args[progressIdx + 1] ? args[progressIdx + 1] : undefined;
 
-  if (!client.configured) {
-    console.error('LLM not configured: set LLM_BASE_URL and LLM_MODEL in .env');
+  const ablationEpisodesOnly = args.includes('--ablation-episodes-only');
+
+  const courtClient = new OpenAICompatClient({ timeoutMs: 120_000 });
+  const evalClient = createEvalLLM();
+
+  if (!courtClient.configured || !evalClient.configured) {
+    console.error('LLM not configured: set LLM_BASE_URL, LLM_API_KEY, and LLM_MODEL in .env');
     process.exit(1);
   }
 
   const modelName = process.env.LLM_MODEL ?? 'unknown';
   console.log(`Running LOWO for subject: ${subjectId}, model: ${modelName}, maxQ=${maxQuestionsPerWitness}`);
+  if (ablationEpisodesOnly) console.log('Ablation arm: full persona (W) vs claims-stripped persona (L)');
+  if (progressFile) console.log(`Checkpoint file: ${progressFile}`);
 
   // Load demo data
   const store = new Store();
@@ -37,9 +48,11 @@ async function main(): Promise<void> {
   }
 
   try {
-    const result = await runLowo(subjectId, store, client, Store, {
+    const result = await runLowo(subjectId, store, courtClient, evalClient, Store, {
       modelName,
       maxQuestionsPerWitness,
+      progressFile,
+      ablationEpisodesOnly,
     });
 
     console.log('\n=== LOWO Results ===');
@@ -51,7 +64,7 @@ async function main(): Promise<void> {
 
     console.log('\nBy witness:');
     for (const wr of result.witnessResults) {
-      console.log(`  ${wr.relation} (${wr.witnessId}): ${wr.personaWins}W ${wr.baselineWins}L ${wr.discarded}D`);
+      console.log(`  ${wr.relation} (${wr.witnessId}): ${wr.personaWins}W ${wr.baselineWins}L ${wr.discarded}D | court: ${wr.courtStats.claimCount} claims in ${(wr.courtStats.durationMs / 1000).toFixed(1)}s`);
     }
 
     console.log('\nBy relation:');

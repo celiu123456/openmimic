@@ -22,7 +22,11 @@ import {
   CALIBRATION_MAX_BIAS,
 } from '../src/calibrate';
 import { wilsonInterval } from '../src/wilson';
-import { bigramJaccard, matchClaims, pairwiseOverlap } from '../src/stability';
+import {
+  bigramJaccard, matchClaims, pairwiseOverlap,
+  llmClaimMatch, matchClaimsLlm, pairwiseOverlapLlm,
+  loadClaimMatchPrompt, getClaimMatchPromptSha,
+} from '../src/stability';
 import { writeRun, RUNS_DIR, findCalibrationRun, requireCalibration } from '../src/ledger';
 import type { Claim } from '@openmimic/shared';
 
@@ -139,9 +143,13 @@ describe('SHA freeze', () => {
 /* ------------------------------------------------------------------ */
 
 describe('Calibration', () => {
-  it('loads at least 24 calibration pairs', () => {
+  it('loads at least 48 calibration pairs (24 easy + 24 hard)', () => {
     const pairs = loadCalibrationPairs();
-    expect(pairs.length).toBeGreaterThanOrEqual(24);
+    expect(pairs.length).toBeGreaterThanOrEqual(48);
+    const easy = pairs.filter((p) => p.difficulty === 'easy');
+    const hard = pairs.filter((p) => p.difficulty === 'hard');
+    expect(easy.length).toBeGreaterThanOrEqual(24);
+    expect(hard.length).toBeGreaterThanOrEqual(24);
   });
 
   it('all pairs have required fields', () => {
@@ -152,6 +160,7 @@ describe('Calibration', () => {
       expect(pair.close).toBeTruthy();
       expect(pair.far).toBeTruthy();
       expect(pair.expectedWinner).toBe('close');
+      expect(['easy', 'hard']).toContain(pair.difficulty);
     }
   });
 
@@ -420,6 +429,18 @@ describe('Stability: claim matching', () => {
     expect(matchClaims(a, b)).toBe(0);
   });
 
+  it('matchClaims returns 1 for two empty surviving sets', () => {
+    const a = [{ ...baseClaim('c1', 'x'), status: 'retired' as const }];
+    const b = [{ ...baseClaim('c2', 'y'), status: 'retired' as const }];
+    expect(matchClaims(a, b)).toBe(1);
+  });
+
+  it('matchClaims returns 0 when one set has 0 surviving', () => {
+    const a = [baseClaim('c1', '他很善良')];
+    const b = [{ ...baseClaim('c2', '他很善良'), status: 'retired' as const }];
+    expect(matchClaims(a, b)).toBe(0);
+  });
+
   it('pairwiseOverlap computes mean and stddev', () => {
     const sets = [
       [baseClaim('c1', '他很善良'), baseClaim('c2', '他很聪明')],
@@ -435,7 +456,130 @@ describe('Stability: claim matching', () => {
 });
 
 /* ------------------------------------------------------------------ */
-/* 8. Ledger: run writing and format                                   */
+/* 7b. LLM-judge claim matching                                        */
+/* ------------------------------------------------------------------ */
+
+function makeClaimMatchResponse(verdict: 'same' | 'different', reason: string = 'test'): string {
+  return JSON.stringify({ verdict, reason });
+}
+
+describe('LLM claim matching', () => {
+  const baseClaim = (id: string, text: string): Claim => ({
+    id,
+    subjectId: 'test',
+    text,
+    conviction: 0.8,
+    evidence: ['t1'],
+    status: 'surviving',
+    courtSessionId: 'cs1',
+  });
+
+  it('claim-match prompt file loads and has a stable SHA', () => {
+    const prompt = loadClaimMatchPrompt();
+    expect(prompt).toContain('verdict');
+    const sha = getClaimMatchPromptSha();
+    expect(sha).toHaveLength(64);
+    expect(getClaimMatchPromptSha()).toBe(sha); // deterministic
+  });
+
+  it('llmClaimMatch returns true when both directions agree "same"', async () => {
+    const llm = new FakeLLM([
+      makeClaimMatchResponse('same'),      // A,B
+      makeClaimMatchResponse('same'),      // B,A (swap)
+    ]);
+    const result = await llmClaimMatch(llm, 'claim A', 'claim B');
+    expect(result).toBe(true);
+  });
+
+  it('llmClaimMatch returns false when first direction says "different"', async () => {
+    const llm = new FakeLLM([
+      makeClaimMatchResponse('different'),
+    ]);
+    const result = await llmClaimMatch(llm, 'claim A', 'claim B');
+    expect(result).toBe(false);
+  });
+
+  it('llmClaimMatch returns false on position swap disagreement', async () => {
+    const llm = new FakeLLM([
+      makeClaimMatchResponse('same'),      // A,B says same
+      makeClaimMatchResponse('different'), // B,A says different => inconsistent
+    ]);
+    const result = await llmClaimMatch(llm, 'claim A', 'claim B');
+    expect(result).toBe(false);
+  });
+
+  it('llmClaimMatch returns false on parse failure', async () => {
+    const llm = new FakeLLM([
+      'not json at all!',
+      'still not json!',  // retry
+    ]);
+    const result = await llmClaimMatch(llm, 'claim A', 'claim B');
+    expect(result).toBe(false);
+  });
+
+  it('matchClaimsLlm returns 1 for identical claims (all same)', async () => {
+    const claims = [baseClaim('c1', 'text')];
+    // For 1 vs 1: need 2 calls (forward + swap)
+    const llm = new FakeLLM([
+      makeClaimMatchResponse('same'),
+      makeClaimMatchResponse('same'),
+    ]);
+    const rate = await matchClaimsLlm(claims, claims, llm);
+    expect(rate).toBe(1);
+  });
+
+  it('matchClaimsLlm returns 0 for claims judged different', async () => {
+    const a = [baseClaim('c1', 'he is kind')];
+    const b = [baseClaim('c2', 'he is tall')];
+    const llm = new FakeLLM([
+      makeClaimMatchResponse('different'),
+    ]);
+    const rate = await matchClaimsLlm(a, b, llm);
+    expect(rate).toBe(0);
+  });
+
+  it('pairwiseOverlapLlm computes mean over pairs', async () => {
+    const sets = [
+      [baseClaim('c1', 'text1')],
+      [baseClaim('c2', 'text2')],
+    ];
+    // 1 pair: A->B forward+swap, B->A forward+swap = 4 calls total
+    const llm = new FakeLLM([
+      makeClaimMatchResponse('same'),  // A in B: forward
+      makeClaimMatchResponse('same'),  // A in B: swap
+      makeClaimMatchResponse('same'),  // B in A: forward
+      makeClaimMatchResponse('same'),  // B in A: swap
+    ]);
+    const result = await pairwiseOverlapLlm(sets, llm);
+    expect(result.pairs).toBe(1);
+    expect(result.mean).toBe(1);
+  });
+});
+
+/* ------------------------------------------------------------------ */
+/* 8. Calibration: difficulty-based gating                             */
+/* ------------------------------------------------------------------ */
+
+describe('Calibration difficulty', () => {
+  it('pairs include both easy and hard difficulties', () => {
+    const pairs = loadCalibrationPairs();
+    const easy = pairs.filter((p) => p.difficulty === 'easy');
+    const hard = pairs.filter((p) => p.difficulty === 'hard');
+    expect(easy.length).toBeGreaterThanOrEqual(24);
+    expect(hard.length).toBeGreaterThanOrEqual(24);
+  });
+
+  it('hard pair IDs all start with cal-h', () => {
+    const pairs = loadCalibrationPairs();
+    const hard = pairs.filter((p) => p.difficulty === 'hard');
+    for (const p of hard) {
+      expect(p.id).toMatch(/^cal-h/);
+    }
+  });
+});
+
+/* ------------------------------------------------------------------ */
+/* 9. Ledger: run writing and format                                   */
 /* ------------------------------------------------------------------ */
 
 describe('Ledger', () => {
@@ -492,5 +636,128 @@ describe('Ledger', () => {
 
     const found = findCalibrationRun('model-b', 'sha-a');
     expect(found).toBeUndefined();
+  });
+});
+
+/* ------------------------------------------------------------------ */
+/* 10. Hard gate: 0 claims = abort                                     */
+/* ------------------------------------------------------------------ */
+
+describe('Hard gate: zero claims abort', () => {
+  beforeEach(cleanRuns);
+  afterEach(cleanRuns);
+
+  it('stability aborts when court produces 0 surviving claims', async () => {
+    const store = new Store();
+    seedDemo(store);
+
+    // FakeLLM that produces 0 claims (filing returns empty arrays)
+    const zeroClaimLlm = new FakeLLM(
+      Array.from({ length: 50 }, () => JSON.stringify([])),
+    );
+
+    writeRun({
+      kind: 'calibration',
+      modelName: 'test',
+      promptSha: getJudgePromptSha(),
+      commitSha: 'test',
+      params: {},
+      results: { passed: true },
+      details: [],
+      timestamp: '2026-01-01T00-00-00-000Z',
+    });
+
+    const { runStability } = await import('../src/stability');
+    await expect(
+      runStability(DEMO_SUBJECT_ID, store, zeroClaimLlm, Store, {
+        modelName: 'test',
+        K: 1,
+        maxSubsets: 1,
+      }),
+    ).rejects.toThrow(/0 surviving claims/);
+
+    store.close();
+  });
+
+  it('LOWO aborts when court produces 0 surviving claims', async () => {
+    const store = new Store();
+    seedDemo(store);
+
+    // courtLlm produces 0 claims, evalLlm is for predictions/judging (won't be reached)
+    const zeroClaimCourtLlm = new FakeLLM(
+      Array.from({ length: 50 }, () => JSON.stringify([])),
+    );
+    const evalLlm = new FakeLLM(['unused']);
+
+    writeRun({
+      kind: 'calibration',
+      modelName: 'test',
+      promptSha: getJudgePromptSha(),
+      commitSha: 'test',
+      params: {},
+      results: { passed: true },
+      details: [],
+      timestamp: '2026-01-01T00-00-00-000Z',
+    });
+
+    const { runLowo } = await import('../src/lowo');
+    await expect(
+      runLowo(DEMO_SUBJECT_ID, store, zeroClaimCourtLlm, evalLlm, Store, {
+        modelName: 'test',
+        maxQuestionsPerWitness: 1,
+      }),
+    ).rejects.toThrow(/0 surviving claims/);
+
+    store.close();
+  });
+});
+
+/* ------------------------------------------------------------------ */
+/* 11. Adversarial calibration pairs                                   */
+/* ------------------------------------------------------------------ */
+
+describe('Adversarial calibration pairs', () => {
+  it('has at least 12 adversarial pairs (cal-h-adv prefix)', () => {
+    const pairs = loadCalibrationPairs();
+    const adversarial = pairs.filter((p) => p.id.startsWith('cal-h-adv'));
+    expect(adversarial.length).toBeGreaterThanOrEqual(12);
+  });
+
+  it('adversarial pairs have non-trivial similarity between close and far', () => {
+    const pairs = loadCalibrationPairs();
+    const adversarial = pairs.filter((p) => p.id.startsWith('cal-h-adv'));
+    for (const p of adversarial) {
+      const sim = bigramJaccard(p.close, p.far);
+      expect(sim).toBeGreaterThan(0.02);
+    }
+  });
+});
+
+/* ------------------------------------------------------------------ */
+/* 12. LOWO ablation: claims section stripping                         */
+/* ------------------------------------------------------------------ */
+
+describe('LOWO ablation: stripClaimsSection', () => {
+  const prompt = [
+    '身份行',
+    '## 他在不同人面前\n### 发小\n- 论断甲\n\n### 上司\n- 论断乙',
+    '## 别人讲过的事（证人视角,不是他本人的口吻）\n- 事例一',
+    '## 行为纪律\n- 纪律',
+  ].join('\n\n');
+
+  it('removes the claims section and keeps the rest intact', async () => {
+    const { stripClaimsSection } = await import('../src/lowo');
+    const stripped = stripClaimsSection(prompt);
+    expect(stripped).not.toContain('论断甲');
+    expect(stripped).not.toContain('论断乙');
+    expect(stripped).not.toContain('他在不同人面前');
+    expect(stripped).toBe(
+      ['身份行', '## 别人讲过的事（证人视角,不是他本人的口吻）\n- 事例一', '## 行为纪律\n- 纪律'].join('\n\n'),
+    );
+  });
+
+  it('throws when the prompt has no claims section', async () => {
+    const { stripClaimsSection } = await import('../src/lowo');
+    expect(() => stripClaimsSection('身份行\n\n## 行为纪律\n- 纪律')).toThrow('no claims section');
   });
 });
