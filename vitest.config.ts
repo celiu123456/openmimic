@@ -19,6 +19,9 @@ export default defineConfig({
       '@openmimic/example-bridge': resolveSource('./plugins/example-bridge/src/index.ts'),
       '@openmimic/core': resolveSource('./packages/core/src/index.ts'),
       '@openmimic/eval': resolveSource('./eval/src/index.ts'),
+      '@openmimic/meta-perception': resolveSource('./plugins/meta-perception/src/index.ts'),
+      '@openmimic/silence-signal': resolveSource('./plugins/silence-signal/src/index.ts'),
+      '@openmimic/output-biography': resolveSource('./plugins/output-biography/src/index.ts'),
     },
   },
   test: {

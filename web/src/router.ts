@@ -24,6 +24,11 @@ export const router = createRouter({
       name: 'meta-perception',
       component: () => import('./views/MetaPerceptionView.vue'),
     },
+    {
+      path: '/biography/:id',
+      name: 'biography',
+      component: () => import('./views/BiographyView.vue'),
+    },
     { path: '/:pathMatch(.*)*', redirect: '/' },
   ],
   scrollBehavior: () => ({ top: 0 }),

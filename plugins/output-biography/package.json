@@ -1,0 +1,15 @@
+{
+  "name": "@openmimic/output-biography",
+  "version": "0.0.1",
+  "private": true,
+  "description": "Biography output: a short biography of the subject written from witness testimonies.",
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "dependencies": {
+    "@openmimic/kernel": "*",
+    "@openmimic/shared": "*",
+    "@openmimic/engine-court": "*"
+  }
+}

@@ -200,6 +200,10 @@ function goToMetaPerception(): void {
   void router.push({ name: 'meta-perception', params: { id: subjectId.value } });
 }
 
+function goToBiography(): void {
+  void router.push({ name: 'biography', params: { id: subjectId.value } });
+}
+
 function enterRoom(room: RoomPayload): void {
   const name = activeName();
   void router.push({
@@ -334,6 +338,7 @@ onBeforeUnmount(stopPolling);
           </button>
           <button type="button" class="btn" @click="goToCourtReport">查看报告</button>
           <button type="button" class="btn" @click="goToMetaPerception">元知觉</button>
+          <button type="button" class="btn" @click="goToBiography">Biography</button>
         </div>
       </div>
       <p v-if="courtNeedsKey" class="muted small">
