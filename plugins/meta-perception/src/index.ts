@@ -279,7 +279,7 @@ export const metaPerceptionPlugin: Plugin<MetaPerceptionConfig> = {
           })),
         },
       };
-    });
+    }, { scope: 'admin' });
 
     /* POST /api/subjects/:id/meta/predictions */
     router.post('/api/subjects/:id/meta/predictions', (context) => {
@@ -315,7 +315,7 @@ export const metaPerceptionPlugin: Plugin<MetaPerceptionConfig> = {
       }
 
       return { status: 201, body: { locked: true, count: body.predictions.length } };
-    });
+    }, { scope: 'admin' });
 
     /* POST /api/subjects/:id/meta/score */
     router.post('/api/subjects/:id/meta/score', (context) => {
@@ -392,7 +392,7 @@ export const metaPerceptionPlugin: Plugin<MetaPerceptionConfig> = {
         status: 200,
         body: result,
       }));
-    });
+    }, { scope: 'admin' });
 
     /* GET /api/subjects/:id/meta/result */
     router.get('/api/subjects/:id/meta/result', (context) => {
@@ -441,6 +441,6 @@ export const metaPerceptionPlugin: Plugin<MetaPerceptionConfig> = {
           byWitness: filteredByWitness,
         },
       };
-    });
+    }, { scope: 'admin' });
   },
 };

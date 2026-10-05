@@ -108,6 +108,8 @@ export interface RunningServer {
   port: number;
   url: string;
   close(): Promise<void>;
+  /** Exposed for test introspection only — lists registered routes and their scope declarations. */
+  _router?: Router;
 }
 
 const errorBody = (code: string, message: string): unknown => ({ error: { code, message } });
@@ -355,6 +357,7 @@ export async function startServer(options: StartServerOptions): Promise<RunningS
   return {
     port,
     url: `http://127.0.0.1:${port}`,
+    _router: router,
     close: async () => {
       await new Promise<void>((resolve, reject) => {
         server.close((error) => (error ? reject(error) : resolve()));

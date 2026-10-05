@@ -170,7 +170,7 @@ export const collectorChatlogPlugin: Plugin<ChatlogConfig> = {
           totalLines: parseResult.totalLines,
         },
       };
-    });
+    }, { scope: 'admin' });
 
     /* ---------------------------------------------------------------- */
     /* POST /api/subjects/:id/chatlog/import                             */
@@ -269,7 +269,7 @@ export const collectorChatlogPlugin: Plugin<ChatlogConfig> = {
           styleProfile: styleResult,
         },
       };
-    });
+    }, { scope: 'admin' });
 
     /* ---------------------------------------------------------------- */
     /* GET /api/subjects/:id/chatlog/imports                             */
@@ -298,7 +298,7 @@ export const collectorChatlogPlugin: Plugin<ChatlogConfig> = {
         status: 200,
         body: { imports },
       };
-    });
+    }, { scope: 'admin' });
 
     /* ---------------------------------------------------------------- */
     /* DELETE /api/subjects/:id/chatlog/imports/:importId                */
@@ -341,7 +341,7 @@ export const collectorChatlogPlugin: Plugin<ChatlogConfig> = {
           corpusItemIdsRequested: corpusItemIds.length,
         },
       };
-    });
+    }, { scope: 'admin' });
   },
 };
 

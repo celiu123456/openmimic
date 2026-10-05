@@ -63,7 +63,7 @@ export const bridgeSillyTavernPlugin: Plugin = {
     if (!ctx.has('router')) return;
     const router = ctx.get<Router>('router');
 
-    // --- Export: GET /api/subjects/:id/export/character-card ---
+    // --- Export: GET /api/subjects/:id/export/character-card --- (export scope)
     router.get('/api/subjects/:id/export/character-card', (context: RouteContext) => {
       const subjectId = context.params.id ?? '';
       const format = context.query.get('format') ?? 'json';
@@ -106,9 +106,9 @@ export const bridgeSillyTavernPlugin: Plugin = {
         }
         throw err;
       }
-    });
+    }, { scope: 'export' });
 
-    // --- Import: POST /api/import/character-card ---
+    // --- Import: POST /api/import/character-card --- (admin)
     router.post('/api/import/character-card', (context: RouteContext) => {
       let cardData: unknown;
 
@@ -181,6 +181,6 @@ export const bridgeSillyTavernPlugin: Plugin = {
           roundTrip: result.roundTrip,
         },
       };
-    });
+    }, { scope: 'admin' });
   },
 };

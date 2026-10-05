@@ -341,6 +341,16 @@ describe('scope enforcement matrix', () => {
     expect(res.status).toBe(403);
   });
 
+  it('read token cannot read claims (needs testimony.read)', async () => {
+    const res = await api(base, 'GET', `/api/subjects/${subjectId}/claims`, undefined, bearer(readToken));
+    expect(res.status).toBe(403);
+  });
+
+  it('testimony.read token can read claims', async () => {
+    const res = await api(base, 'GET', `/api/subjects/${subjectId}/claims`, undefined, bearer(testimonyReadToken));
+    expect(res.status).toBe(200);
+  });
+
   it('testimony.read token can read corpus', async () => {
     const res = await api(base, 'GET', `/api/subjects/${subjectId}/corpus`, undefined, bearer(testimonyReadToken));
     expect(res.status).toBe(200);
@@ -903,7 +913,7 @@ describe('embedding protection', () => {
 });
 
 /* ------------------------------------------------------------------ */
-/* Route scan: undeclared routes (informational)                       */
+/* Route scan: every route must have an explicit scope declaration      */
 /* ------------------------------------------------------------------ */
 
 describe('route scope coverage', () => {
@@ -922,12 +932,169 @@ describe('route scope coverage', () => {
     store.close();
   });
 
-  it('logs routes without explicit scope declaration (admin fallback)', () => {
-    // This test does not fail — it outputs information about which routes
-    // rely on the admin fallback. The fail-closed guarantee is that
-    // undeclared routes require admin, which is tested above.
-    // We just verify the router can list its routes.
-    // (The Router is internal; this is a structural test.)
-    expect(true).toBe(true);
+  it('every route has an explicit scope or open declaration (zero undeclared)', () => {
+    const router = server._router;
+    expect(router).toBeDefined();
+    const routes = router!.listRoutes();
+    expect(routes.length).toBeGreaterThan(0);
+
+    const undeclared = routes.filter((r) => !r.open && r.scope === undefined);
+    if (undeclared.length > 0) {
+      const list = undeclared.map((r) => `${r.method} ${r.pattern}`).join('\n  ');
+      throw new Error(
+        `${undeclared.length} route(s) have no explicit scope declaration (relying on admin fallback):\n  ${list}\n` +
+        'Add { scope: "..." } or { open: true } to each route registration.',
+      );
+    }
+    expect(undeclared.length).toBe(0);
+  });
+
+  it('claims and court session routes require testimony.read', () => {
+    const router = server._router!;
+    const routes = router.listRoutes();
+    const claimsRoute = routes.find((r) => r.pattern === '/api/subjects/:id/claims');
+    expect(claimsRoute?.scope).toBe('testimony.read');
+
+    const courtRoute = routes.find((r) => r.pattern === '/api/court/:sessionId');
+    expect(courtRoute?.scope).toBe('testimony.read');
+  });
+
+  it('ASR routes are open (friends need voice input)', () => {
+    const router = server._router!;
+    const routes = router.listRoutes();
+    const asrAvail = routes.find((r) => r.pattern === '/api/asr/available');
+    expect(asrAvail?.open).toBe(true);
+
+    const asrPost = routes.find((r) => r.pattern === '/api/asr' && r.method === 'POST');
+    expect(asrPost?.open).toBe(true);
+  });
+
+  it('short code route is open', () => {
+    const router = server._router!;
+    const routes = router.listRoutes();
+    const shortCode = routes.find((r) => r.pattern === '/api/i/:code');
+    expect(shortCode?.open).toBe(true);
+  });
+});
+
+/* ------------------------------------------------------------------ */
+/* Three-identity status code matrix                                   */
+/* ------------------------------------------------------------------ */
+
+describe('three-identity status code matrix', () => {
+  let store: Store;
+  let server: RunningServer;
+  let base: string;
+  const ADMIN = 'test-admin-three-identity';
+  let subjectId: string;
+  let chatToken: string;
+  let inviteToken: string;
+
+  beforeEach(async () => {
+    store = new Store();
+    server = await startServer({
+      port: 0, store, skipDemo: true, webDistDir: '', adminToken: ADMIN,
+    });
+    base = server.url;
+
+    // Create a subject
+    const sub = await api(base, 'POST', '/api/subjects', { displayName: 'ThreeID' }, bearer(ADMIN));
+    subjectId = sub.body.id as string;
+
+    // Create invite
+    const inv = await api(base, 'POST', `/api/subjects/${subjectId}/invites`, undefined, bearer(ADMIN));
+    inviteToken = inv.body.token as string;
+
+    // Create chat-only scoped token
+    const tok = await api(base, 'POST', '/api/tokens', {
+      name: 'chat-only',
+      scopes: ['persona.chat'],
+    }, bearer(ADMIN));
+    chatToken = tok.body.token as string;
+  });
+
+  afterEach(async () => {
+    await server.close();
+    store.close();
+  });
+
+  /* --- Friend path (no token) --- */
+
+  it('friend: invite resolve works without token', async () => {
+    const res = await api(base, 'GET', `/api/invites/${inviteToken}`);
+    expect(res.status).toBe(200);
+  });
+
+  it('friend: short code route is open', async () => {
+    const inv = await api(base, 'POST', `/api/subjects/${subjectId}/invites`, undefined, bearer(ADMIN));
+    const shortCode = inv.body.shortCode as string | undefined;
+    if (shortCode) {
+      const res = await api(base, 'GET', `/api/i/${shortCode}`);
+      expect(res.status).toBe(200);
+    }
+  });
+
+  it('friend: interview start works without token', async () => {
+    const res = await api(base, 'POST', `/api/invites/${inviteToken}/interview`);
+    expect(res.status).toBe(201);
+  });
+
+  it('friend: ASR availability check is open', async () => {
+    const res = await api(base, 'GET', '/api/asr/available');
+    expect(res.status).toBe(200);
+  });
+
+  it('friend: cannot list subjects', async () => {
+    const res = await api(base, 'GET', '/api/subjects');
+    expect(res.status).toBe(401);
+  });
+
+  /* --- Chat-only token --- */
+
+  it('chat token: cannot list subjects (needs persona.read)', async () => {
+    const res = await api(base, 'GET', '/api/subjects', undefined, bearer(chatToken));
+    expect(res.status).toBe(403);
+  });
+
+  it('chat token: cannot read claims (needs testimony.read)', async () => {
+    const res = await api(base, 'GET', `/api/subjects/${subjectId}/claims`, undefined, bearer(chatToken));
+    expect(res.status).toBe(403);
+  });
+
+  it('chat token: cannot create subjects (needs admin)', async () => {
+    const res = await api(base, 'POST', '/api/subjects', { displayName: 'No' }, bearer(chatToken));
+    expect(res.status).toBe(403);
+  });
+
+  it('chat token: cannot manage tokens (needs admin)', async () => {
+    const res = await api(base, 'GET', '/api/tokens', undefined, bearer(chatToken));
+    expect(res.status).toBe(403);
+  });
+
+  /* --- Admin token --- */
+
+  it('admin: can list subjects', async () => {
+    const res = await api(base, 'GET', '/api/subjects', undefined, bearer(ADMIN));
+    expect(res.status).toBe(200);
+  });
+
+  it('admin: can create subjects', async () => {
+    const res = await api(base, 'POST', '/api/subjects', { displayName: 'New' }, bearer(ADMIN));
+    expect(res.status).toBe(201);
+  });
+
+  it('admin: can manage tokens', async () => {
+    const res = await api(base, 'GET', '/api/tokens', undefined, bearer(ADMIN));
+    expect(res.status).toBe(200);
+  });
+
+  it('admin: can read claims', async () => {
+    const res = await api(base, 'GET', `/api/subjects/${subjectId}/claims`, undefined, bearer(ADMIN));
+    expect(res.status).toBe(200);
+  });
+
+  it('admin: can read coverage', async () => {
+    const res = await api(base, 'GET', `/api/subjects/${subjectId}/coverage`, undefined, bearer(ADMIN));
+    expect(res.status).toBe(200);
   });
 });

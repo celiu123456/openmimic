@@ -115,7 +115,7 @@ export const gatePlugin: Plugin = {
     if (!ctx.has('router')) return;
     const router = ctx.get<Router>('router');
 
-    /* POST /api/claims/:id/contest */
+    /* POST /api/claims/:id/contest — subject denies a claim (admin) */
     router.post('/api/claims/:id/contest', (context) => {
       const claimId = context.params.id ?? '';
       const claim = store.getClaim(claimId);
@@ -144,9 +144,9 @@ export const gatePlugin: Plugin = {
           evidenceSnapshot: record.evidenceSnapshot,
         },
       };
-    });
+    }, { scope: 'admin' });
 
-    /* POST /api/claims/:id/uncontest */
+    /* POST /api/claims/:id/uncontest — withdraw a denial (admin) */
     router.post('/api/claims/:id/uncontest', (context) => {
       const claimId = context.params.id ?? '';
       const claim = store.getClaim(claimId);
@@ -166,9 +166,9 @@ export const gatePlugin: Plugin = {
         status: 200,
         body: { claimId, status: 'surviving' },
       };
-    });
+    }, { scope: 'admin' });
 
-    /* GET /api/subjects/:id/contested */
+    /* GET /api/subjects/:id/contested — list contested claims (testimony.read) */
     router.get('/api/subjects/:id/contested', (context) => {
       const subjectId = context.params.id ?? '';
       const claims = store.listClaimsBySubject(subjectId)
@@ -186,6 +186,6 @@ export const gatePlugin: Plugin = {
           })),
         },
       };
-    });
+    }, { scope: 'testimony.read' });
   },
 };

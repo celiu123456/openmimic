@@ -1827,7 +1827,7 @@ export const outputBiographyPlugin: Plugin<BiographyConfig> = {
     if (!ctx.has('router')) return;
     const router = ctx.get<Router>('router');
 
-    /* POST /api/subjects/:id/biography -- generate */
+    /* POST /api/subjects/:id/biography -- generate (admin) */
     router.post('/api/subjects/:id/biography', (context) => {
       const subjectId = context.params.id ?? '';
       const subject = store.getSubject(subjectId);
@@ -1857,9 +1857,9 @@ export const outputBiographyPlugin: Plugin<BiographyConfig> = {
         status: 400,
         body: { error: { code: 'generation_failed', message: err instanceof Error ? err.message : String(err) } },
       }));
-    });
+    }, { scope: 'admin' });
 
-    /* GET /api/subjects/:id/biography -- retrieve */
+    /* GET /api/subjects/:id/biography -- retrieve (export scope: derived content) */
     router.get('/api/subjects/:id/biography', (context) => {
       const subjectId = context.params.id ?? '';
       const subject = store.getSubject(subjectId);
@@ -1873,9 +1873,9 @@ export const outputBiographyPlugin: Plugin<BiographyConfig> = {
       }
 
       return { status: 200, body: sanitizeBiography(bio) };
-    });
+    }, { scope: 'export' });
 
-    /* POST /api/biography/:id/sections/:sid/remove -- subject veto */
+    /* POST /api/biography/:id/sections/:sid/remove -- subject veto (admin) */
     router.post('/api/biography/:id/sections/:sid/remove', (context) => {
       const biographyId = context.params.id ?? '';
       const sectionId = context.params.sid ?? '';
@@ -1886,7 +1886,7 @@ export const outputBiographyPlugin: Plugin<BiographyConfig> = {
       }
 
       return { status: 200, body: sanitizeBiography(result) };
-    });
+    }, { scope: 'admin' });
   },
 };
 

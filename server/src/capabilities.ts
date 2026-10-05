@@ -71,9 +71,9 @@ export const BUILTIN_CAPABILITIES: readonly CapabilityDeclaration[] = [
     errorCodes: ['unauthorized', 'forbidden_scope', 'forbidden_subject'],
   },
   {
-    id: 'persona.claims',
-    description: 'List surviving claims for a subject.',
-    requiredScope: 'persona.read',
+    id: 'testimony.claims',
+    description: 'List surviving claims for a subject (contains testimony references).',
+    requiredScope: 'testimony.read',
     route: 'GET /api/subjects/:id/claims',
     idempotent: true,
     errorCodes: ['unauthorized', 'forbidden_scope', 'forbidden_subject'],
@@ -116,8 +116,8 @@ export const BUILTIN_CAPABILITIES: readonly CapabilityDeclaration[] = [
   },
   {
     id: 'court.read',
-    description: 'Read a court session by ID.',
-    requiredScope: 'persona.read',
+    description: 'Read a court session by ID (contains testimony references).',
+    requiredScope: 'testimony.read',
     route: 'GET /api/court/:sessionId',
     idempotent: true,
     errorCodes: ['unauthorized', 'forbidden_scope'],
@@ -157,6 +157,16 @@ export const BUILTIN_CAPABILITIES: readonly CapabilityDeclaration[] = [
     errorCodes: ['unauthorized', 'forbidden_scope'],
   },
 
+  // Coverage (admin only — inviter dashboard)
+  {
+    id: 'coverage.read',
+    description: 'Read coverage overview for a subject.',
+    requiredScope: 'admin',
+    route: 'GET /api/subjects/:id/coverage',
+    idempotent: true,
+    errorCodes: ['unauthorized', 'forbidden_scope', 'forbidden_subject'],
+  },
+
   // Export
   {
     id: 'persona.export',
@@ -165,6 +175,24 @@ export const BUILTIN_CAPABILITIES: readonly CapabilityDeclaration[] = [
     route: 'GET /api/subjects/:id/export',
     idempotent: true,
     errorCodes: ['unauthorized', 'forbidden_scope', 'forbidden_subject'],
+  },
+
+  // ASR (open — friends use it for voice testimony)
+  {
+    id: 'asr.available',
+    description: 'Check whether speech transcription is available.',
+    requiredScope: 'open',
+    route: 'GET /api/asr/available',
+    idempotent: true,
+    errorCodes: [],
+  },
+  {
+    id: 'asr.transcribe',
+    description: 'Transcribe audio to text.',
+    requiredScope: 'open',
+    route: 'POST /api/asr',
+    idempotent: false,
+    errorCodes: ['rate_limited'],
   },
 
   // MCP
@@ -200,6 +228,162 @@ export const BUILTIN_CAPABILITIES: readonly CapabilityDeclaration[] = [
     requiredScope: 'admin',
     route: 'DELETE /api/tokens/:id',
     idempotent: true,
+    errorCodes: ['unauthorized', 'forbidden_scope'],
+  },
+
+  // Gate (contest/uncontest)
+  {
+    id: 'gate.contest',
+    description: 'Contest (deny) a claim.',
+    requiredScope: 'admin',
+    route: 'POST /api/claims/:id/contest',
+    idempotent: false,
+    errorCodes: ['unauthorized', 'forbidden_scope'],
+  },
+  {
+    id: 'gate.uncontest',
+    description: 'Withdraw a claim contest.',
+    requiredScope: 'admin',
+    route: 'POST /api/claims/:id/uncontest',
+    idempotent: false,
+    errorCodes: ['unauthorized', 'forbidden_scope'],
+  },
+  {
+    id: 'gate.contested',
+    description: 'List contested claims for a subject.',
+    requiredScope: 'testimony.read',
+    route: 'GET /api/subjects/:id/contested',
+    idempotent: true,
+    errorCodes: ['unauthorized', 'forbidden_scope'],
+  },
+
+  // Silence signal
+  {
+    id: 'silence.list',
+    description: 'List silence signals for a subject.',
+    requiredScope: 'persona.read',
+    route: 'GET /api/subjects/:id/silence-signals',
+    idempotent: true,
+    errorCodes: ['unauthorized', 'forbidden_scope'],
+  },
+  {
+    id: 'silence.scan',
+    description: 'Trigger silence signal scan for a subject.',
+    requiredScope: 'admin',
+    route: 'POST /api/subjects/:id/silence-signals/scan',
+    idempotent: false,
+    errorCodes: ['unauthorized', 'forbidden_scope'],
+  },
+
+  // Meta-perception
+  {
+    id: 'meta.questions',
+    description: 'Get meta-perception questions for a subject.',
+    requiredScope: 'admin',
+    route: 'GET /api/subjects/:id/meta/questions',
+    idempotent: true,
+    errorCodes: ['unauthorized', 'forbidden_scope'],
+  },
+  {
+    id: 'meta.predictions',
+    description: 'Submit meta-perception predictions for a subject.',
+    requiredScope: 'admin',
+    route: 'POST /api/subjects/:id/meta/predictions',
+    idempotent: false,
+    errorCodes: ['unauthorized', 'forbidden_scope'],
+  },
+  {
+    id: 'meta.score',
+    description: 'Score meta-perception predictions for a subject.',
+    requiredScope: 'admin',
+    route: 'POST /api/subjects/:id/meta/score',
+    idempotent: false,
+    errorCodes: ['unauthorized', 'forbidden_scope'],
+  },
+  {
+    id: 'meta.result',
+    description: 'Get meta-perception results for a subject.',
+    requiredScope: 'admin',
+    route: 'GET /api/subjects/:id/meta/result',
+    idempotent: true,
+    errorCodes: ['unauthorized', 'forbidden_scope'],
+  },
+
+  // Chat log import
+  {
+    id: 'chatlog.preview',
+    description: 'Preview a chat log import.',
+    requiredScope: 'admin',
+    route: 'POST /api/subjects/:id/chatlog/preview',
+    idempotent: true,
+    errorCodes: ['unauthorized', 'forbidden_scope'],
+  },
+  {
+    id: 'chatlog.import',
+    description: 'Import a chat log as corpus items.',
+    requiredScope: 'admin',
+    route: 'POST /api/subjects/:id/chatlog/import',
+    idempotent: false,
+    errorCodes: ['unauthorized', 'forbidden_scope'],
+  },
+  {
+    id: 'chatlog.imports',
+    description: 'List past chat log imports.',
+    requiredScope: 'admin',
+    route: 'GET /api/subjects/:id/chatlog/imports',
+    idempotent: true,
+    errorCodes: ['unauthorized', 'forbidden_scope'],
+  },
+  {
+    id: 'chatlog.undo',
+    description: 'Undo a chat log import.',
+    requiredScope: 'admin',
+    route: 'DELETE /api/subjects/:id/chatlog/imports/:importId',
+    idempotent: true,
+    errorCodes: ['unauthorized', 'forbidden_scope'],
+  },
+
+  // Biography
+  {
+    id: 'biography.generate',
+    description: 'Generate a biography for a subject.',
+    requiredScope: 'admin',
+    route: 'POST /api/subjects/:id/biography',
+    idempotent: false,
+    errorCodes: ['unauthorized', 'forbidden_scope'],
+  },
+  {
+    id: 'biography.read',
+    description: 'Retrieve a generated biography.',
+    requiredScope: 'export',
+    route: 'GET /api/subjects/:id/biography',
+    idempotent: true,
+    errorCodes: ['unauthorized', 'forbidden_scope'],
+  },
+  {
+    id: 'biography.veto',
+    description: 'Remove a biography section (subject veto).',
+    requiredScope: 'admin',
+    route: 'POST /api/biography/:id/sections/:sid/remove',
+    idempotent: false,
+    errorCodes: ['unauthorized', 'forbidden_scope'],
+  },
+
+  // SillyTavern character card
+  {
+    id: 'character-card.export',
+    description: 'Export a persona as a SillyTavern V2 character card.',
+    requiredScope: 'export',
+    route: 'GET /api/subjects/:id/export/character-card',
+    idempotent: true,
+    errorCodes: ['unauthorized', 'forbidden_scope', 'forbidden_subject'],
+  },
+  {
+    id: 'character-card.import',
+    description: 'Import a SillyTavern V2 character card.',
+    requiredScope: 'admin',
+    route: 'POST /api/import/character-card',
+    idempotent: false,
     errorCodes: ['unauthorized', 'forbidden_scope'],
   },
 ];

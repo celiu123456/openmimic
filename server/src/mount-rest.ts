@@ -40,7 +40,7 @@ import {
 import { HttpError, type Router } from './router';
 import { requireSubjectAccess } from './auth';
 import { buildCapabilityDirectory } from './capabilities';
-import { SCOPE_DEFINITIONS, AUTH_ERROR_CODES, type AuthContext } from './scopes';
+import { SCOPE_DEFINITIONS, type AuthContext } from './scopes';
 import type { TokenStore } from './token-store';
 import {
   isAsrAvailable,
@@ -249,7 +249,7 @@ export const mountRestPlugin: Plugin<MountRestConfig> = {
           token: invite?.token,
         },
       };
-    });
+    }, { open: true });
 
     router.post('/api/invites/:token/testimony', (context) => {
       const input = SubmitTestimonyInputSchema.parse(context.body);
@@ -316,7 +316,7 @@ export const mountRestPlugin: Plugin<MountRestConfig> = {
         .listClaimsBySubject(subjectId)
         .filter((claim) => claim.status === 'surviving');
       return { status: 200, body: { claims } };
-    }, { scope: 'persona.read' });
+    }, { scope: 'testimony.read' });
 
     /* ---------------------------------------------------------------- */
     /* Rooms                                                             */
@@ -325,6 +325,7 @@ export const mountRestPlugin: Plugin<MountRestConfig> = {
     /* Coverage overview for the inviter page */
 
     router.get('/api/subjects/:id/coverage', (context) => {
+      enforceSubject(context);
       const subjectId = context.params.id ?? '';
       if (!store.getSubject(subjectId)) {
         throw new HttpError(404, 'subject_not_found', '当事人不存在');
@@ -338,7 +339,7 @@ export const mountRestPlugin: Plugin<MountRestConfig> = {
         status: 200,
         body: { coverage, relationAdvice },
       };
-    });
+    }, { scope: 'admin' });
 
     router.get('/api/subjects/:id/rooms', (context) => {
       enforceSubject(context);
@@ -452,7 +453,7 @@ export const mountRestPlugin: Plugin<MountRestConfig> = {
       const session = store.getCourtSession(context.params.sessionId ?? '');
       if (!session) throw new HttpError(404, 'session_not_found', 'Court session not found');
       return { status: 200, body: session };
-    }, { scope: 'persona.read' });
+    }, { scope: 'testimony.read' });
 
     /* ---------------------------------------------------------------- */
     /* Testimony data (requires testimony.read or testimony.write)       */
@@ -551,7 +552,7 @@ export const mountRestPlugin: Plugin<MountRestConfig> = {
     router.get('/api/asr/available', () => ({
       status: 200,
       body: { available: isAsrAvailable(asr) },
-    }), { scope: 'admin' });
+    }), { open: true });
 
     router.post('/api/asr', async (context) => {
       if (!isAsrAvailable(asr)) {
@@ -564,6 +565,6 @@ export const mountRestPlugin: Plugin<MountRestConfig> = {
       const input = await normalizeAudioInput(raw, context.contentType ?? '');
       const text = await transcribeAudio(input, asr);
       return { status: 200, body: { text } };
-    }, { scope: 'admin' });
+    }, { open: true });
   },
 };
