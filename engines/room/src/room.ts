@@ -909,11 +909,22 @@ export function buildNoTalkListFallback(
         const sentence = sentences[i]!;
         if (!PRIVATE_MARKERS.some((m) => sentence.includes(m))) continue;
 
+        // Gather fact sentences: the marker sentence + the preceding one (context)
         const factSentences: string[] = [];
         if (i > 0) factSentences.push(sentences[i - 1]!);
         factSentences.push(sentence);
         const factText = factSentences.join('');
         const elements = extractFactElements(factText);
+
+        // Derive topic from the marker sentence itself (what should be kept secret)
+        const topic = sentence.substring(0, 40);
+
+        // Derive keywords from extracted elements (amounts, verbs, nouns)
+        const keywords = [
+          ...elements.amounts,
+          ...elements.verbs,
+          ...elements.nouns,
+        ];
 
         // Identify who should NOT know this based on the marker sentence
         const blindTargets: string[] = [];
@@ -937,15 +948,15 @@ export function buildNoTalkListFallback(
         for (const blindId of blindTargets) {
           const blindDraft = drafts.find((d) => d.witness.id === blindId);
           items.push({
-            topic: factText.substring(0, 30),
-            keywords: [],  // rule-based: no LLM keywords
+            topic,
+            keywords,
             elements,
             blindWitnessId: blindId,
             blindClaim: blindDraft
               ? blindDraft.memory.map((m) => m.text).join(' ').substring(0, 50)
               : '(unknown)',
             knowingWitnessIds: [draft.witness.id],
-            sourceFragment: factText.substring(0, 30),
+            sourceFragment: factText.substring(0, 40),
             severity: 'high',
             reason: '证言中有明确嘱托保密的标记',
           });

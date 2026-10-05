@@ -131,6 +131,49 @@ describe('buildNoTalkListFallback', () => {
     expect(list[0]!.blindWitnessId).toBe('w-father');
   });
 
+  it('derives topic from marker sentence, not from preceding context', () => {
+    const drafts = [
+      {
+        witness: { id: 'w-faxiao', subjectId: 's1', relation: '发小', consentLevel: 'quotable' as const },
+        memory: [{
+          qid: 'q1',
+          text: '跟我吃饭从来没让我买过单,有一回我抢着付,他脸都拉下来了。他借了两万块,别跟他妈提。',
+        }],
+      },
+      {
+        witness: { id: 'w-mother', subjectId: 's1', relation: '母亲', consentLevel: 'quotable' as const },
+        memory: [{ qid: 'q1', text: '小默从小就懂事。' }],
+      },
+    ];
+    const list = buildNoTalkListFallback(drafts);
+    expect(list.length).toBe(1);
+    const item = list[0]!;
+    // Topic should come from the marker sentence (borrowing money), NOT from "eating together"
+    expect(item.topic).toContain('借了两万');
+    expect(item.topic).not.toContain('吃饭从来没让我买过单');
+  });
+
+  it('populates keywords from extracted fact elements', () => {
+    const drafts = [
+      {
+        witness: { id: 'w-faxiao', subjectId: 's1', relation: '发小', consentLevel: 'quotable' as const },
+        memory: [{ qid: 'q1', text: '他跟我借了两万块。别跟他妈说。' }],
+      },
+      {
+        witness: { id: 'w-mother', subjectId: 's1', relation: '母亲', consentLevel: 'quotable' as const },
+        memory: [{ qid: 'q1', text: '他工作挺好的。' }],
+      },
+    ];
+    const list = buildNoTalkListFallback(drafts);
+    expect(list.length).toBe(1);
+    const item = list[0]!;
+    // keywords should include amounts and verbs extracted from the fact text
+    expect(item.keywords.length).toBeGreaterThan(0);
+    // The amount regex captures "两万块" (with the currency suffix)
+    expect(item.keywords.some((k) => k.includes('两万'))).toBe(true);
+    expect(item.keywords).toContain('借');
+  });
+
   it('does NOT flag contradictions without explicit marker', () => {
     const drafts = [
       {
