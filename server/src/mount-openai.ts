@@ -18,15 +18,45 @@
  */
 import { z } from 'zod';
 import type { ServerResponse } from 'node:http';
-import { assemblePersonaContext, computeFingerprint, type Store } from '@openmimic/kernel';
+import {
+  assemblePersonaContext,
+  computeFingerprint,
+  verifyPersonaResponse,
+  type Store,
+  type VerifyLLM,
+} from '@openmimic/kernel';
 import type { Plugin } from '@openmimic/kernel';
 import type { ChatMessage } from '@openmimic/engine-court';
+import type { LLMClient } from '@openmimic/engine-room';
 import type { Router } from './router';
 import type { ChatUpstream } from './server';
 import { requireSubjectAccess } from './auth';
 import type { AuthContext } from './scopes';
 
 const PERSONA_MODEL_PREFIX = 'persona/';
+
+/**
+ * Whether output-side persona verification is enabled.
+ * Default: on. Set PERSONA_VERIFY=0 / off / false to disable.
+ */
+function isVerifyEnabled(): boolean {
+  const v = process.env.PERSONA_VERIFY;
+  if (v === undefined || v === '') return true;
+  return !['0', 'off', 'false'].includes(v.toLowerCase());
+}
+
+/** Conservative fallback when verification itself fails. */
+const VERIFY_FAILED_RESPONSE = '嗯……这个我一时想不起来了,改天再聊?' as const;
+
+/**
+ * Split verified text into sentence-sized chunks for SSE re-emission.
+ * Splits on Chinese sentence-end punctuation; falls back to a single chunk.
+ */
+function splitForSSE(text: string): string[] {
+  if (!text) return [text];
+  const parts = text.split(/(?<=[。！？；\n])/).filter(Boolean);
+  return parts.length > 0 ? parts : [text];
+}
 
 /**
  * Strip stage direction brackets from persona replies.
@@ -140,6 +170,8 @@ export const mountOpenaiPlugin: Plugin<MountOpenAIConfig> = {
     const store = ctx.get<Store>('store');
     const router = ctx.get<Router>('router');
     const chat = config?.chat;
+    // LLM for verification calls (optional -- if absent, verify is disabled)
+    const llm: LLMClient | undefined = ctx.has('llm') ? ctx.get<LLMClient>('llm') : undefined;
 
     router.get('/v1/models', (context) => {
       const auth = context.auth;
@@ -227,6 +259,10 @@ export const mountOpenaiPlugin: Plugin<MountOpenAIConfig> = {
         };
       }
 
+      const verifyEnabled = isVerifyEnabled() && !!llm;
+      const userMessage = query ?? '';
+      const displayName = store.getSubject(subjectId)?.displayName ?? subjectId;
+
       if (!stream) {
         let payload: unknown;
         try {
@@ -237,16 +273,42 @@ export const mountOpenaiPlugin: Plugin<MountOpenAIConfig> = {
             body: openAiError('upstream_error', 'Upstream returned unparseable response', 'server_error'),
           };
         }
-        // Post-process: strip stage brackets and fingerprint
+        // Post-process: strip stage brackets, verify, and fingerprint
+        const headers: Record<string, string> = {};
         try {
           const choices = (payload as Record<string, unknown>)?.choices;
           if (Array.isArray(choices)) {
             const msg = (choices[0] as Record<string, unknown>)?.message as Record<string, unknown> | undefined;
             if (msg && typeof msg.content === 'string') {
               // Strip stage direction brackets from persona output
-              const cleaned = stripStageBrackets(msg.content);
+              let cleaned = stripStageBrackets(msg.content);
+
+              // Output-side verification
+              if (verifyEnabled && cleaned.trim()) {
+                try {
+                  const vResult = await verifyPersonaResponse({
+                    systemPrompt,
+                    userMessage,
+                    response: cleaned,
+                    llm: llm as VerifyLLM,
+                    displayName,
+                  });
+                  cleaned = vResult.finalResponse;
+                  if (vResult.verified && !vResult.passed) {
+                    headers['x-openmimic-verify'] = 'rewritten';
+                  } else if (vResult.verified) {
+                    headers['x-openmimic-verify'] = 'passed';
+                  }
+                } catch {
+                  // Verification failed (timeout, budget, etc.) — return
+                  // conservative response, never the unverified original
+                  cleaned = VERIFY_FAILED_RESPONSE;
+                  headers['x-openmimic-verify'] = 'failed';
+                }
+              }
+
               msg.content = cleaned;
-              // Reflux fingerprint
+              // Reflux fingerprint on the FINAL response
               if (cleaned.trim()) {
                 store.putFingerprint(
                   computeFingerprint(`persona:${subjectId}:${Date.now()}`, subjectId, cleaned),
@@ -257,22 +319,81 @@ export const mountOpenaiPlugin: Plugin<MountOpenAIConfig> = {
         } catch {
           // Post-processing is best-effort; never block the response
         }
-        return { status: 200, body: payload };
+        return { status: 200, body: payload, headers };
       }
 
-      // SSE passthrough with reflux fingerprinting
+      // --- Streaming path ---
+      // When verify is enabled, buffer the full response, verify, then
+      // re-emit as SSE. When verify is disabled, pass through directly.
+
+      if (!verifyEnabled) {
+        // Direct SSE passthrough (original behavior)
+        return {
+          kind: 'stream' as const,
+          run: async (response: ServerResponse) => {
+            response.writeHead(200, {
+              'content-type':
+                upstream.headers.get('content-type') ?? 'text/event-stream; charset=utf-8',
+              'cache-control': 'no-cache',
+            });
+            const textChunks: string[] = [];
+            try {
+              const streamBody = upstream.body;
+              if (streamBody) {
+                const reader = streamBody.getReader();
+                try {
+                  for (;;) {
+                    const { done, value } = await reader.read();
+                    if (done) break;
+                    if (value) {
+                      const chunk = Buffer.from(value);
+                      response.write(chunk);
+                      try {
+                        const text = chunk.toString('utf-8');
+                        for (const line of text.split('\n')) {
+                          if (!line.startsWith('data: ')) continue;
+                          const p = line.slice(6).trim();
+                          if (p === '[DONE]') continue;
+                          const parsed = JSON.parse(p);
+                          const delta = parsed?.choices?.[0]?.delta?.content;
+                          if (typeof delta === 'string') textChunks.push(delta);
+                        }
+                      } catch {
+                        // SSE parsing is best-effort
+                      }
+                    }
+                  }
+                } finally {
+                  reader.releaseLock();
+                }
+              }
+            } catch {
+              response.write(
+                `data: ${JSON.stringify(openAiError('upstream_error', 'Upstream stream interrupted', 'server_error'))}\n\n`,
+              );
+            }
+            try {
+              const fullText = textChunks.join('');
+              if (fullText.trim()) {
+                store.putFingerprint(
+                  computeFingerprint(`persona:${subjectId}:${Date.now()}`, subjectId, fullText),
+                );
+              }
+            } catch {
+              // Fingerprinting is best-effort
+            }
+            response.end();
+          },
+        };
+      }
+
+      // Verify-enabled streaming: buffer → verify → re-emit
       return {
         kind: 'stream' as const,
         run: async (response: ServerResponse) => {
-          response.writeHead(200, {
-            'content-type':
-              upstream.headers.get('content-type') ?? 'text/event-stream; charset=utf-8',
-            'cache-control': 'no-cache',
-          });
-          // Accumulate streamed text for end-of-stream fingerprinting.
-          // We parse SSE data lines to extract content deltas. This is
-          // best-effort: if parsing fails we still forward all bytes.
+          // 1. Buffer the full upstream response
           const textChunks: string[] = [];
+          let modelId = '';
           try {
             const streamBody = upstream.body;
             if (streamBody) {
@@ -282,18 +403,16 @@ export const mountOpenaiPlugin: Plugin<MountOpenAIConfig> = {
                   const { done, value } = await reader.read();
                   if (done) break;
                   if (value) {
-                    const chunk = Buffer.from(value);
-                    response.write(chunk);
-                    // Try to extract content deltas from SSE chunk
                     try {
-                      const text = chunk.toString('utf-8');
+                      const text = Buffer.from(value).toString('utf-8');
                       for (const line of text.split('\n')) {
                         if (!line.startsWith('data: ')) continue;
-                        const payload = line.slice(6).trim();
-                        if (payload === '[DONE]') continue;
-                        const parsed = JSON.parse(payload);
+                        const p = line.slice(6).trim();
+                        if (p === '[DONE]') continue;
+                        const parsed = JSON.parse(p);
                         const delta = parsed?.choices?.[0]?.delta?.content;
                         if (typeof delta === 'string') textChunks.push(delta);
+                        if (!modelId && parsed?.model) modelId = parsed.model;
                       }
                     } catch {
                       // SSE parsing is best-effort
@@ -305,16 +424,64 @@ export const mountOpenaiPlugin: Plugin<MountOpenAIConfig> = {
               }
             }
           } catch {
-            response.write(
-              `data: ${JSON.stringify(openAiError('upstream_error', 'Upstream stream interrupted', 'server_error'))}\n\n`,
-            );
+            // Upstream interrupted — proceed with whatever we have
           }
-          // End-of-stream reflux fingerprint
+
+          let finalText = stripStageBrackets(textChunks.join(''));
+          let verifyHeader = 'buffered';
+
+          // 2. Verify
+          if (finalText.trim()) {
+            try {
+              const vResult = await verifyPersonaResponse({
+                systemPrompt,
+                userMessage,
+                response: finalText,
+                llm: llm as VerifyLLM,
+                displayName,
+              });
+              finalText = vResult.finalResponse;
+              if (vResult.verified && !vResult.passed) {
+                verifyHeader = 'buffered-rewritten';
+              } else if (vResult.verified) {
+                verifyHeader = 'buffered-passed';
+              }
+            } catch {
+              finalText = VERIFY_FAILED_RESPONSE;
+              verifyHeader = 'failed';
+            }
+          }
+
+          // 3. Emit as SSE
+          response.writeHead(200, {
+            'content-type': 'text/event-stream; charset=utf-8',
+            'cache-control': 'no-cache',
+            'x-openmimic-verify': verifyHeader,
+          });
+
+          // Emit the verified response in sentence-sized chunks to
+          // maintain the SSE streaming contract
+          const chatId = `chatcmpl-${Date.now()}`;
+          const chunks = splitForSSE(finalText);
+          for (let i = 0; i < chunks.length; i++) {
+            const delta: Record<string, unknown> = { content: chunks[i] };
+            if (i === 0) delta.role = 'assistant';
+            const ssePayload = {
+              id: chatId,
+              object: 'chat.completion.chunk',
+              created: Math.floor(Date.now() / 1000),
+              model: modelId || `persona/${subjectId}`,
+              choices: [{ index: 0, delta, finish_reason: i === chunks.length - 1 ? 'stop' : null }],
+            };
+            response.write(`data: ${JSON.stringify(ssePayload)}\n\n`);
+          }
+          response.write('data: [DONE]\n\n');
+
+          // 4. Reflux fingerprint on the FINAL (verified) response
           try {
-            const fullText = textChunks.join('');
-            if (fullText.trim()) {
+            if (finalText.trim()) {
               store.putFingerprint(
-                computeFingerprint(`persona:${subjectId}:${Date.now()}`, subjectId, fullText),
+                computeFingerprint(`persona:${subjectId}:${Date.now()}`, subjectId, finalText),
               );
             }
           } catch {
