@@ -22,6 +22,7 @@ export default defineConfig({
       '@openmimic/meta-perception': resolveSource('./plugins/meta-perception/src/index.ts'),
       '@openmimic/silence-signal': resolveSource('./plugins/silence-signal/src/index.ts'),
       '@openmimic/output-biography': resolveSource('./plugins/output-biography/src/index.ts'),
+      '@openmimic/bridge-sillytavern': resolveSource('./plugins/bridge-sillytavern/src/index.ts'),
     },
   },
   test: {
