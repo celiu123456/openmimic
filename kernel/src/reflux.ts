@@ -6,6 +6,16 @@
  * MinHash fingerprinting (128 dimensions) to compare incoming human text
  * against registered AI artifacts.
  *
+ * v2 (2026-10-06): Two-layer screening for improved paraphrase detection:
+ *   Layer 1: MinHash similarity (structural overlap) — catches verbatim/near-
+ *            verbatim copying. Threshold lowered to configurable MINHASH_MEDIUM
+ *            for "maybe" zone.
+ *   Layer 2: Rare phrase/number/proper-noun matching — catches light rewrites
+ *            that preserve distinctive content (specific numbers, proper names,
+ *            uncommon phrases) even when surface text changes enough to defeat
+ *            MinHash. When medium-similarity minhash OR rare-phrase match,
+ *            an optional LLM confirmation call determines final suspicion.
+ *
  * Migrated from personality_structure_server/narrative-fingerprint.service.ts,
  * stripped of Midway/TypeORM — pure functions + Store integration.
  */
@@ -18,6 +28,13 @@ import type { RefluxSuspicion } from '@openmimic/shared';
 
 export const MINHASH_SIZE = 128;
 export const REFLUX_THRESHOLD = 0.5;
+
+/**
+ * Medium-similarity threshold for the "maybe" zone. When minhash similarity
+ * is between MINHASH_MEDIUM_THRESHOLD and REFLUX_THRESHOLD, the text is a
+ * candidate for LLM confirmation. Configurable.
+ */
+export const MINHASH_MEDIUM_THRESHOLD = 0.3;
 
 /* ------------------------------------------------------------------ */
 /* Core types                                                          */
@@ -214,4 +231,233 @@ export function screenReflux(
   }
 
   return { suspicion: 'none', similarity: bestSimilarity };
+}
+
+/* ------------------------------------------------------------------ */
+/* Rare phrase extraction (Layer 2)                                    */
+/* ------------------------------------------------------------------ */
+
+/**
+ * Extract "rare phrases" from text: proper nouns, specific numbers, and
+ * uncommon multi-character phrases that serve as fingerprints for content
+ * identity even across paraphrase.
+ *
+ * A phrase is "rare" if it is:
+ * - A number with 3+ digits (specific amounts, dates, IDs)
+ * - A sequence of 2+ CJK characters that looks like a proper noun
+ *   (preceded by common title/role markers or capitalized)
+ * - A multi-word proper noun in Latin script (2+ consecutive capitalized words)
+ * - A quoted phrase of 4+ chars
+ */
+export function extractRarePhrases(text: string): string[] {
+  const phrases = new Set<string>();
+  const canonical = canonicalText(text);
+
+  // Specific numbers (3+ digits, possibly with decimal)
+  for (const m of canonical.matchAll(/\d{3,}(?:\.\d+)?/g)) {
+    phrases.add(m[0]);
+  }
+
+  // Quoted content (4+ chars between quotes)
+  for (const m of canonical.matchAll(/"([^"]{4,})"/g)) {
+    phrases.add(m[1]!);
+  }
+
+  // CJK proper nouns: 2-4 char sequences after role/relationship markers
+  // or standalone at sentence boundaries (e.g. 叫张三, 帮老王, 找李明, etc.)
+  const originalNfkc = String(text || '').normalize('NFKC');
+  for (const m of originalNfkc.matchAll(/(?:叫|是|跟|和|给|被|让|对|与|找|帮|助|问|见|约|陪|老|小)([^\s,，。.!！?？;；:：\n]{2,4})/g)) {
+    const name = m[1]!.trim();
+    if (name.length >= 2 && name.length <= 4) {
+      phrases.add(name.toLowerCase());
+    }
+  }
+
+  // CJK names at sentence start (2-3 chars followed by a verb or particle)
+  for (const m of originalNfkc.matchAll(/(?:^|[。！？!?\n;；,，])[\s]*([^\s,，。.!！?？;；\n]{2,3})(?:是|在|的|说|做|去|来|有|会|能|想|要|给|跟|和|叫)/g)) {
+    const name = m[1]!.trim();
+    if (name.length >= 2) {
+      phrases.add(name.toLowerCase());
+    }
+  }
+
+  // Latin proper nouns: consecutive capitalized words
+  for (const m of String(text || '').matchAll(/(?:[A-Z][a-z]+(?:\s+[A-Z][a-z]+)+)/g)) {
+    phrases.add(m[0].toLowerCase());
+  }
+
+  return [...phrases];
+}
+
+/**
+ * Compute rare phrase overlap between incoming text and an AI artifact's text.
+ * Returns the fraction of the artifact's rare phrases found in the incoming text.
+ */
+export function rarePhraseOverlap(
+  incomingPhrases: readonly string[],
+  artifactPhrases: readonly string[],
+): number {
+  if (!artifactPhrases.length) return 0;
+  const incoming = new Set(incomingPhrases);
+  let matches = 0;
+  for (const phrase of artifactPhrases) {
+    if (incoming.has(phrase)) matches++;
+  }
+  return matches / artifactPhrases.length;
+}
+
+/* ------------------------------------------------------------------ */
+/* Enhanced reflux screening (v2: two-layer)                           */
+/* ------------------------------------------------------------------ */
+
+/**
+ * LLM interface for reflux confirmation. Kept minimal — only needs a
+ * single string-in, string-out call. The caller is responsible for rate
+ * limiting and error handling.
+ */
+export interface RefluxLLM {
+  complete(opts: { system: string; user: string }): Promise<string>;
+}
+
+/**
+ * Maximum number of LLM confirmation calls per screening batch.
+ * Prevents runaway costs when many candidates trigger the medium zone.
+ */
+export const MAX_REFLUX_LLM_CALLS = 3;
+
+export interface EnhancedRefluxMatch extends RefluxMatch {
+  /** Rare phrases found in both the incoming text and the matched artifact. */
+  sharedRarePhrases?: string[];
+  /** Whether LLM confirmation was used. */
+  llmConfirmed?: boolean;
+}
+
+/**
+ * Build the LLM confirmation prompt. Sends the candidate artifact fragment
+ * and the incoming testimony fragment. Does NOT send other witnesses' text.
+ */
+export function buildRefluxConfirmPrompt(
+  artifactFragment: string,
+  testimonyFragment: string,
+): { system: string; user: string } {
+  return {
+    system: `You are a plagiarism detector for an AI system. You will see two text fragments:
+- ARTIFACT: a piece of text generated by an AI system.
+- TESTIMONY: a piece of text submitted by a human witness.
+
+Determine whether the TESTIMONY is a rephrasing, paraphrase, or close restatement of the ARTIFACT's meaning. Minor wording changes, synonym substitution, or reorganization still count as a match. Completely different content does not.
+
+Answer with exactly one word: YES (the testimony restates the artifact) or NO (they are about different things).`,
+    user: `ARTIFACT:\n${artifactFragment.slice(0, 500)}\n\nTESTIMONY:\n${testimonyFragment.slice(0, 500)}`,
+  };
+}
+
+/**
+ * Enhanced reflux screening with two-layer detection.
+ *
+ * Layer 1: Original MinHash + synthetic claim hash (unchanged).
+ * Layer 2: When MinHash similarity is in the medium zone
+ *   (MINHASH_MEDIUM_THRESHOLD <= sim < REFLUX_THRESHOLD) OR when rare
+ *   phrase overlap is detected, optionally use an LLM to confirm.
+ *
+ * Without an LLM, the medium zone uses rare phrase overlap as a secondary
+ * signal: if >= 2 shared rare phrases, suspicion = 'medium'.
+ *
+ * @param text       Incoming testimony text
+ * @param candidates Registered AI fingerprints
+ * @param llm        Optional LLM for confirmation (capped at MAX_REFLUX_LLM_CALLS)
+ * @param artifactTexts  Map of artifactId -> original text (for LLM confirmation)
+ */
+export async function screenRefluxEnhanced(
+  text: string,
+  candidates: readonly AiFingerprint[],
+  llm?: RefluxLLM,
+  artifactTexts?: ReadonlyMap<string, string>,
+): Promise<EnhancedRefluxMatch> {
+  if (!candidates.length || !String(text || '').trim()) {
+    return { suspicion: 'none' };
+  }
+
+  // Run original screening first
+  const baseResult = screenReflux(text, candidates);
+  if (baseResult.suspicion === 'high') {
+    return { ...baseResult };
+  }
+
+  const incoming = computeFingerprint('__screen__', '', text);
+  const incomingRare = extractRarePhrases(text);
+
+  // Find the best candidate by combined score
+  let bestCandidate: { artifactId: string; similarity: number; sharedPhrases: string[] } | undefined;
+
+  for (const candidate of candidates) {
+    const sim = minhashSimilarity(incoming.minhashSig, candidate.minhashSig);
+    const artifactText = artifactTexts?.get(candidate.artifactId) ?? '';
+    const artifactRare = artifactText ? extractRarePhrases(artifactText) : [];
+    const sharedPhrases = incomingRare.filter((p) => artifactRare.includes(p));
+
+    const inMediumZone = sim >= MINHASH_MEDIUM_THRESHOLD && sim < REFLUX_THRESHOLD;
+    const hasRareOverlap = sharedPhrases.length >= 2;
+
+    if (inMediumZone || hasRareOverlap) {
+      if (
+        !bestCandidate ||
+        sim > bestCandidate.similarity ||
+        (sim === bestCandidate.similarity && sharedPhrases.length > bestCandidate.sharedPhrases.length)
+      ) {
+        bestCandidate = { artifactId: candidate.artifactId, similarity: sim, sharedPhrases };
+      }
+    }
+  }
+
+  // If we have a medium-zone candidate, try LLM confirmation
+  if (bestCandidate) {
+    if (llm && artifactTexts) {
+      const artifactText = artifactTexts.get(bestCandidate.artifactId);
+      if (artifactText) {
+        try {
+          const prompt = buildRefluxConfirmPrompt(artifactText, text);
+          const response = await llm.complete(prompt);
+          const isMatch = response.trim().toUpperCase().startsWith('YES');
+          if (isMatch) {
+            return {
+              suspicion: 'medium',
+              matchedArtifactId: bestCandidate.artifactId,
+              signal: 'minhash',
+              similarity: bestCandidate.similarity,
+              sharedRarePhrases: bestCandidate.sharedPhrases,
+              llmConfirmed: true,
+            };
+          }
+          // LLM says NO — not a reflux
+          return {
+            suspicion: 'none',
+            similarity: bestCandidate.similarity,
+            sharedRarePhrases: bestCandidate.sharedPhrases,
+            llmConfirmed: false,
+          };
+        } catch {
+          // LLM failed — fall through to heuristic
+        }
+      }
+    }
+
+    // No LLM available: use rare phrase overlap as heuristic
+    if (bestCandidate.sharedPhrases.length >= 2) {
+      return {
+        suspicion: 'medium',
+        matchedArtifactId: bestCandidate.artifactId,
+        signal: 'minhash',
+        similarity: bestCandidate.similarity,
+        sharedRarePhrases: bestCandidate.sharedPhrases,
+      };
+    }
+  }
+
+  // Pass through the original result
+  if (baseResult.suspicion === 'low') {
+    return { ...baseResult };
+  }
+
+  return { suspicion: 'none', similarity: baseResult.similarity };
 }
