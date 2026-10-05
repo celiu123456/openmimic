@@ -142,6 +142,8 @@ export interface StartedInterviewPayload {
   sessionId: string;
   question: WitnessQuestion;
   total: number;
+  /** One-time opening expectation (how long, can skip, etc.). */
+  opening?: string;
 }
 
 /**
@@ -150,8 +152,15 @@ export interface StartedInterviewPayload {
  */
 export type InterviewStepPayload =
   | { followup: string }
-  | { question: WitnessQuestion; index: number }
+  | { question: WitnessQuestion; index: number; closingSuggested?: boolean }
   | { done: true };
+
+/** ASR transcription result with confidence metadata. */
+export interface TranscriptionPayload {
+  text: string;
+  lowConfidence: boolean;
+  confidence: number;
+}
 
 /** One answer turn; `skip` records an explicit silence. */
 export interface InterviewAnswerRequest {
@@ -187,7 +196,7 @@ export interface CourtSessionPayload {
 export interface ApiClient {
   fetchInvite(token: string): Promise<InvitePayload>;
   checkAsrAvailable(): Promise<boolean>;
-  transcribe(blob: Blob): Promise<string>;
+  transcribe(blob: Blob): Promise<TranscriptionPayload>;
   createSubject(displayName: string): Promise<SubjectPayload>;
   createInvite(subjectId: string): Promise<CreatedInvitePayload>;
   getProgress(subjectId: string): Promise<ProgressPayload>;
@@ -280,12 +289,20 @@ export function createApiClient(options: ApiClientOptions = {}): ApiClient {
     },
 
     async transcribe(blob) {
-      const result = await request<{ text?: unknown }>('/api/asr', {
+      const result = await request<{
+        text?: unknown;
+        lowConfidence?: unknown;
+        confidence?: unknown;
+      }>('/api/asr', {
         method: 'POST',
         headers: { 'content-type': blob.type || 'audio/webm' },
         body: blob,
       });
-      return typeof result.text === 'string' ? result.text : '';
+      return {
+        text: typeof result.text === 'string' ? result.text : '',
+        lowConfidence: result.lowConfidence === true,
+        confidence: typeof result.confidence === 'number' ? result.confidence : 1,
+      };
     },
 
     createSubject: (displayName) =>

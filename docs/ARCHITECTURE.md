@@ -277,6 +277,61 @@ All subsequent steps (answer, followup, finish) follow this fixed order.
 When the option is false (default), the questionnaire's natural order is
 used and existing behaviour is unchanged.
 
+### Navigator memo (engines/witness/src/navigator.ts)
+
+Asynchronous evidence stocktake generated every N answers (default 3, configurable
+via `InterviewOptions.navigatorInterval`). Migrated from the author's earlier
+platform (`interview-navigator.service.ts`) and rewritten as pure functions +
+a single LLM call (no MySQL, no lease, no retry loop).
+
+- **NavigatorMemoSchema**: zod-validated JSON with `evidenceBacked`,
+  `tentativeInferences`, `liveThreads`, `avoid`, `interviewFeedback`,
+  `respondentPace`, and structured `foregroundGuidance`.
+- **Hard constraint**: no question marks (`?` or `？`) anywhere in the memo.
+  The schema enforces this with a `superRefine` pass. On violation, one
+  repair attempt is made; if that also fails, the memo is dropped.
+- **Influence**: the memo's `foregroundGuidance` is injected into the
+  follow-up system prompt as soft context. `memoSuggestsClosing()` detects
+  fatigue signals and suppresses follow-ups. `shouldPursueLiveThread()`
+  and `memoAvoidsDirection()` gate follow-up decisions.
+- **Budget**: `MAX_NAVIGATOR_CALLS_PER_SESSION` (4) caps total navigator
+  LLM calls. The budget counter (`navigatorCallCount`) is tracked in
+  session state, separate from `followupCount`.
+- **Degradation**: when no LLM is configured, the navigator path is
+  entirely absent and existing behaviour is unchanged.
+
+### ASR low-confidence confirmation (server/src/asr.ts)
+
+When the ASR transcription confidence is below a threshold (default 0.72,
+configurable via `ASR_CONFIDENCE_THRESHOLD` env), the result includes
+`lowConfidence: true` so the client can ask the witness to confirm or
+edit the text before it enters the answer.
+
+- **Provider confidence**: used when the upstream ASR returns a `confidence`
+  field in its JSON response.
+- **Heuristic confidence** (`heuristicConfidence()`): synthetic 0-1 score
+  based on text length, CJK character ratio, and garbled-output detection.
+  Used as fallback when the provider does not return a confidence score.
+- **API contract**: `POST /api/asr` now returns `{ text, lowConfidence,
+  confidence }` instead of `{ text }`.
+
+### Graceful closing and pacing
+
+- **Opening expectation**: `startInterview()` returns an `opening` string
+  telling the witness approximately how long, that they can skip, and that
+  they can stop anytime.
+- **Consecutive short answers**: when the witness gives
+  `CONSECUTIVE_SHORT_LIMIT` (2) answers shorter than
+  `SHORT_ANSWER_THRESHOLD` (15 characters) in a row, the next step
+  includes `closingSuggested: true`. A substantive answer resets the
+  counter.
+- **Memo-driven fatigue**: when the navigator memo detects fatigue signals
+  (`memoSuggestsClosing()`), `closingSuggested` is set even if answers
+  are long.
+- **Early submission**: the witness can finish at any time. Already-answered
+  parts are submitted normally; remaining questions are not marked as
+  avoided (they were simply not reached).
+
 ### Short invite codes (engines/witness/src/short-code.ts)
 
 8-character case-insensitive codes from a 30-character unambiguous alphabet

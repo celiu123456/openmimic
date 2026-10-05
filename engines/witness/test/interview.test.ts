@@ -85,7 +85,7 @@ describe('interview session state machine', () => {
       store,
       sessionId,
       { text: BARE },
-      { ...options, llm },
+      { ...options, llm, navigatorInterval: 0 },
     );
 
     expect(step).toEqual({ followup: '哪件事让你这么觉得？' });
@@ -137,37 +137,38 @@ describe('interview session state machine', () => {
 
   it('limits bare-evaluation follow-ups to one, and stops after the budget', async () => {
     const llm = new FakeLLM(Array.from({ length: 20 }, () => FOLLOWUP_LINE));
+    const llmOpts = { ...options, llm, navigatorInterval: 0 };
     const { sessionId } = startInterview(store, token, options);
 
     // v2 policy: a bare evaluation (no clue) gets at most 1 follow-up across
     // the entire interview. The first bare answer triggers a follow-up...
-    const step1 = await answerQuestion(store, sessionId, { text: BARE }, { ...options, llm });
+    const step1 = await answerQuestion(store, sessionId, { text: BARE }, llmOpts);
     expect('followup' in step1).toBe(true);
     answerFollowup(store, sessionId, { skip: true }, options);
     expect(llm.calls).toHaveLength(1);
 
     // ...but the second bare answer does NOT get a follow-up (bare-eval cap).
-    const step2 = await answerQuestion(store, sessionId, { text: BARE }, { ...options, llm });
+    const step2 = await answerQuestion(store, sessionId, { text: BARE }, llmOpts);
     expect(isQuestion(step2)).toBe(true);
     expect('followup' in step2).toBe(false);
     expect(llm.calls).toHaveLength(1);
 
     // An answer with a clue still gets a follow-up (budget not yet exhausted).
     const CLUE = '记得有一次他帮了我';
-    const step3 = await answerQuestion(store, sessionId, { text: CLUE }, { ...options, llm });
+    const step3 = await answerQuestion(store, sessionId, { text: CLUE }, llmOpts);
     expect('followup' in step3).toBe(true);
     answerFollowup(store, sessionId, { skip: true }, options);
 
     // After MAX_FOLLOWUPS_PER_SESSION calls, the budget is exhausted.
     let calls = llm.calls.length;
     for (let i = calls; i < MAX_FOLLOWUPS_PER_SESSION; i++) {
-      await answerQuestion(store, sessionId, { text: CLUE }, { ...options, llm });
+      await answerQuestion(store, sessionId, { text: CLUE }, llmOpts);
       answerFollowup(store, sessionId, { skip: true }, options);
     }
     expect(llm.calls).toHaveLength(MAX_FOLLOWUPS_PER_SESSION);
 
     // Beyond the budget, even a clue-bearing answer gets no follow-up.
-    const beyond = await answerQuestion(store, sessionId, { text: CLUE }, { ...options, llm });
+    const beyond = await answerQuestion(store, sessionId, { text: CLUE }, llmOpts);
     expect(isQuestion(beyond)).toBe(true);
     expect('followup' in beyond).toBe(false);
     expect(llm.calls).toHaveLength(MAX_FOLLOWUPS_PER_SESSION);
@@ -177,7 +178,7 @@ describe('interview session state machine', () => {
     const llm = new FakeLLM(['这不是 JSON']);
     const { sessionId } = startInterview(store, token, options);
 
-    const step = await answerQuestion(store, sessionId, { text: BARE }, { ...options, llm });
+    const step = await answerQuestion(store, sessionId, { text: BARE }, { ...options, llm, navigatorInterval: 0 });
 
     expect(isQuestion(step) && step.index === 1).toBe(true);
     expect(llm.calls).toHaveLength(1);
@@ -199,7 +200,7 @@ describe('interview session state machine', () => {
     const llm = new FakeLLM([FOLLOWUP_LINE]);
     const { sessionId } = startInterview(store, token, options);
 
-    await answerQuestion(store, sessionId, { text: BARE }, { ...options, llm });
+    await answerQuestion(store, sessionId, { text: BARE }, { ...options, llm, navigatorInterval: 0 });
     answerFollowup(store, sessionId, { skip: true }, options);
 
     const answers = sessionState(store, sessionId).answers;
@@ -217,16 +218,17 @@ describe('interview session state machine', () => {
 
   it('lets a client correct an earlier answer without spending a follow-up', async () => {
     const llm = new FakeLLM([FOLLOWUP_LINE]);
+    const llmOpts = { ...options, llm, navigatorInterval: 0 };
     const { sessionId } = startInterview(store, token, options);
 
-    await answerQuestion(store, sessionId, { text: BARE }, { ...options, llm });
+    await answerQuestion(store, sessionId, { text: BARE }, llmOpts);
     answerFollowup(store, sessionId, { skip: true }, options);
 
     const step = await answerQuestion(
       store,
       sessionId,
       { qid: 'q1', text: '他其实挺护着人的，去年替同事背过锅。', frontText: '我会当面谢他。' },
-      { ...options, llm },
+      llmOpts,
     );
     expect(isQuestion(step) && step.index === 1).toBe(true);
     expect(llm.calls).toHaveLength(1);
@@ -286,6 +288,7 @@ describe('interview finish', () => {
 
   it('assembles a testimony with followupText kept apart and avoidedQids kept', async () => {
     const llm = new FakeLLM([FOLLOWUP_LINE]);
+    const llmOpts = { ...options, llm, navigatorInterval: 0 };
     const { sessionId } = startInterview(store, token, options);
 
     // q1: concrete long answer with a front answer, no follow-up.
@@ -293,10 +296,10 @@ describe('interview finish', () => {
       store,
       sessionId,
       { text: STORY, frontText: '这事我会当面提。' },
-      { ...options, llm },
+      llmOpts,
     );
     // q2: bare answer, follow-up, answered.
-    await answerQuestion(store, sessionId, { text: BARE }, { ...options, llm });
+    await answerQuestion(store, sessionId, { text: BARE }, llmOpts);
     await answerFollowup(
       store,
       sessionId,
@@ -336,8 +339,9 @@ describe('interview finish', () => {
 
   it('round-trips avoidedQids and followupText through the ledger', async () => {
     const llm = new FakeLLM([FOLLOWUP_LINE]);
+    const llmOpts = { ...options, llm, navigatorInterval: 0 };
     const { sessionId } = startInterview(store, token, options);
-    await answerQuestion(store, sessionId, { text: BARE }, { ...options, llm });
+    await answerQuestion(store, sessionId, { text: BARE }, llmOpts);
     await answerFollowup(store, sessionId, { text: '他去年悄悄帮我垫了房租。' }, options);
     await answerQuestion(store, sessionId, { skip: true }, options);
 
@@ -355,6 +359,7 @@ describe('interview finish', () => {
 
   it('accepts a client-held draft and can jump straight to a later question', async () => {
     const llm = new FakeLLM([FOLLOWUP_LINE]);
+    const llmOpts = { ...options, llm, navigatorInterval: 0 };
     const { sessionId } = startInterview(store, token, options);
 
     // A refreshed client resumes at q4 without replaying q1..q3.
@@ -362,7 +367,7 @@ describe('interview finish', () => {
       store,
       sessionId,
       { qid: 'q4', text: BARE },
-      { ...options, llm },
+      llmOpts,
     );
     expect('followup' in step).toBe(true);
     await answerFollowup(store, sessionId, { skip: true }, options);

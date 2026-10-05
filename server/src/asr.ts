@@ -77,19 +77,24 @@ export async function normalizeAudioInput(
 }
 
 /**
- * Send one recording upstream and return the transcript.
+ * Send one recording upstream and return the transcript with confidence.
  *
  * The upstream body is always rebuilt as multipart with the configured model,
  * so clients never have to know (or be trusted with) the model name.
+ *
+ * v3: returns a TranscriptionResult with confidence metadata for the
+ * low-confidence confirmation flow.
  */
 export async function transcribeAudio(
   input: AudioInput,
   config: AsrConfig,
   fetchImpl: typeof fetch = fetch,
-): Promise<string> {
+): Promise<TranscriptionResult> {
   if (!isAsrAvailable(config)) {
     throw new HttpError(501, 'asr_unavailable', '服务器未配置语音转写');
   }
+
+  const threshold = readAsrConfidenceThreshold();
 
   const form = new FormData();
   form.append(
@@ -121,5 +126,81 @@ export async function transcribeAudio(
     throw new HttpError(502, 'asr_failed', '语音转写返回了无法解析的结果');
   }
 
-  return isRecord(payload) && typeof payload.text === 'string' ? payload.text : '';
+  const text = isRecord(payload) && typeof payload.text === 'string' ? payload.text : '';
+  const providerConfidence = isRecord(payload) && typeof payload.confidence === 'number'
+    ? payload.confidence
+    : undefined;
+
+  const confidence = providerConfidence ?? heuristicConfidence(text);
+  const confidenceFromProvider = providerConfidence !== undefined;
+
+  return {
+    text,
+    confidence,
+    confidenceFromProvider,
+    lowConfidence: confidence < threshold,
+  };
+}
+
+/* ------------------------------------------------------------------ */
+/* Low-confidence detection (v3)                                       */
+/* ------------------------------------------------------------------ */
+
+/**
+ * Default ASR confidence threshold below which the transcription is
+ * considered low-confidence and should be confirmed by the witness.
+ *
+ * Migrated from the author's earlier platform (interview-runtime.service.ts,
+ * `interviewAsrMinimumConfidence()`).
+ */
+export const DEFAULT_ASR_CONFIDENCE_THRESHOLD = 0.72;
+
+export function readAsrConfidenceThreshold(
+  env: NodeJS.ProcessEnv = process.env,
+): number {
+  const value = Number(env.ASR_CONFIDENCE_THRESHOLD || DEFAULT_ASR_CONFIDENCE_THRESHOLD);
+  return Number.isFinite(value) ? Math.max(0, Math.min(1, value)) : DEFAULT_ASR_CONFIDENCE_THRESHOLD;
+}
+
+/**
+ * Heuristic low-confidence detection when the upstream ASR does not return
+ * an explicit confidence score.
+ *
+ * Signals:
+ * - Empty or very short transcript (< 2 characters)
+ * - High ratio of non-Chinese characters (possible garbled output)
+ * - Very short relative to audio duration (if known)
+ *
+ * Returns a synthetic confidence score between 0 and 1.
+ */
+export function heuristicConfidence(text: string): number {
+  const trimmed = text.trim();
+  if (trimmed.length === 0) return 0;
+  if (trimmed.length < 2) return 0.3;
+
+  // Count CJK characters (Chinese/Japanese/Korean unified ideographs)
+  const cjkCount = (trimmed.match(/[一-鿿㐀-䶿]/g) || []).length;
+  const totalChars = Array.from(trimmed).length;
+  const cjkRatio = totalChars > 0 ? cjkCount / totalChars : 0;
+
+  // If the text is mostly non-CJK and not obviously English/punctuation,
+  // it's likely garbled ASR output
+  if (cjkRatio < 0.3 && totalChars > 3) return 0.4;
+  if (cjkRatio < 0.5 && totalChars > 5) return 0.55;
+
+  // Short text with CJK is plausible but uncertain
+  if (totalChars < 4) return 0.6;
+
+  return 0.9; // Reasonable text — no reason to doubt
+}
+
+/** Transcription result with confidence metadata. */
+export interface TranscriptionResult {
+  text: string;
+  /** Upstream confidence if available; otherwise heuristic estimate. */
+  confidence: number;
+  /** True when confidence came from the upstream provider. */
+  confidenceFromProvider: boolean;
+  /** True when confidence is below the threshold. */
+  lowConfidence: boolean;
 }

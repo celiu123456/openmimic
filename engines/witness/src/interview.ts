@@ -10,6 +10,7 @@ import {
   type WitnessQuestion,
 } from './questionnaires/friend-v1';
 import { WITNESS_V2_QUESTIONNAIRES } from './questionnaires/witness-v2';
+import type { WitnessV2Question } from './questionnaires/witness-v2';
 import { classifyIntent } from './input-intent';
 import { detectRetreat } from './retreat';
 import { classifyBasis } from './basis';
@@ -21,6 +22,7 @@ import {
   buildFollowupRequest,
   createInterviewState,
   followupPassesGate,
+  hasClue,
   parseFollowup,
   questionAt,
   shouldAskFollowup,
@@ -38,6 +40,16 @@ import {
   submitTestimony,
   type SubmitTestimonyResult,
 } from './testimony';
+import {
+  generateNavigatorMemo,
+  MAX_NAVIGATOR_CALLS_PER_SESSION,
+  NAVIGATOR_MEMO_INTERVAL,
+  memoAvoidsDirection,
+  memoSuggestsClosing,
+  shouldPursueLiveThread,
+  type NavigatorMemo,
+  NavigatorMemoSchema,
+} from './navigator';
 
 /* ------------------------------------------------------------------ */
 /* Input contracts                                                     */
@@ -98,6 +110,8 @@ export type FinishInterviewInput = z.infer<typeof FinishInterviewInputSchema>;
 export interface StartedInterview {
   sessionId: string;
   question: WitnessQuestion;
+  /** One-time opening expectation line (approximately how long, can skip, etc.). */
+  opening?: string;
 }
 
 export interface InterviewOptions {
@@ -116,6 +130,11 @@ export interface InterviewOptions {
    * it off gives the exact same linear behaviour as before.
    */
   adaptiveCoverage?: boolean;
+  /**
+   * How many answers between navigator memo generations.
+   * Defaults to {@link NAVIGATOR_MEMO_INTERVAL} (3).
+   */
+  navigatorInterval?: number;
 }
 
 /* ------------------------------------------------------------------ */
@@ -192,27 +211,53 @@ function askedQuestions(
 }
 
 /**
+ * Build a memo-enriched follow-up system prompt when a navigator memo
+ * is available. The memo's foregroundGuidance is injected as soft context
+ * so the model can generate a more informed follow-up.
+ */
+function enrichFollowupSystem(memo: NavigatorMemo | undefined): string {
+  const base = buildFollowupRequest({ qid: '', prompt: '', followupHint: '' }, '').system;
+  if (!memo) return base;
+  const g = memo.foregroundGuidance;
+  const hint = [
+    '',
+    '【导航提示(仅供参考,不得照搬)】',
+    `当前关注方向: ${g.focusArea}`,
+    `理由: ${g.focusRationale}`,
+    `近期避开: ${g.avoidDirection}`,
+    `节奏: ${g.pace}`,
+  ].join('\n');
+  return base + hint;
+}
+
+/**
  * One model call, one chance; quality gate applied. On any failure the
  * follow-up is simply not asked — the witness is never made to wait on a
  * retry loop. If the gate rejects it, a repair attempt is made once.
+ *
+ * v3: when a navigator memo is available, its foregroundGuidance is injected
+ * into the system prompt as soft context for the follow-up generation.
  */
 async function generateFollowup(
   llm: LLMClient,
   question: WitnessQuestion,
   answer: string,
   previousQuestions: readonly string[],
+  memo?: NavigatorMemo,
 ): Promise<string | undefined> {
   try {
-    const raw = await llm.complete(buildFollowupRequest(question, answer));
+    const request = buildFollowupRequest(question, answer);
+    const system = memo ? enrichFollowupSystem(memo) : request.system;
+    const raw = await llm.complete({ ...request, system });
     const followup = parseFollowup(raw);
     if (followupPassesGate(followup, previousQuestions)) {
       return followup;
     }
     // One repair attempt: re-prompt with a hint to fix
     const repair = await llm.complete({
-      system: buildFollowupRequest(question, answer).system,
+      system,
       user: [
-        buildFollowupRequest(question, answer).user,
+        request.user,
         `刚才生成的问题"${followup}"不合格(可能不是单个问句、包含收尾语或与之前重复)。请重新生成一句。只输出 {"followup":"..."}。`,
       ].join('\n'),
     });
@@ -226,6 +271,28 @@ async function generateFollowup(
     return undefined;
   }
 }
+
+/* ------------------------------------------------------------------ */
+/* Graceful closing                                                    */
+/* ------------------------------------------------------------------ */
+
+/**
+ * Short-answer threshold: an answer under this many characters is "short".
+ * Two consecutive short answers trigger a closing suggestion.
+ */
+export const SHORT_ANSWER_THRESHOLD = 15;
+
+/**
+ * Number of consecutive short answers before suggesting closing.
+ */
+export const CONSECUTIVE_SHORT_LIMIT = 2;
+
+/**
+ * Opening expectation line, shown once before the first question.
+ * Plain, no hype: approximately how long, can skip, can stop anytime.
+ */
+export const OPENING_EXPECTATION =
+  '大概需要五到十分钟。每一题都可以跳过,随时可以结束。你说的内容只用来更完整地理解 TA。';
 
 /* ------------------------------------------------------------------ */
 /* The state-machine API                                               */
@@ -288,7 +355,7 @@ export function startInterview(
 
   const question = questionAt(state, questionnaire.questions);
   if (!question) throw new InterviewStateError('问卷没有题目');
-  return { sessionId, question };
+  return { sessionId, question, opening: OPENING_EXPECTATION };
 }
 
 /**
@@ -404,6 +471,58 @@ export async function answerQuestion(
   // High fatigue: no more follow-ups for the rest of the session.
   const fatigueThreshold = 2.0;
 
+  // --- v3: track consecutive short answers for graceful closing ---
+  const charCount = Array.from(text).length;
+  const prevShort = state.consecutiveShortAnswers ?? 0;
+  const consecutiveShort = charCount < SHORT_ANSWER_THRESHOLD
+    ? prevShort + 1
+    : 0;
+  next = { ...next, consecutiveShortAnswers: consecutiveShort };
+
+  // --- v3: navigator memo generation ---
+  // Generate a navigator memo every N answers (if model available and budget permits).
+  const interval = options.navigatorInterval ?? NAVIGATOR_MEMO_INTERVAL;
+  const navCallCount = state.navigatorCallCount ?? 0;
+  const answersSinceStart = next.answers.length;
+  let currentMemo: NavigatorMemo | undefined;
+
+  // Parse the existing memo from state if present
+  if (state.navigatorMemo) {
+    const parsed = NavigatorMemoSchema.safeParse(state.navigatorMemo);
+    if (parsed.success) currentMemo = parsed.data;
+  }
+
+  if (
+    options.llm &&
+    answersSinceStart > 0 &&
+    answersSinceStart % interval === 0 &&
+    navCallCount < MAX_NAVIGATOR_CALLS_PER_SESSION
+  ) {
+    const memo = await generateNavigatorMemo(
+      options.llm,
+      next.answers,
+      questions,
+      next.avoidedQids,
+      answersSinceStart,
+      currentMemo ?? null,
+    );
+    if (memo) {
+      currentMemo = memo;
+      next = {
+        ...next,
+        navigatorMemo: memo,
+        navigatorCallCount: navCallCount + 1,
+      };
+    }
+  }
+
+  // --- v3: graceful closing suggestion ---
+  // When the witness gives consecutive short answers or the memo suggests
+  // fatigue, offer to close early on the next step.
+  const closingSuggested =
+    consecutiveShort >= CONSECUTIVE_SHORT_LIMIT ||
+    (currentMemo !== undefined && memoSuggestsClosing(currentMemo));
+
   // A re-answer of the current question must not spend a second follow-up.
   if (
     !existing &&
@@ -411,19 +530,31 @@ export async function answerQuestion(
     newFatigue < fatigueThreshold &&
     shouldAskFollowup(text, state.followupCount)
   ) {
-    next = withFollowupCount(next, state.followupCount + 1, now);
-    const prev = askedQuestions(state, questions);
-    const followup = await generateFollowup(options.llm, target, text, prev);
-    if (followup) {
-      next = withPending(next, { qid: targetQid, question: followup }, now);
-      saveSession(store, sessionId, next);
-      return { followup };
+    // v3: only follow up when the memo also supports it (if memo exists).
+    // When memo says closing or the answer lacks a clue and memo doesn't
+    // have live threads, skip the follow-up.
+    const memoAllowsFollowup = !currentMemo || (
+      !memoSuggestsClosing(currentMemo) &&
+      (hasClue(text) || shouldPursueLiveThread(currentMemo))
+    );
+
+    if (memoAllowsFollowup) {
+      next = withFollowupCount(next, state.followupCount + 1, now);
+      const prev = askedQuestions(state, questions);
+      const followup = await generateFollowup(
+        options.llm, target, text, prev, currentMemo,
+      );
+      if (followup) {
+        next = withPending(next, { qid: targetQid, question: followup }, now);
+        saveSession(store, sessionId, next);
+        return { followup };
+      }
     }
   }
 
   next = advance(next, now);
   saveSession(store, sessionId, next);
-  return stepOf(next, questions);
+  return stepOf(next, questions, { closingSuggested });
 }
 
 /** Answer (or skip) the follow-up that is currently waiting. */

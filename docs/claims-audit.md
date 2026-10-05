@@ -15,7 +15,7 @@
 | 声明 | 状态 | 代码依据 | 测试 | 备注 | 核查 |
 |---|---|---|---|---|---|
 | 从 0 实现的对抗式人格引擎 | 已实现 | `engines/court/src/court.ts` 全文 | `engines/court/test/court.test.ts` | README 已删除"多智能体"一词;管线是多步 LLM 调用(filing→pairing→relation→confrontation),非独立智能体进程 | 2026-10-08 读代码 |
-| 收集认识你的人的证言 | 已实现 | `engines/witness/src/testimony.ts` · `engines/witness/src/invite.ts` · `engines/witness/src/interview.ts` | `engines/witness/test/witness.test.ts` · `engines/witness/test/interview.test.ts` | 问卷采集 + 邀请链接 + AI 追问式访谈 | 2026-10-08 读代码 |
+| 收集认识你的人的证言 | 已实现 | `engines/witness/src/testimony.ts` · `engines/witness/src/invite.ts` · `engines/witness/src/interview.ts` · `engines/witness/src/navigator.ts` | `engines/witness/test/witness.test.ts` · `engines/witness/test/interview.test.ts` · `engines/witness/test/navigator-interview-v3.test.ts` | 问卷采集 + 邀请链接 + AI 追问式访谈;v3 导航备忘 + ASR 低置信确认 + 优雅关闭 | 2026-10-06 读代码+跑测试 |
 | 让多个步骤在"人格法庭"上交叉质询 | 已实现 | `engines/court/src/court.ts` | `engines/court/test/court.test.ts` | v2 管线:filing → pairing → relation judgment → confrontation → conviction。是多步 LLM 调用而非独立运行的智能体进程;README 已用"交叉质询"替代"多智能体" | 2026-10-08 读代码 |
 | 只有在对质中存活的侧面才进入人格 | 已实现 | `engines/court/src/court.ts`(runCourt) · `kernel/src/persona.ts` | `engines/court/test/court.test.ts` · `kernel/test/persona.test.ts` | 裁定 contested 的论断不进入基线;persona 组装只取 status=surviving | 2026-10-08 读代码 |
 | 每一个数字人格都带证据链 | 已实现 | `shared/src/schemas.ts`(ClaimSchema) · `kernel/src/store.ts`(putClaim) | `kernel/test/claim-evidence.test.ts` | Claim.evidence 至少一条且必须指向账本中存在的证言;putClaim 无锚则抛 NoEvidenceError;v2 新增 episodeIds/witnessIds 锚定 | 2026-10-08 读代码+跑测试 |
@@ -61,7 +61,7 @@
 
 | 引擎 | 状态 | 代码依据 | 测试 | 备注 | 核查 |
 |---|---|---|---|---|---|
-| WitnessEngine | 已实现 | `engines/witness/src/plugin.ts` · `engines/witness/test/` | `engines/witness/test/witness.test.ts` 等 6 个测试文件 | 采集、邀请、问卷、AI 追问访谈,注册为 collector 类型插件;v2 访谈策略(三关系变体问卷、9 意图分类、退缩检测、证据基础标注、质量门含去重/单问题/防提前结束、反机械追问)迁自作者此前的平台项目 | 2026-10-08 读代码 |
+| WitnessEngine | 已实现 | `engines/witness/src/plugin.ts` · `engines/witness/test/` | `engines/witness/test/witness.test.ts` 等 7 个测试文件 | 采集、邀请、问卷、AI 追问访谈,注册为 collector 类型插件;v2 访谈策略(三关系变体问卷、9 意图分类、退缩检测、证据基础标注、质量门含去重/单问题/防提前结束、反机械追问)迁自作者此前的平台项目;v3 新增导航备忘(每 N 题生成结构化盘点,不含候选问题的硬约束)、ASR 低置信确认、优雅关闭(连续短回答 + 备忘疲劳信号) | 2026-10-06 读代码+跑测试 |
 | CourtEngine | 已实现 | `engines/court/src/court.ts` · `engines/court/src/conflict.ts` · `engines/court/src/plugin.ts` | `engines/court/test/court.test.ts` · `engines/court/test/wiring-behavioral.test.ts` | v2 管线:filing → pairing(LLM/Embedding/Keyword 三级回落) → relation judgment → confrontation → conviction computation;divergence map 保留视角差异 | 2026-10-08 读代码+跑测试 |
 | GraphEngine | 计划 | `engines/graph/` 只有 .gitkeep | — | 无代码;README 声称"人格是图的实时派生物……改一条证言自动重算"无实现 | 2026-10-08 读代码 |
 | RoomEngine | 已实现 | `engines/room/src/room.ts` · `engines/room/src/plugin.ts` | `engines/room/test/room.test.ts` 等 7 个测试文件 | 背后/当面双模式,round-robin 调度,consent overlap 防护,crisis/diagnosis 词表,no-talk list(LLM 生成 + 规则兜底),两级泄密检测(关键词 + LLM),guided rewrite(最多两次),25% 舞台提示上限。**局限**:防护依赖模型判定,不是保证;清单每次生成可能不同;部分泄露的判定边界取决于模型理解力 | 2026-10-08 读代码 |
