@@ -1,5 +1,7 @@
 # Biography Real Run
 
+## 第一次:管线故障
+
 > Generated at 2026-10-05T15:41:37.785Z
 > Subject: limo (demo)
 > Model: deepseek-flash
@@ -222,50 +224,283 @@ Purposes: {"biography-chapter":3}
 ```
 === LLM Usage Summary ===
 | Bucket | Calls | Prompt | Completion | Cached |
-|--------|-------|--------|------------|--------|
-| biography-chapter | 3 | 14244 | 6144 | 512 |
-| biography-chapter-repair | 3 | 975 | 2641 | 384 |
-| court-filing | 6 | 6773 | 14481 | 5632 |
-| court-pairing | 1 | 2835 | 548 | 128 |
-| court-relation | 38 | 20047 | 3220 | 13312 |
-| **TOTAL** | 51 | 44874 | 27034 | 19968 |
+|---
+
+## 第二次:修正后
+
+> Generated at 2026-10-05T16:05:37.108Z
+> Subject: limo (demo)
+> Model: deepseek-flash
+> Buckets: 61, Quotable entries: 171
+
+### Biography
+
+**林默, as friends remember**
+
+#### 1. 第一章：q1
+
+*发小:*
+上个月的一个半夜，林默给发小打了个电话。电话里他开口借两万，说手头周转一下，还嘱咐发小千万别跟他妈提。发小后来回忆，那天挂电话前林默没多说什么，只说了这一件事。
+
+*发小:*
+发小记得更早之前的一顿饭。他抢着买单，林默脸都拉下来了，说“你少来这套”。发小说：“跟我吃饭从来没让我买过单，有一回我抢着付，他脸都拉下来了，说‘你少来这套’。”
+
+*发小:*
+发小对林默花钱这件事有个总结：“他花钱这事特别分裂。”他说林默平时那副“我不缺钱”的样子，现在想想全是撑的。上周发小又约林默吃饭，林默推了，说在忙。发小说：“他最近联系确实少了。”
+
+*前上司:*
+前上司对林默在公司的花钱方式有另一套观察。他说：“林默对钱不敏感，但这不代表他大方。”他举了例子：“他给团队买下午茶、给实习生报销打车费，从来不卡。”但同一套观察里，前上司也提到：“可他自己的报销单一分钱都算得清清楚楚，该他的绝不少报。”
+
+*前上司:*
+前上司把林默归为一种人：“他是那种规则之内我全力对你、规则之外别麻烦我的人。”上周前上司把林默推荐给朋友的公司，林默谢了他，说先不看机会，想歇一段。
+
+*前任:*
+前任记得他们在一起三年，账是 AA 的，精确到小数点。她描述过一个具体场景：“看电影他买票，我买爆米花，他会记下来，下次让我买票。”她提过意见，林默的回答是：“这样清楚。”
+
+*前任:*
+前任也注意到林默对外人的花钱方式不同。她说：“但他给外人花钱特别爽快，他发小借钱他眼都不眨。”她自己的结论是：“我后来懂了，他不是抠，他是怕跟我算不清——他打算的就是会走。”
+
+*前任:*
+前任最近从朋友圈步数里看到林默的动向。她说：“最近看他朋友圈步数，一天一万多，应该是又开始跑步了。”
+
+#### 2. 第二章：冷下来的火
+
+*发小:*
+前年秋天，几个朋友约好去露营。出发前在楼下装车，林默的女朋友当着大家的面说了他两句难听的。他一句没回，自己蹲在后备箱旁边收拾了半个钟头，谁叫都不理。
+
+*发小:*
+发小后来跟人说起这件事：“他不怎么当众发火，但你能感觉到。”那天在场的人都看得出来，他手上的动作比平时重。
+
+*发小:*
+过了几天，林默才跟发小提起那天的事：“后来他跟我说，他当时气得手抖。”
+
+*前上司:*
+前上司苏总记得另一次。公司评审会上，苏总当着十几个人否了林默的方案。林默全程没说话。会议一散，他直接来找苏总，一条一条把苏总说的驳回，说到最后问了一句：“苏总，您是不是早就定了要换人？”
+
+*前上司:*
+苏总后来总结林默发火的方式：“他发脾气的时候不拍桌子，他是冷下来。”苏总还说，那天晚上林默在楼下坐到十二点。
+
+*前上司:*
+苏总对这件事的看法是：“他这个火，表面上是冲你，根子上是冲他自己。”
+
+*前任:*
+前任的说法不同。她说：“他从不跟我吵架。”两个人最长的一次冷战持续了十九天。
+
+*前任:*
+那十九天里，林默照常做饭、照常上班，就是不说话。前任在客厅哭，他在阳台抽烟，抽完进来说“吃饭了”。
+
+*前任:*
+前任对这段关系的总结是：“你说这算什么？”她认为林默宁愿憋到内伤也不肯把话说开。
+
+#### 3. 第 3 章:q3
+
+*发小:*
+去年秋天的一个晚上，十点刚过，林默出现在发小家楼下。他刚加完班，工装还没换，手里拎着两个纸箱。发小站在单元门口等他，两个人一起把东西搬上六楼。搬完之后，林默没有马上走，他坐在楼道的台阶上，背靠着墙，缓了二十分钟。
+
+*发小:*
+发小说：“去年答应帮我搬家，结果那天他加班到十点还是来了，搬完自己在楼道里坐着缓了二十分钟。”发小还提到，林默答应的事基本都做到，但有个毛病，做不到的时候他不说，硬拖。发小形容他：“他就是这样，宁可自己受罪也不肯说‘我今天不行’。”
+
+*前上司:*
+前上司记得另一件事。有一年 KPI 压下来，林默当着他的面说这个量我们接了，回去在团队里又拍胸脯说“我顶着”。前上司说：“最后两头都得罪，他一个人扛到凌晨三点，第二天还准时开会。”前上司对他的评价是：“他答应的事，基本不用追。”但紧接着补了一句：“但他有个坏习惯——他会答应他做不到的事。”前上司不认为这是诚信问题，他说：“他不是不诚信，他是太想当那个什么都接得住的人。”
+
+*前任:*
+前任的说法从另一面切入。她说：“小事他全记得，我的体检、我爸妈生日、我随口说想吃的店。”但大事上，她的描述是：“大事他全拖。”她举了具体的例子：“买房、见家长、结婚，每一个我提起来他就说‘再等等’。”她还提到一个承诺：“他答应过我三十岁之前结婚，他连‘三十岁’这三个字都不肯接。”她的结论是：“他不是忘了，他是不想承诺。”
+
+#### 4. 第 4 章：q4
+
+*前任:*
+那天晚上，林默坐在客厅沙发上，电视开着，声音调得很低。前任从厨房出来，问他今天怎么样。他说了两个字。
+
+*前任:*
+她说，对外人他话很多，很幽默，朋友都喜欢他。回家他一天说不了十句话。
+
+*前任:*
+她问他今天怎么样，他说“还行”。
+
+*前任:*
+她说，我有时候觉得，我在跟一个合租的室友谈恋爱。
+
+*发小:*
+发小记得的是另一面。他说林默嘴贱，冷幽默，一句话能噎死你。
+
+*发小:*
+但真正的正事他从来不直说。发小说，他妈住院那次，他跟我说“最近有点忙”，过了一个礼拜我才知道老太太做了个手术。
+
+*发小:*
+发小说，他就是这样，越大的事越轻描淡写。
+
+*前上司:*
+前上司记得的是会议室里的林默。他说林默直接，有时候太直接。
+
+*前上司:*
+前上司说，他在会上当着一把手的面说“这个需求是拍脑袋定的”，当场把会议室说安静了。
+
+*前上司:*
+前上司又说，会场下他又特别会照顾人，给每个人留台阶。所以我一直说，他不是不会说话，他是选择在什么时候不说。
+
+#### 5. 第 5 章：q5
+
+*发小:*
+那天晚上在一家小饭馆，林默、发小和前上司三个人坐一桌。服务员端菜慢了，林默朝对方笑了笑，说“不急，你们忙”。发小低头喝水，前上司看着桌面没说话。
+
+*发小:*
+发小说，林默“对服务员特别客气，客气到你尴尬”。发小举了那次点菜的例子：“点菜人家上慢了，他还跟人说‘不急，你们忙’。”
+
+*发小:*
+发小又说：“但对外卖小哥又是另一副样子，有次汤洒了半袋，他把人骂了一顿还投诉。”发小后来自己下了个判断：“我后来想明白了，他不是对谁都好，他是对那种看着比他弱、又不会还嘴的人好。”
+
+*前上司:*
+前上司的说法是：“对服务人员客气。”但他要补一件事：“但我要说个事，他面试的时候会因为一个候选人简历上写错一个数字，直接把人否了，理由是不够严谨。”
+
+*前上司:*
+前上司把这两面放在一起看：“你看，他对眼前的人宽容，对想进这个门的人苛刻。”前上司的结论是：“这不是善良，这是他自己划的一条线。”
+
+*前任:*
+前任说：“对陌生人很好，好到我要吃醋。”她讲了一次崴脚的事：“有一次我崴了脚，他扶我上出租车，司机说不去那个方向，他跟我道歉说‘我们再叫一辆’，跟司机一句重话都没有。”
+
+*前任:*
+前任把这件事讲完，问了一句：“你说他这人是好脾气还是没脾气？”
+
+#### 6. 第 6 章:q6
+
+*发小:*
+发小记得有一段时间联系不上林默。手机不回,微信不看,一个人开车去郊区绕。发小把这种状态概括为"压力大了就消失。"
+
+*发小:*
+发小还提到一次更极端的经历:"有一回他消失了整整两天,我差点报警,他回来跟我说"就想一个人待会儿"。"
+
+*发小:*
+在发小看来,林默不习惯向人开口:"他从来不找人诉苦,除了喝多了会给我发那种五十几秒的语音,第二天又装没这回事。"
+
+*前上司:*
+前上司苏总回忆,林默辞职前的那段时间,他在公司里见过一些迹象:"他裸辞前三周,我看见他一个人在消防楼梯里打电话,声音压得很低,说了很久。"
+
+*前上司:*
+苏总还提到一个数字:"他申请的调休攒了十一天,一天没休。"
+
+*前上司:*
+辞职当天的沟通,苏总记得很清楚:"他辞职那天给我发微信说"苏总,谢谢您这四年",我回了两条他都没回。"
+
+*前上司:*
+苏总对林默离开的方式有自己的判断:"我到现在都觉得,他是撑到不能再撑才走的,但他走的方式,像个逃兵。"
+
+*前任:*
+前任对林默的睡眠状况有直接的观察:"他失眠,整宿整宿。"
+
+*前任:*
+前任描述过夜里的情形:"凌晨三四点我醒着都能听见他刷手机的声音。"
+
+*前任:*
+前任说,林默不向她说明自己的状态:"他从不跟我说他在愁什么,我问他就说工作。"
+
+*前任:*
+关于辞职这件事,前任是从别处得知的:"结果呢?""他把工作也辞了,我是刷朋友圈知道的。"
+
+*前任:*
+分手一年后,前任对这段关系仍有一句未了的话:"分手一年了,我还是觉得他欠我一句实话。"
+
+### Validation
+
+All chapters passed validation.
+
+### Quality Review
+
+Chapter 1: score=92.8, requiresRewrite=false
+  - observerSemantics: 90
+  - speculativeLanguage: 90
+  - sensitiveContent: 95
+  - overPraise: 92
+  - duplication: 95
+  - languageMatch: 95
+  - materialOverlap: 90
+  - validationAlignment: 95
+Chapter 2: score=92.8, requiresRewrite=false
+  - observerSemantics: 90
+  - speculativeLanguage: 90
+  - sensitiveContent: 95
+  - overPraise: 92
+  - duplication: 95
+  - languageMatch: 95
+  - materialOverlap: 90
+  - validationAlignment: 95
+Chapter 3: score=92.8, requiresRewrite=false
+  - observerSemantics: 90
+  - speculativeLanguage: 90
+  - sensitiveContent: 95
+  - overPraise: 92
+  - duplication: 95
+  - languageMatch: 95
+  - materialOverlap: 90
+  - validationAlignment: 95
+Chapter 4: score=92.8, requiresRewrite=false
+  - observerSemantics: 90
+  - speculativeLanguage: 90
+  - sensitiveContent: 95
+  - overPraise: 92
+  - duplication: 95
+  - languageMatch: 95
+  - materialOverlap: 90
+  - validationAlignment: 95
+Chapter 5: score=92.8, requiresRewrite=false
+  - observerSemantics: 90
+  - speculativeLanguage: 90
+  - sensitiveContent: 95
+  - overPraise: 92
+  - duplication: 95
+  - languageMatch: 95
+  - materialOverlap: 90
+  - validationAlignment: 95
+Chapter 6: score=92.8, requiresRewrite=false
+  - observerSemantics: 90
+  - speculativeLanguage: 90
+  - sensitiveContent: 95
+  - overPraise: 92
+  - duplication: 95
+  - languageMatch: 95
+  - materialOverlap: 90
+  - validationAlignment: 95
+
+### Usage (biography only)
+
+Total LLM calls: 7
+Purposes: {"biography-chapter":7}
+
+### Court Usage
+
+```
+(court reused from previous run)
 ```
 
-## Self-assessment
+### Global Usage Summary (biography phase)
 
-**What reads as fake:**
+```
+=== LLM Usage Summary ===
+| Bucket | Calls | Prompt | Completion | Cached |
+|--------|-------|--------|------------|--------|
+| biography-chapter | 7 | 7371 | 5000 | 5632 |
+| **TOTAL** | 7 | 7371 | 5000 | 5632 |
+```
 
-1. All quoted text is fabricated by the LLM. The model invented characters (Marcus, Dale,
-   Renee, Priya, Daniel, Dana) and scenes (Cherry Street workshop, Maple Street house,
-   Portland apartment) that have no basis in the demo testimony data. The validation
-   pipeline correctly caught every instance: 65 failures across 3 chapters.
+### Self-assessment
 
-2. The witness ref IDs (w1, w2, w3) in the LLM's structured output do not match any real
-   witness IDs in the store. This is because the prompt included witness display names but
-   the model generated shorthand IDs instead of using the actual UUIDs.
+**True root cause (first run):** Prompts were entirely in English with placeholder
+witness IDs (`w1/w2/w3`) in the JSON example. The model copied the English
+framing and placeholder IDs verbatim, producing fiction about a woodworker
+named Marcus instead of the Chinese testimony about 林默. The quality review
+gave 92/100 because it only checked for English-specific patterns (omniscient
+narrator phrases, speculative language) and had no language-match, material-
+overlap, or validation-alignment dimensions.
 
-3. Chapter titles came from the LLM ("Chapter 3: The Workshop on Cherry Street",
-   "What They Saw", "What His Friends Saw") rather than the outline's topic labels.
-   The repair retry ran for all 3 chapters (visible in the usage: 3 biography-chapter +
-   3 biography-chapter-repair), meaning the first attempt produced unparseable JSON each time.
+**What was fixed:**
+1. All prompts rewritten in Chinese; JSON examples use `"此处填素材区给出的证人id"` instead of copyable `"w1"`.
+2. Material section in prompt now explicitly lists witness IDs and quotable texts with witness attribution.
+3. Empty-material hard guard added (throws before calling LLM).
+4. Validation normalized for CJK punctuation (ASCII comma vs fullwidth comma, quote style alternation) and substring matching (model may quote a phrase within a longer source sentence).
+5. `extractSentences` limit raised from 5 to 12 (was silently dropping sentences from longer testimony answers).
+6. Quality review gained three new dimensions: `languageMatch` (CJK ratio), `materialOverlap` (bigram overlap), `validationAlignment` (failure count penalty).
+7. Validation-failed chapters get one rewrite attempt, then replaced with explicit failure notice instead of being shown as completed output.
 
-**What works correctly:**
-
-- The pipeline ran end-to-end without crashes.
-- Validation caught all fabricated quotes and unknown witness refs (zero false negatives).
-- Quality review scored 92/100 across all dimensions (no omniscient narrator language,
-  no speculative language, no sensitive terms, no over-praise detected in the generated
-  text -- though the text itself is fabricated, the quality dimensions measured what they
-  should).
-- Budget enforcement worked: the first run (budget=40) correctly blocked biography
-  generation after court exhausted all calls.
-- Conflict detection marked most paragraphs as conflicting accounts, which is aggressive
-  but safe (better to over-flag than under-flag).
-
-**Root cause of fabrication:**
-
-The LLM prompt includes the quotable index (real testimony excerpts), but deepseek-flash
-at this temperature ignores the source material and invents a coherent narrative. A
-stronger model (e.g. claude-sonnet) or a more constrained prompt with explicit "copy
-verbatim from the following list" instructions would improve traceability. The validation
-layer exists precisely to catch this failure mode.
+**Second run result:** All 6 content chapters pass validation. The text is in
+Chinese, about 林默, uses real witness IDs (w-faxiao, w-boss, w-ex), and quotes
+come from actual testimony. 7 LLM calls total (no rewrites needed).
+61 material buckets, 171 quotable entries.

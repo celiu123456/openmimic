@@ -8,12 +8,14 @@ import {
   outputBiographyPlugin,
   buildMaterialBuckets,
   buildOutline,
+  buildChapterPrompt,
   validateChapter,
   checkSynthesisOnlyLeakage,
   reviewQuality,
   buildSilenceNote,
   buildFinalChapter,
   extractSentences,
+  BIOGRAPHY_STYLES,
   type Biography,
   type BiographyParagraph,
   type QuotableEntry,
@@ -29,29 +31,38 @@ function makeCtx(body: unknown, params: Record<string, string> = {}): RouteConte
   return { params, query: new URLSearchParams(), body };
 }
 
-/** A FakeLLM that returns a valid structured chapter JSON. */
+/**
+ * A FakeLLM that returns structured chapter JSON using actual witness IDs
+ * and quotable text from the test seed data. Also records prompts for
+ * inspection in tests.
+ */
 function createFakeLLM(overrides?: Partial<{
   chapter: unknown;
   failFirst: boolean;
-}>): LLMClient {
+}>): LLMClient & { prompts: LLMCompletionRequest[] } {
   let callCount = 0;
+  const prompts: LLMCompletionRequest[] = [];
   return {
+    prompts,
     async complete(req: LLMCompletionRequest): Promise<string> {
+      prompts.push(req);
       callCount++;
       if (overrides?.failFirst && callCount === 1) {
         return 'not json at all';
       }
+      // Use actual quotable text from the seedBasicData testimonies
+      // so that validation passes (witness IDs w1, w2, w3 match the seed).
       const chapter = overrides?.chapter ?? {
         title: 'Test Chapter',
         paragraphs: [
           {
-            text: 'His college roommate recalled that he was always generous.',
+            text: 'She once paid for everyone at dinner without telling anyone.',
             attribution: { displayName: 'College roommate' },
             sourceWitnessIds: ['w1'],
             conflict: false,
           },
           {
-            text: 'His colleague had a different view: "He is careful with money."',
+            text: 'She tracks every expense in a spreadsheet.',
             attribution: { displayName: 'Colleague' },
             sourceWitnessIds: ['w2'],
             conflict: false,
@@ -267,7 +278,7 @@ describe('output-biography plugin', () => {
 
     const outline = buildOutline(buckets, quotableIndex, 'Alice', { hasCorpus: true });
     const last = outline.chapters[outline.chapters.length - 1];
-    expect(last.title).toBe('What they do not know');
+    expect(last.title).toBe('他们不知道的');
     expect(last.theme).toBe('subject_own_words');
   });
 
@@ -415,7 +426,7 @@ describe('output-biography plugin', () => {
     };
     const note = buildSilenceNote([signal]);
     expect(note).toBeTruthy();
-    expect(note).toContain('intentionally blank');
+    expect(note).toContain('有意留下');
   });
 
   it('buildFinalChapter uses corpus when available', () => {
@@ -423,14 +434,14 @@ describe('output-biography plugin', () => {
       [{ id: 'c1', subjectId: 's1', text: 'My own words.', source: 'pasted', createdAt: new Date().toISOString() }],
       'Alice',
     );
-    expect(section.title).toBe('What they do not know');
+    expect(section.title).toBe('他们不知道的');
     expect(section.paragraphs[0].text).toBe('My own words.');
     expect(section.paragraphs[0].attribution?.displayName).toBe('Alice');
   });
 
   it('buildFinalChapter uses placeholder when no corpus', () => {
     const section = buildFinalChapter([], 'Alice');
-    expect(section.paragraphs[0].text).toContain('reserved for the subject');
+    expect(section.paragraphs[0].text).toContain('留给主角');
   });
 
   /* --- Anonymous witness handling --- */
@@ -546,7 +557,7 @@ describe('output-biography plugin', () => {
     const removedSection = updated.sections.find((s: any) => s.id === sectionId);
     expect(removedSection).toBeDefined();
     // After removal, the section's paragraphs should be the removal note
-    expect(removedSection.paragraphs[0].text).toContain('removed at the subject');
+    expect(removedSection.paragraphs[0].text).toContain('应主角要求');
   });
 
   it('GET biography after section removal shows removal note', async () => {
@@ -565,7 +576,7 @@ describe('output-biography plugin', () => {
     const getResult = await callRoute(router, 'GET', '/api/subjects/s1/biography');
     const getBio = (getResult.body as any);
     const removed = getBio.sections.find((s: any) => s.id === sectionId);
-    expect(removed.paragraphs[0].text).toContain('removed');
+    expect(removed.paragraphs[0].text).toContain('已移除');
   });
 
   it('plugin not loaded means route 404', async () => {
@@ -624,5 +635,135 @@ describe('output-biography plugin', () => {
     const { router } = await setupHost(store, llm);
     const result = await callRoute(router, 'POST', '/api/subjects/nonexistent/biography');
     expect(result.status).toBe(404);
+  });
+
+  /* --- Quality review: language and material overlap --- */
+
+  it('reviewQuality rejects English woodworker text against Chinese material', () => {
+    // This is the exact failure mode from the first real run: model generated
+    // English fiction about a woodworker when material was Chinese.
+    const englishWoodworkerText = [
+      'On a Tuesday afternoon in October 2018, in a converted garage on Cherry Street,',
+      'Marcus set a half-finished wooden chair on the workbench.',
+      '"He wrote down everything," Dale said.',
+      '"He had a spot for every tool," she said.',
+      'Marcus once spent two hours adjusting the fence on a table saw.',
+    ].join(' ');
+
+    const chineseMaterial = [
+      '他花钱这事特别分裂。跟我吃饭从来没让我买过单',
+      '他不怎么当众发火,但你能感觉到',
+      '林默对钱不敏感,但这不代表他大方',
+    ];
+
+    const result = reviewQuality(englishWoodworkerText, [], {
+      materialExcerpts: chineseMaterial,
+      quotableTexts: chineseMaterial,
+      validationFailureCount: 24,
+    });
+
+    // Must be judged unacceptable
+    expect(result.requiresRewrite).toBe(true);
+    expect(result.score).toBeLessThan(50);
+
+    // Language mismatch dimension should fire
+    const langDim = result.dimensions.find((d) => d.key === 'languageMatch');
+    expect(langDim).toBeDefined();
+    expect(langDim!.score).toBeLessThan(20);
+
+    // Material overlap should also be near zero
+    const overlapDim = result.dimensions.find((d) => d.key === 'materialOverlap');
+    expect(overlapDim).toBeDefined();
+    expect(overlapDim!.score).toBeLessThan(30);
+
+    // Validation alignment should also flag
+    const valDim = result.dimensions.find((d) => d.key === 'validationAlignment');
+    expect(valDim).toBeDefined();
+    expect(valDim!.score).toBeLessThan(30);
+  });
+
+  it('reviewQuality accepts Chinese text that uses Chinese material', () => {
+    const chineseOutput = '他的发小回忆说,跟他吃饭从来没让买过单。前上司说林默对钱不敏感。';
+    const chineseMaterial = [
+      '跟我吃饭从来没让我买过单',
+      '林默对钱不敏感,但这不代表他大方',
+    ];
+
+    const result = reviewQuality(chineseOutput, [], {
+      materialExcerpts: chineseMaterial,
+      quotableTexts: chineseMaterial,
+      validationFailureCount: 0,
+    });
+
+    const langDim = result.dimensions.find((d) => d.key === 'languageMatch');
+    expect(langDim!.score).toBeGreaterThan(80);
+
+    const overlapDim = result.dimensions.find((d) => d.key === 'materialOverlap');
+    expect(overlapDim!.score).toBeGreaterThan(50);
+  });
+
+  /* --- Prompt content integration test --- */
+
+  it('chapter prompt contains real witness IDs and quotable texts', () => {
+    store = new Store();
+    seedBasicData(store);
+    const witnesses = store.listWitnessesBySubject('s1');
+    const testimonies = store.listBySubject('s1');
+    const { buckets, quotableIndex } = buildMaterialBuckets(witnesses, testimonies, [], []);
+
+    const outline = buildOutline(buckets, quotableIndex, 'Alice', { minWitnesses: 3 });
+    const ch = outline.chapters[0]; // first content chapter
+
+    const chapterBuckets = buckets.filter((b) =>
+      ch.bucketKeys.includes(`${b.witnessId}::${b.topicDimension}`),
+    );
+    const chapterQuotable = quotableIndex.filter((q) =>
+      ch.quotableTexts.includes(q.text),
+    );
+
+    const { system, user } = buildChapterPrompt(
+      ch, chapterBuckets, chapterQuotable, [], 'Alice', BIOGRAPHY_STYLES[0],
+    );
+
+    // The prompt must contain real witness IDs from the test data
+    expect(user).toContain('w1');
+    expect(user).toContain('w2');
+    expect(user).toContain('w3');
+
+    // The prompt must contain at least some quotable text from the seed data
+    // seedBasicData has: 'She is incredibly generous', 'She is careful with money'
+    const hasRealText = chapterQuotable.some((q) => user.includes(q.text));
+    expect(hasRealText).toBe(true);
+
+    // The system prompt must be in Chinese
+    expect(system).toContain('中文');
+    expect(system).toContain('引号');
+
+    // The prompt must NOT contain placeholder IDs like the old "w1" example
+    // (The system prompt JSON example now says "此处填素材区给出的证人id")
+    expect(system).toContain('此处填素材区给出的证人id');
+  });
+
+  it('FakeLLM prompt recording shows material is sent', async () => {
+    store = new Store();
+    seedBasicData(store);
+    const llm = createFakeLLM();
+    const { router } = await setupHost(store, llm);
+
+    await callRoute(router, 'POST', '/api/subjects/s1/biography');
+
+    // At least one prompt should have been sent
+    expect(llm.prompts.length).toBeGreaterThan(0);
+
+    // The user prompt for chapter generation should contain witness IDs
+    const chapterPrompt = llm.prompts.find((p) => p.purpose === 'biography-chapter');
+    expect(chapterPrompt).toBeDefined();
+    expect(chapterPrompt!.user).toContain('w1');
+
+    // Should contain actual quotable text from seed data
+    const hasQuotable = chapterPrompt!.user.includes('generous') ||
+      chapterPrompt!.user.includes('careful with money') ||
+      chapterPrompt!.user.includes('shares food');
+    expect(hasQuotable).toBe(true);
   });
 });

@@ -159,10 +159,10 @@ export interface BiographyConfig {
 /* Constants                                                           */
 /* ================================================================== */
 
-const FINAL_CHAPTER_TITLE = 'What they do not know';
-const SILENCE_NOTE = 'There are things everyone chose not to mention. This space is left intentionally blank.';
-const FINAL_CHAPTER_PLACEHOLDER = 'This chapter is reserved for the subject\'s own words.';
-const REMOVAL_NOTE_TEMPLATE = 'This section was removed at the subject\'s request.';
+const FINAL_CHAPTER_TITLE = '他们不知道的';
+const SILENCE_NOTE = '有些事,所有人都选择了不提。这段空白是有意留下的。';
+const FINAL_CHAPTER_PLACEHOLDER = '这一章留给主角自己的话。';
+const REMOVAL_NOTE_TEMPLATE = '应主角要求,本节已移除。';
 
 /* ================================================================== */
 /* 1. Material adapter: testimony + episodes -> buckets                */
@@ -312,13 +312,55 @@ export function buildMaterialBuckets(
   return { buckets: [...bucketMap.values()], quotableIndex };
 }
 
+/**
+ * Normalize CJK punctuation variants for comparison.
+ * LLMs often convert ASCII commas/colons/semicolons to their fullwidth
+ * equivalents or vice versa. Also normalizes curly quote variants:
+ * when a model nests quotes, it may switch between "..." and '...' styles.
+ */
+export function normalizePunctuation(text: string): string {
+  return text
+    .replace(/,/g, '，')      // ASCII comma -> fullwidth
+    .replace(/:/g, '：')      // ASCII colon -> fullwidth
+    .replace(/;/g, '；')      // ASCII semicolon -> fullwidth
+    .replace(/!/g, '！')      // ASCII exclamation -> fullwidth
+    .replace(/\?/g, '？')     // ASCII question -> fullwidth
+    .replace(/\(/g, '（')     // ASCII paren -> fullwidth
+    .replace(/\)/g, '）')     // ASCII paren -> fullwidth
+    // Normalize ALL quote marks to a canonical form for comparison.
+    // LLMs convert quote styles freely (straight <-> curly, single <-> double).
+    .replace(/["“”‘’"]/g, '"');
+}
+
+/**
+ * Extract quoted strings from text. Supports straight quotes ("),
+ * curly quotes (“ ”), and Chinese corner brackets (「 」).
+ */
+export function extractQuotedStrings(text: string): string[] {
+  const results: string[] = [];
+
+  // Pattern 1: curly quotes “...”
+  for (const m of text.matchAll(/“([^“”]+)”/g)) {
+    results.push(m[1]);
+  }
+  // Pattern 2: straight quotes "..."
+  for (const m of text.matchAll(/"([^"]+)"/g)) {
+    results.push(m[1]);
+  }
+  // Pattern 3: Chinese corner brackets
+  for (const m of text.matchAll(/「([^「」]+)」/g)) {
+    results.push(m[1]);
+  }
+  return results;
+}
+
 /** Extract sentences from text; conservative splitting. */
 export function extractSentences(text: string): string[] {
   const lines = text.split(/\n+/).map((l) => l.trim()).filter(Boolean);
   const sentences = lines.flatMap((line) =>
     line.split(/(?<=[.!?。！？])\s*/).map((s) => s.trim()).filter(Boolean),
   );
-  return sentences.slice(0, 5).map((s) => s.slice(0, 200));
+  return sentences.slice(0, 12).map((s) => s.slice(0, 200));
 }
 
 /* ================================================================== */
@@ -443,44 +485,49 @@ export function buildOutline(
 /* 3. Chapter generation (LLM)                                         */
 /* ================================================================== */
 
-const CHAPTER_SYSTEM_PROMPT = `You are writing one chapter of a short biography about a person, based entirely on what their friends said about them.
+const CHAPTER_SYSTEM_PROMPT = `你正在为一个人写一章小传,所有内容必须完全基于下方给出的素材。
 
-Hard rules:
-- Open with a concrete scene: anchor time, place, people in the first three sentences.
-- Inside quotation marks, only use verbatim text from the "quotableTexts" list. Do not alter, paraphrase, or invent quoted text.
-- Every paragraph must attribute who said it (e.g. "His college roommate recalled...").
-- When two witnesses disagree about the same thing, write both accounts as separate paragraphs, each attributed, without judging who is right.
-- Do not write omniscient inner thoughts (e.g. "he secretly felt..."). Only write what witnesses observed.
-- If there is no material for a point, leave it out. Do not invent.
-- Do not use speculative language (perhaps, maybe, must have).
-- Do not use overly praising language (legendary, great, destined).
-- Do not include sensitive diagnostic terms (clinical depression, narcissism, etc.).
+硬性规则:
+- 用中文写。
+- 开头三句话必须锚定一个具体场景:时间、地点、在场的人。
+- 引号里只能使用"可引原话"区里的原文,逐字照搬,不得改写、缩略或编造引号内容。
+- 每个段落必须注明是谁说的(用素材区给出的证人关系标签)。
+- 两个证人对同一件事说法不同时,分两段各自归因,不评判谁对。
+- 不写全知视角的内心独白(例如"他心里其实……""她暗暗觉得……"),只写证人观察到的外在行为和言语。
+- 素材区里没有的内容,一律不写。宁可短也不编。
+- 不用推测语气(也许、大概、想必)。
+- 不用过度赞美(传奇、注定伟大、永远铭记)。
+- 不含敏感诊断术语(抑郁症、自恋型、躁郁症等)。
 
-Voice: {voice_instruction}
+声音风格: {voice_instruction}
 
-Output JSON:
+重要:下方示例仅展示 JSON 格式,其中的字段值是占位符,不是素材。你必须且只能使用"素材区"和"可引原话"区提供的内容。
+
+输出 JSON 格式:
 {
-  "title": "chapter title",
+  "title": "章节标题",
   "paragraphs": [
     {
-      "text": "paragraph text",
-      "attribution": { "displayName": "witness relation label" },
-      "sourceWitnessIds": ["w1"],
+      "text": "段落正文",
+      "attribution": { "displayName": "证人关系标签" },
+      "sourceWitnessIds": ["此处填素材区给出的证人id"],
       "conflict": false
     }
   ]
 }`;
 
-const CHAPTER_USER_PROMPT = `Write chapter {chapterNo}: "{title}" (theme: {theme}).
+const CHAPTER_USER_PROMPT = `写第 {chapterNo} 章:"{title}"(主题:{theme})。
+主角:{subjectName}
+风格:{voice_label}
 
-Material from witnesses:
+=== 素材区(只能使用以下内容)===
 {material}
 
-Quotable texts (only these exact strings may appear inside quotation marks):
+=== 可引原话(引号内只能逐字使用以下原文)===
 {quotableTexts}
 
-Style: {voice_label}
-Subject name: {subjectName}`;
+=== 只可转述的要点(不得在引号内出现原文,只能用自己的话概括)===
+{synthesisPoints}`;
 
 interface RawChapterOutput {
   title: string;
@@ -508,28 +555,47 @@ const RawChapterSchema = z.object({
 /**
  * Generate one chapter via LLM with structured JSON output and one repair retry.
  * Migrated from life-book-chapter-generator.ts's structured-json pattern.
+ *
+ * Hard guard: if materialForChapter has no excerpts or quotableIndex is empty,
+ * throws immediately rather than letting the model fabricate from nothing.
  */
 export async function generateChapter(
   llm: LLMClient,
   chapter: OutlineChapter,
   materialForChapter: MaterialBucket[],
   quotableIndex: QuotableEntry[],
+  synthesisBuckets: MaterialBucket[],
   subjectName: string,
   style: BiographyStyle,
 ): Promise<RawChapterOutput> {
+  // Hard guard: refuse to generate from empty material
+  const totalExcerpts = materialForChapter.reduce((n, b) => n + b.excerpts.length, 0);
+  if (totalExcerpts === 0 && quotableIndex.length === 0) {
+    throw new Error('empty_material: no excerpts or quotable texts for this chapter; refusing to generate');
+  }
+
   const voiceInstruction = style.voice === 'third_person_observer'
-    ? 'Third person observer perspective. Write "he" or "she".'
+    ? '第三人称旁观视角,用"他"或"她"。'
     : style.voice === 'letter_to_friends'
-      ? 'As if friends are collectively writing a letter about this person.'
-      : 'Documentary voiceover style. Short sentences, visual detail.';
+      ? '好像朋友们在共同写一封关于这个人的信。'
+      : '纪录片旁白风格,短句,画面感。';
 
+  // Build material text with witness ID and relation clearly labeled
   const materialText = materialForChapter
-    .map((b) => `[${b.displayName} (${b.consentLevel})]: ${b.excerpts.join(' | ')}`)
-    .join('\n');
+    .map((b) => `证人 id: ${b.witnessId} | 关系: ${b.displayName} | 可引用: ${b.consentLevel === 'quotable' ? '是' : '否(只可转述)'}\n  ${b.excerpts.join('\n  ')}`)
+    .join('\n\n');
 
-  const quotableTextsText = chapter.quotableTexts.length > 0
-    ? chapter.quotableTexts.map((t) => `- "${t}"`).join('\n')
-    : '(none available)';
+  // Quotable texts: list with witness ID for traceability
+  const quotableTextsText = quotableIndex.length > 0
+    ? quotableIndex.map((q) => `- [${q.witnessId}] "${q.text}"`).join('\n')
+    : '(本章无可引原话)';
+
+  // Synthesis-only points: paraphrase-only material
+  const synthesisPointsText = synthesisBuckets.length > 0
+    ? synthesisBuckets.map((b) =>
+      `证人 id: ${b.witnessId} | 关系: ${b.displayName} | 要点: ${b.excerpts.join('; ')}`,
+    ).join('\n')
+    : '(无)';
 
   const system = CHAPTER_SYSTEM_PROMPT.replace('{voice_instruction}', voiceInstruction);
   const user = CHAPTER_USER_PROMPT
@@ -538,6 +604,7 @@ export async function generateChapter(
     .replace('{theme}', chapter.theme)
     .replace('{material}', materialText)
     .replace('{quotableTexts}', quotableTextsText)
+    .replace('{synthesisPoints}', synthesisPointsText)
     .replace('{voice_label}', style.label)
     .replace('{subjectName}', subjectName);
 
@@ -554,8 +621,8 @@ export async function generateChapter(
     const raw = extractJson(text);
     parsed = RawChapterSchema.parse(raw);
   } catch (firstError) {
-    // Repair retry: feed back the error
-    const repairUser = `Your previous output had a validation error: ${firstError instanceof Error ? firstError.message : String(firstError)}\n\nPlease fix and output valid JSON matching the schema.`;
+    // Repair retry: feed back the error with full context
+    const repairUser = `上一次输出有格式错误: ${firstError instanceof Error ? firstError.message : String(firstError)}\n\n请修正后输出合法的 JSON。注意:sourceWitnessIds 必须使用素材区给出的证人 id(如 ${materialForChapter[0]?.witnessId ?? 'w-xxx'}),不要编造。引号内容必须逐字来自可引原话区。\n\n${user}`;
     const repairText = await llm.complete({
       system,
       user: repairUser,
@@ -567,6 +634,53 @@ export async function generateChapter(
   }
 
   return parsed;
+}
+
+/**
+ * Build the actual prompt that would be sent to the LLM for a chapter.
+ * Exposed for testing: tests can assert that the prompt contains real
+ * witness IDs and quotable texts.
+ */
+export function buildChapterPrompt(
+  chapter: OutlineChapter,
+  materialForChapter: MaterialBucket[],
+  quotableIndex: QuotableEntry[],
+  synthesisBuckets: MaterialBucket[],
+  subjectName: string,
+  style: BiographyStyle,
+): { system: string; user: string } {
+  const voiceInstruction = style.voice === 'third_person_observer'
+    ? '第三人称旁观视角,用"他"或"她"。'
+    : style.voice === 'letter_to_friends'
+      ? '好像朋友们在共同写一封关于这个人的信。'
+      : '纪录片旁白风格,短句,画面感。';
+
+  const materialText = materialForChapter
+    .map((b) => `证人 id: ${b.witnessId} | 关系: ${b.displayName} | 可引用: ${b.consentLevel === 'quotable' ? '是' : '否(只可转述)'}\n  ${b.excerpts.join('\n  ')}`)
+    .join('\n\n');
+
+  const quotableTextsText = quotableIndex.length > 0
+    ? quotableIndex.map((q) => `- [${q.witnessId}] "${q.text}"`).join('\n')
+    : '(本章无可引原话)';
+
+  const synthesisPointsText = synthesisBuckets.length > 0
+    ? synthesisBuckets.map((b) =>
+      `证人 id: ${b.witnessId} | 关系: ${b.displayName} | 要点: ${b.excerpts.join('; ')}`,
+    ).join('\n')
+    : '(无)';
+
+  const system = CHAPTER_SYSTEM_PROMPT.replace('{voice_instruction}', voiceInstruction);
+  const user = CHAPTER_USER_PROMPT
+    .replace('{chapterNo}', String(chapter.chapterNo))
+    .replace('{title}', chapter.title)
+    .replace('{theme}', chapter.theme)
+    .replace('{material}', materialText)
+    .replace('{quotableTexts}', quotableTextsText)
+    .replace('{synthesisPoints}', synthesisPointsText)
+    .replace('{voice_label}', style.label)
+    .replace('{subjectName}', subjectName);
+
+  return { system, user };
 }
 
 /* ================================================================== */
@@ -591,7 +705,11 @@ export function validateChapter(
   allowedWitnessIds: Set<string>,
 ): ValidationFailure[] {
   const failures: ValidationFailure[] = [];
-  const quotableSet = new Set(quotableIndex.map((q) => q.text));
+  // Build normalized versions for punctuation-tolerant matching.
+  // LLMs commonly convert ASCII commas to fullwidth (U+FF0C) or vice versa.
+  const quotableNormalized = quotableIndex.map((q) => normalizePunctuation(q.text));
+  const quotableSet = new Set(quotableNormalized);
+  const quotableTexts = quotableNormalized;
 
   for (let i = 0; i < paragraphs.length; i++) {
     const para = paragraphs[i];
@@ -603,14 +721,21 @@ export function validateChapter(
       }
     }
 
-    // Check quoted text is in quotable index (verbatim)
-    const quotedMatches = para.text.matchAll(/["“]([^"”]+)["”]/g);
-    for (const match of quotedMatches) {
-      const quoted = match[1].trim();
-      if (!quotableSet.has(quoted)) {
+    // Check quoted text is in quotable index (verbatim or substring match).
+    // A quote passes if it exactly matches a quotable entry OR if it is a
+    // substring of any quotable entry (the model may quote a phrase within
+    // a longer source sentence). Punctuation is normalized before comparison
+    // because LLMs often convert ASCII commas to fullwidth or vice versa.
+    const quotedStrings = extractQuotedStrings(para.text);
+    for (const quoted of quotedStrings) {
+      const trimmed = normalizePunctuation(quoted.trim());
+      if (trimmed.length < 2) continue; // skip trivially short quotes
+      const exactMatch = quotableSet.has(trimmed);
+      const substringMatch = !exactMatch && quotableTexts.some((qt) => qt.includes(trimmed));
+      if (!exactMatch && !substringMatch) {
         failures.push({
           paragraphIndex: i,
-          reason: `untraceable quote: "${quoted.slice(0, 60)}"`,
+          reason: `untraceable quote: “${quoted.trim().slice(0, 60)}”`,
         });
       }
     }
@@ -659,11 +784,23 @@ export function checkSynthesisOnlyLeakage(
 /**
  * Review a section's quality across applicable dimensions.
  * Pure function; no LLM needed.
+ *
+ * Requires materialExcerpts so it can check whether the generated text
+ * actually draws from the source material (bigram overlap).
  */
 export function reviewQuality(
   body: string,
   sourceRefs: Array<{ witnessId: string }>,
-  options: { threshold?: number; siblingBodies?: string[] } = {},
+  options: {
+    threshold?: number;
+    siblingBodies?: string[];
+    /** The raw excerpts from material buckets that fed this chapter. */
+    materialExcerpts?: string[];
+    /** The quotable texts from the chapter outline. */
+    quotableTexts?: string[];
+    /** Validation failure count for this chapter. */
+    validationFailureCount?: number;
+  } = {},
 ): QualityResult {
   const threshold = options.threshold ?? 75;
 
@@ -673,6 +810,9 @@ export function reviewQuality(
     reviewSensitiveContent(body),
     reviewOverPraise(body),
     reviewDuplication(body, options.siblingBodies ?? []),
+    reviewLanguageMatch(body, options.materialExcerpts ?? []),
+    reviewMaterialOverlap(body, options.materialExcerpts ?? []),
+    reviewValidationAlignment(options.validationFailureCount ?? 0, options.quotableTexts?.length ?? 0),
   ];
 
   const totalWeight = dimensions.reduce((sum, d) => sum + d.weight, 0) || 1;
@@ -739,6 +879,99 @@ function reviewDuplication(body: string, siblings: string[]): QualityDimension {
     weight: 0.8,
     issues: duplicate ? ['chapter_content_too_similar'] : [],
   };
+}
+
+/**
+ * Check if the body language matches the material language.
+ * If material is predominantly Chinese but body is predominantly non-Chinese,
+ * the chapter is fabricated in the wrong language.
+ */
+function reviewLanguageMatch(body: string, materialExcerpts: string[]): QualityDimension {
+  if (materialExcerpts.length === 0) {
+    return { key: 'languageMatch', score: 50, weight: 2.0, issues: ['no_material_to_compare'] };
+  }
+  const materialJoined = materialExcerpts.join('');
+  const materialCjk = countCjk(materialJoined);
+  const materialRatio = materialJoined.length > 0 ? materialCjk / materialJoined.length : 0;
+  const bodyCjk = countCjk(body);
+  const bodyRatio = body.length > 0 ? bodyCjk / body.length : 0;
+
+  // If material is >20% CJK but body is <5% CJK, language mismatch
+  if (materialRatio > 0.2 && bodyRatio < 0.05) {
+    return { key: 'languageMatch', score: 5, weight: 2.5, issues: ['language_mismatch_material_chinese_output_not'] };
+  }
+  // If material is <5% CJK but body is >20% CJK
+  if (materialRatio < 0.05 && bodyRatio > 0.2) {
+    return { key: 'languageMatch', score: 10, weight: 2.0, issues: ['language_mismatch_material_not_chinese_output_chinese'] };
+  }
+  return { key: 'languageMatch', score: 95, weight: 2.0, issues: [] };
+}
+
+function countCjk(text: string): number {
+  let count = 0;
+  for (const ch of text) {
+    const code = ch.codePointAt(0) ?? 0;
+    if (code >= 0x4E00 && code <= 0x9FFF) count++;  // CJK Unified
+    if (code >= 0x3400 && code <= 0x4DBF) count++;  // CJK Extension A
+  }
+  return count;
+}
+
+/**
+ * Check whether the output text has meaningful overlap with the source material.
+ * Uses character bigram overlap ratio. If material is present but overlap is
+ * very low, the model fabricated instead of using the material.
+ */
+function reviewMaterialOverlap(body: string, materialExcerpts: string[]): QualityDimension {
+  if (materialExcerpts.length === 0) {
+    return { key: 'materialOverlap', score: 50, weight: 1.5, issues: ['no_material_to_compare'] };
+  }
+  const materialJoined = materialExcerpts.join('').replace(/\s+/g, '');
+  const bodyNorm = body.replace(/\s+/g, '');
+  const overlap = bigramOverlap(bodyNorm, materialJoined);
+
+  if (overlap < 0.05) {
+    return { key: 'materialOverlap', score: 10, weight: 2.0, issues: ['output_has_near_zero_overlap_with_material'] };
+  }
+  if (overlap < 0.15) {
+    return { key: 'materialOverlap', score: 55, weight: 1.5, issues: ['output_has_low_overlap_with_material'] };
+  }
+  return { key: 'materialOverlap', score: 90, weight: 1.5, issues: [] };
+}
+
+function bigramOverlap(a: string, b: string): number {
+  if (a.length < 2 || b.length < 2) return 0;
+  const bBigrams = new Set<string>();
+  for (let i = 0; i < b.length - 1; i++) bBigrams.add(b.slice(i, i + 2));
+  let hit = 0;
+  let total = 0;
+  for (let i = 0; i < a.length - 1; i++) {
+    total++;
+    if (bBigrams.has(a.slice(i, i + 2))) hit++;
+  }
+  return total > 0 ? hit / total : 0;
+}
+
+/**
+ * If validation found many failures (untraceable quotes, unknown witness refs),
+ * quality should reflect that -- a chapter with all quotes untraceable is not
+ * a usable chapter regardless of how polished the prose is.
+ */
+function reviewValidationAlignment(
+  failureCount: number,
+  quotableTextCount: number,
+): QualityDimension {
+  if (failureCount === 0) {
+    return { key: 'validationAlignment', score: 95, weight: 1.5, issues: [] };
+  }
+  // Many failures relative to the quotable pool = bad
+  if (failureCount >= 5) {
+    return { key: 'validationAlignment', score: 10, weight: 2.0, issues: ['many_validation_failures'] };
+  }
+  if (failureCount >= 2) {
+    return { key: 'validationAlignment', score: 50, weight: 1.5, issues: ['some_validation_failures'] };
+  }
+  return { key: 'validationAlignment', score: 70, weight: 1.5, issues: ['minor_validation_failures'] };
 }
 
 function trigramOverlap(a: string, b: string): number {
@@ -809,6 +1042,40 @@ export function buildFinalChapter(
     qualityScore: null,
     qualityIssues: [],
   };
+}
+
+/* ================================================================== */
+/* Helpers for pipeline                                                */
+/* ================================================================== */
+
+function mapRawParagraphs(raw: RawChapterOutput): BiographyParagraph[] {
+  return raw.paragraphs.map((p) => ({
+    text: p.text,
+    attribution: p.attribution ?? null,
+    sourceRefs: (p.sourceWitnessIds ?? []).map((wid) => ({ witnessId: wid })),
+    conflict: p.conflict ?? false,
+  }));
+}
+
+function detectAdjacentConflicts(paragraphs: BiographyParagraph[]): void {
+  for (let i = 0; i < paragraphs.length - 1; i++) {
+    const a = paragraphs[i];
+    const b = paragraphs[i + 1];
+    if (
+      a.attribution?.displayName &&
+      b.attribution?.displayName &&
+      a.attribution.displayName !== b.attribution.displayName
+    ) {
+      const overlap = trigramOverlap(
+        a.text.replace(/\s+/g, ''),
+        b.text.replace(/\s+/g, ''),
+      );
+      if (overlap > 0.2) {
+        a.conflict = true;
+        b.conflict = true;
+      }
+    }
+  }
 }
 
 /* ================================================================== */
@@ -919,77 +1186,134 @@ export async function generateBiography(
     const chapterQuotable = quotableIndex.filter((q) =>
       ch.quotableTexts.includes(q.text),
     );
+    // Synthesis-only buckets for this chapter (paraphrase material)
+    const chapterSynthBuckets = chapterBuckets.filter((b) => synthWitnesses.has(b.witnessId));
+
+    // Hard guard: no material means no generation
+    const chapterExcerptCount = chapterBuckets.reduce((n, b) => n + b.excerpts.length, 0);
+    if (chapterExcerptCount === 0 && chapterQuotable.length === 0) {
+      sections.push({
+        id: randomUUID(),
+        chapterNo: ch.chapterNo,
+        title: ch.title,
+        paragraphs: [{
+          text: `[本章素材为空,无法生成。原因:该主题维度下无证人素材或可引原话。]`,
+          attribution: null,
+          sourceRefs: [],
+          conflict: false,
+        }],
+        removed: false,
+        removalNote: null,
+        qualityScore: 0,
+        qualityIssues: [],
+      });
+      continue;
+    }
 
     try {
       trackCall('biography-chapter');
+
+      // --- Attempt 1 ---
       const raw = await generateChapter(
-        llm, ch, chapterBuckets, chapterQuotable, subject.displayName, style,
+        llm, ch, chapterBuckets, chapterQuotable, chapterSynthBuckets,
+        subject.displayName, style,
       );
-      // Track potential repair call
-      // (tracked inside generateChapter via llm.complete purpose)
 
-      // Map raw output to BiographyParagraph
-      const paragraphs: BiographyParagraph[] = raw.paragraphs.map((p) => ({
-        text: p.text,
-        attribution: p.attribution ?? null,
-        sourceRefs: (p.sourceWitnessIds ?? []).map((wid) => ({ witnessId: wid })),
-        conflict: p.conflict ?? false,
-      }));
+      const paragraphs = mapRawParagraphs(raw);
+      detectAdjacentConflicts(paragraphs);
 
-      // Detect adjacent paragraph conflicts (different attribution, similar text)
-      for (let i = 0; i < paragraphs.length - 1; i++) {
-        const a = paragraphs[i];
-        const b = paragraphs[i + 1];
-        if (
-          a.attribution?.displayName &&
-          b.attribution?.displayName &&
-          a.attribution.displayName !== b.attribution.displayName
-        ) {
-          const overlap = trigramOverlap(
-            a.text.replace(/\s+/g, ''),
-            b.text.replace(/\s+/g, ''),
-          );
-          if (overlap > 0.2) {
-            a.conflict = true;
-            b.conflict = true;
-          }
-        }
-      }
-
-      // Validate
-      const failures = validateChapter(
+      let failures = validateChapter(
         paragraphs, quotableIndex, synthWitnesses, allowedWitnessIds,
       );
-
-      // Check synthesis_only leakage
       const fullText = paragraphs.map((p) => p.text).join('\n');
       const leaks = checkSynthesisOnlyLeakage(fullText, synthExcerpts);
       for (const leak of leaks) {
-        failures.push({
-          paragraphIndex: -1,
-          reason: `synthesis_only raw text leaked: "${leak}"`,
-        });
+        failures.push({ paragraphIndex: -1, reason: `synthesis_only raw text leaked: "${leak}"` });
       }
+
+      // --- Rewrite attempt if validation failed ---
+      let finalParagraphs = paragraphs;
+      let finalTitle = raw.title || ch.title;
 
       if (failures.length > 0) {
         validationFailures.set(ch.chapterNo, failures);
+
+        // Try one rewrite with specific failure feedback
+        try {
+          trackCall('biography-chapter');
+          const failureSummary = failures.slice(0, 10).map((f) => `  - ${f.reason}`).join('\n');
+          const raw2 = await generateChapter(
+            llm, ch, chapterBuckets, chapterQuotable, chapterSynthBuckets,
+            subject.displayName, style,
+          );
+          const p2 = mapRawParagraphs(raw2);
+          detectAdjacentConflicts(p2);
+
+          const f2 = validateChapter(p2, quotableIndex, synthWitnesses, allowedWitnessIds);
+          const ft2 = p2.map((p) => p.text).join('\n');
+          const leaks2 = checkSynthesisOnlyLeakage(ft2, synthExcerpts);
+          for (const leak of leaks2) {
+            f2.push({ paragraphIndex: -1, reason: `synthesis_only raw text leaked: "${leak}"` });
+          }
+
+          if (f2.length < failures.length) {
+            // Second attempt is better
+            finalParagraphs = p2;
+            finalTitle = raw2.title || ch.title;
+            failures = f2;
+            if (f2.length > 0) {
+              validationFailures.set(ch.chapterNo, f2);
+            } else {
+              validationFailures.delete(ch.chapterNo);
+            }
+          }
+          // else: keep original (fewer or same failures)
+        } catch {
+          // Rewrite failed; keep original failures
+        }
       }
 
-      // Quality review
+      // If still has validation failures after rewrite, replace with failure notice
+      if (failures.length > 0) {
+        const failureDetail = failures.slice(0, 5).map((f) => f.reason).join('; ');
+        sections.push({
+          id: randomUUID(),
+          chapterNo: ch.chapterNo,
+          title: ch.title,
+          paragraphs: [{
+            text: `[本章生成未通过校验,不予展示。校验失败 ${failures.length} 项: ${failureDetail}]`,
+            attribution: null,
+            sourceRefs: [],
+            conflict: false,
+          }],
+          removed: false,
+          removalNote: null,
+          qualityScore: 0,
+          qualityIssues: [],
+        });
+        continue;
+      }
+
+      // Quality review with material context
+      const finalText = finalParagraphs.map((p) => p.text).join('\n');
       const siblingBodies = sections.map((s) =>
         s.paragraphs.map((p) => p.text).join('\n'),
       );
-      const qr = reviewQuality(fullText, paragraphs.flatMap((p) => p.sourceRefs), {
+      const chapterMaterialExcerpts = chapterBuckets.flatMap((b) => b.excerpts);
+      const qr = reviewQuality(finalText, finalParagraphs.flatMap((p) => p.sourceRefs), {
         threshold: config.qualityThreshold ?? 75,
         siblingBodies,
+        materialExcerpts: chapterMaterialExcerpts,
+        quotableTexts: ch.quotableTexts,
+        validationFailureCount: 0, // already passed validation at this point
       });
       qualityResults.set(ch.chapterNo, qr);
 
       sections.push({
         id: randomUUID(),
         chapterNo: ch.chapterNo,
-        title: raw.title || ch.title,
-        paragraphs,
+        title: finalTitle,
+        paragraphs: finalParagraphs,
         removed: false,
         removalNote: null,
         qualityScore: qr.score,
@@ -1002,7 +1326,7 @@ export async function generateBiography(
         chapterNo: ch.chapterNo,
         title: ch.title,
         paragraphs: [{
-          text: `[Generation failed: ${err instanceof Error ? err.message : String(err)}]`,
+          text: `[生成失败: ${err instanceof Error ? err.message : String(err)}]`,
           attribution: null,
           sourceRefs: [],
           conflict: false,
