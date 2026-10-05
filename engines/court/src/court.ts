@@ -14,7 +14,7 @@ import {
   type Testimony,
   type Witness,
 } from '@openmimic/shared';
-import type { EmbeddingClient, Store } from '@openmimic/kernel';
+import { computeFingerprint, type EmbeddingClient, type Store } from '@openmimic/kernel';
 import {
   EmbeddingClaimPairFinder,
   KeywordClaimPairFinder,
@@ -446,7 +446,10 @@ export async function runCourt(
   });
 
   const witnesses = store.listWitnessesBySubject(subjectId);
-  const allTestimonies = store.listBySubject(subjectId);
+  // Filter out testimonies with medium/high reflux suspicion
+  const allTestimonies = store
+    .listBySubject(subjectId)
+    .filter((t) => t.refluxSuspicion !== 'medium' && t.refluxSuspicion !== 'high');
   const pairedClaimIds = new Set<string>();
 
   const witnessRelationMap = new Map<string, string>();
@@ -626,6 +629,15 @@ export async function runCourt(
     };
     store.putClaim(claim);
     persistedClaims.push(claim);
+  }
+
+  // Register AI fingerprints for reflux detection on claims
+  for (const claim of persistedClaims) {
+    if (claim.text.trim()) {
+      store.putFingerprint(
+        computeFingerprint(`court:claim:${claim.id}`, subjectId, claim.text),
+      );
+    }
   }
 
   /* ---------------------- 2. Pairing ----------------------------------- */

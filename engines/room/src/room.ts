@@ -11,7 +11,7 @@ import {
   type UtteranceAnchor,
   type Witness,
 } from '@openmimic/shared';
-import { UnknownRoomError, type Store } from '@openmimic/kernel';
+import { UnknownRoomError, computeFingerprint, type Store } from '@openmimic/kernel';
 import { RoomRefusedError } from './errors';
 import type { LLMClient, LLMCompletionRequest } from './llm';
 import { classifyUtterance, type WitnessTestimony } from './tier';
@@ -1932,6 +1932,15 @@ export async function runBehindRoom(
     createdAt: now(),
   };
   store.putRoom(room);
+
+  // Register AI fingerprint for reflux detection
+  const roomText = utterances
+    .filter((u) => u.kind === 'speech')
+    .map((u) => u.text)
+    .join(' ');
+  if (roomText.trim()) {
+    store.putFingerprint(computeFingerprint(`room:${room.id}`, subjectId, roomText));
+  }
 
   // Emit stats if the caller requested them
   if (options.onStats) {

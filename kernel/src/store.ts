@@ -29,6 +29,7 @@ import {
 import { EventBus } from './events';
 import { AuthorizationGate } from './gate';
 import { NoAnchorError, NoEvidenceError, UnknownRoomError, UnknownTestimonyError } from './errors';
+import type { AiFingerprint } from './reflux';
 
 /** Store configuration. Defaults to an ephemeral in-memory database. */
 export interface StoreOptions {
@@ -322,6 +323,17 @@ CREATE TABLE IF NOT EXISTS corpus_items (
 );
 
 CREATE INDEX IF NOT EXISTS idx_corpus_items_subject ON corpus_items (subject_id);
+
+CREATE TABLE IF NOT EXISTS ai_fingerprints (
+  artifact_id             TEXT PRIMARY KEY,
+  subject_id              TEXT NOT NULL,
+  minhash_sig             TEXT NOT NULL,
+  synthetic_claim_hashes  TEXT NOT NULL,
+  text_digest             TEXT NOT NULL,
+  created_at              TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_ai_fingerprints_subject ON ai_fingerprints (subject_id);
 `;
 
 /**
@@ -1262,6 +1274,51 @@ export class Store {
       source: row.source,
       createdAt: row.created_at,
     });
+  }
+
+  /* ---------------------------------------------------------------- */
+  /* AI fingerprints — reflux detection                                */
+  /* ---------------------------------------------------------------- */
+
+  /**
+   * Register (upsert) an AI artifact fingerprint for reflux screening.
+   * Called after room/court/biography generation to record what AI produced.
+   */
+  putFingerprint(fp: AiFingerprint): void {
+    this.db
+      .prepare(
+        `INSERT OR REPLACE INTO ai_fingerprints
+           (artifact_id, subject_id, minhash_sig, synthetic_claim_hashes, text_digest, created_at)
+         VALUES (?, ?, ?, ?, ?, ?)`,
+      )
+      .run(
+        fp.artifactId,
+        fp.subjectId,
+        JSON.stringify(fp.minhashSig),
+        JSON.stringify(fp.syntheticClaimHashes),
+        fp.textDigest,
+        new Date().toISOString(),
+      );
+  }
+
+  /**
+   * Retrieve all registered fingerprints for a subject.
+   * Used by reflux screening to compare incoming testimony.
+   */
+  listFingerprints(subjectId: string): AiFingerprint[] {
+    const rows = this.db
+      .prepare<
+        [string],
+        { artifact_id: string; subject_id: string; minhash_sig: string; synthetic_claim_hashes: string; text_digest: string }
+      >('SELECT artifact_id, subject_id, minhash_sig, synthetic_claim_hashes, text_digest FROM ai_fingerprints WHERE subject_id = ?')
+      .all(subjectId);
+    return rows.map((row) => ({
+      artifactId: row.artifact_id,
+      subjectId: row.subject_id,
+      minhashSig: JSON.parse(row.minhash_sig) as number[],
+      syntheticClaimHashes: JSON.parse(row.synthetic_claim_hashes) as string[],
+      textDigest: row.text_digest,
+    }));
   }
 }
 

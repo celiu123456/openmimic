@@ -5,4 +5,5 @@ export * from './events';
 export * from './gate';
 export * from './persona';
 export * from './plugin-host';
+export * from './reflux';
 export * from './store';

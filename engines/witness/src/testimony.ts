@@ -4,10 +4,11 @@ import {
   ConsentLevelSchema,
   TestimonyAnswerSchema,
   detectInjection,
+  type RefluxSuspicion,
   type Testimony,
   type Witness,
 } from '@openmimic/shared';
-import type { Store } from '@openmimic/kernel';
+import { screenReflux, type Store } from '@openmimic/kernel';
 import { resolveInvite } from './invite';
 
 /**
@@ -86,6 +87,13 @@ export function submitTestimony(
   if (parsed.freeText) allTexts.push(parsed.freeText);
   const injectionMatch = allTexts.map(detectInjection).find(Boolean);
 
+  // Screen for AI product reflux (flag, don't reject)
+  const fullText = allTexts.join(' ');
+  const fingerprints = store.listFingerprints(subjectId);
+  const reflux = screenReflux(fullText, fingerprints);
+  const refluxSuspicion: RefluxSuspicion | undefined =
+    reflux.suspicion !== 'none' ? reflux.suspicion : undefined;
+
   const testimony: Testimony = {
     id: testimonyId,
     witnessId,
@@ -96,6 +104,7 @@ export function submitTestimony(
     ...(parsed.avoidedQids !== undefined ? { avoidedQids: [...parsed.avoidedQids] } : {}),
     origin: 'human',
     ...(injectionMatch ? { suspectedInjection: injectionMatch } : {}),
+    ...(refluxSuspicion ? { refluxSuspicion } : {}),
   };
   store.addTestimony(testimony);
 
