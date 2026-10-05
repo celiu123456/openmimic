@@ -245,7 +245,7 @@ export const silenceSignalPlugin: Plugin = {
       }
       const signals = listSignals(subjectId);
       return { status: 200, body: { subjectId, signals } };
-    });
+    }, { scope: 'persona.read' });
 
     /* POST /api/subjects/:id/silence-signals/scan */
     router.post('/api/subjects/:id/silence-signals/scan', (context) => {
@@ -256,7 +256,7 @@ export const silenceSignalPlugin: Plugin = {
       }
       const signals = scan(subjectId);
       return { status: 200, body: { subjectId, signals, count: signals.length } };
-    });
+    }, { scope: 'admin' });
   },
 };
 
