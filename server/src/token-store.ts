@@ -15,6 +15,7 @@ import {
   tokenPrefix,
   hashToken,
   validateScopes,
+  generateInstanceSalt,
   type TokenRecord,
   type TokenCreateResult,
   type TokenListItem,
@@ -42,6 +43,23 @@ CREATE TABLE IF NOT EXISTS api_tokens (
 CREATE INDEX IF NOT EXISTS idx_api_tokens_hash ON api_tokens (hash);
 CREATE INDEX IF NOT EXISTS idx_api_tokens_prefix ON api_tokens (prefix);
 `;
+
+/**
+ * Stores instance-level settings (currently just the token salt).
+ *
+ * The salt is generated once and persisted so that:
+ * 1. Changing the admin password does not invalidate existing tokens.
+ * 2. The salt survives process restarts (tokens remain valid).
+ */
+const SETTINGS_TABLE_SQL = `
+CREATE TABLE IF NOT EXISTS api_settings (
+  key   TEXT PRIMARY KEY,
+  value TEXT NOT NULL
+);
+`;
+
+/** Stable error code returned when a token was hashed with a different salt. */
+export const SALT_MIGRATED_ERROR = 'token_salt_migrated' as const;
 
 /* ------------------------------------------------------------------ */
 /* Row ↔ record mapping                                                */
@@ -100,19 +118,56 @@ export class TokenStore {
   private readonly salt: string;
   private readonly db: ReturnType<typeof getDb>;
 
+  /**
+   * Create a TokenStore.
+   *
+   * The salt is loaded from the database on construction. If no salt exists
+   * yet (fresh instance), one is generated and persisted. The `legacySalt`
+   * parameter (if provided) is only used as a fallback explanation in error
+   * messages -- it is never used for hashing. Tokens created under the old
+   * admin-derived salt will fail to resolve with error code
+   * `token_salt_migrated`.
+   */
   constructor(
     private readonly store: Store,
-    salt: string,
+    _legacySalt?: string,
   ) {
-    this.salt = salt;
     this.db = getDb(store);
     this.ensureTable();
+    this.salt = this.loadOrCreateSalt();
+  }
+
+  /** The instance-level salt (exposed for testing only). */
+  get instanceSalt(): string {
+    return this.salt;
   }
 
   private ensureTable(): void {
     // Use the raw DB handle from the store to create our table.
     // The store exposes execRaw for server-level schema additions.
     this.db.exec(TOKEN_TABLE_SQL);
+    this.db.exec(SETTINGS_TABLE_SQL);
+  }
+
+  /**
+   * Load the persisted salt, or generate and store a new one.
+   *
+   * The salt is stored in the `api_settings` table under the key
+   * `token_salt`. Once written, it never changes -- even if the admin
+   * password is rotated.
+   */
+  private loadOrCreateSalt(): string {
+    const row = this.db
+      .prepare('SELECT value FROM api_settings WHERE key = ?')
+      .get('token_salt') as { value: string } | undefined;
+
+    if (row) return row.value;
+
+    const salt = generateInstanceSalt();
+    this.db
+      .prepare('INSERT INTO api_settings (key, value) VALUES (?, ?)')
+      .run('token_salt', salt);
+    return salt;
   }
 
   /**

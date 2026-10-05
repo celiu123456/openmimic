@@ -41,7 +41,6 @@ import {
 } from './auth';
 import {
   AUTH_ERROR_CODES,
-  deriveTokenSalt,
   type AuthContext,
 } from './scopes';
 import { TokenStore } from './token-store';
@@ -278,9 +277,8 @@ export async function startServer(options: StartServerOptions): Promise<RunningS
   const adminToken = options.adminToken ?? process.env.OPENMIMIC_ADMIN_TOKEN;
   const bindLoopbackOnly = !adminToken;
 
-  // Token store for scoped access tokens
-  const tokenSalt = deriveTokenSalt(adminToken);
-  const tokenStore = new TokenStore(store, tokenSalt);
+  // Token store for scoped access tokens (salt is instance-level, persisted in DB)
+  const tokenStore = new TokenStore(store);
 
   // Rate limiters
   const submitLimiter = new RateLimiter({ maxRequests: 30, windowMs: 60_000 });

@@ -110,18 +110,23 @@ export function hashToken(token: string, salt: string): string {
 }
 
 /**
- * Derive the instance-level salt for token hashing.
+ * Generate a random instance-level salt for token hashing.
  *
- * Uses HMAC-SHA256 of a fixed label keyed by the admin token. When no
- * admin token is set, uses a random value (tokens are session-scoped in
- * that case since there is no persistence across restarts).
+ * The salt is generated once per instance and must be persisted (see
+ * TokenStore). It is independent of the admin token so that changing the
+ * admin password does not invalidate existing scoped tokens.
+ *
+ * @deprecated Use {@link generateInstanceSalt} for new code; this function
+ * is kept for backward compatibility during migration.
  */
-export function deriveTokenSalt(adminToken?: string): string {
-  if (adminToken) {
-    return createHmac('sha256', adminToken)
-      .update('openmimic:token-salt:v1')
-      .digest('hex');
-  }
+export function deriveTokenSalt(_adminToken?: string): string {
+  return randomBytes(32).toString('hex');
+}
+
+/**
+ * Generate a new random salt for first-time instance setup.
+ */
+export function generateInstanceSalt(): string {
   return randomBytes(32).toString('hex');
 }
 
