@@ -8,6 +8,11 @@ import {
   WITNESS_V2_FRIEND,
   pickV2Questionnaire,
 } from './questionnaires/witness-v2';
+import {
+  generateShortCode,
+  normalizeShortCode,
+  SHORT_CODE_MAX_RETRIES,
+} from './short-code';
 
 /** Invites live for two weeks unless the caller asks otherwise. */
 export const DEFAULT_INVITE_TTL_MS = 14 * 24 * 60 * 60 * 1000;
@@ -19,6 +24,8 @@ export const INVITE_TOKEN_BYTES = 16;
 export interface CreatedInvite {
   token: string;
   expiresAt: string;
+  /** 8-character short code alias, if generated. */
+  shortCode?: string;
 }
 
 /** What a valid token resolves to: whose persona, and which questionnaire. */
@@ -48,7 +55,8 @@ export function createInviteToken(): string {
  * Issue a reusable invite for a subject.
  *
  * One token can be pasted into a group chat and answered by several friends,
- * so it is intentionally not consumed on first use.
+ * so it is intentionally not consumed on first use. Now also generates a
+ * short code alias for easier sharing.
  */
 export function createInvite(
   store: Store,
@@ -64,7 +72,22 @@ export function createInvite(
     expiresAt: new Date(now.getTime() + ttlMs).toISOString(),
   };
   store.putInvite(invite);
-  return { token: invite.token, expiresAt: invite.expiresAt };
+
+  // Generate a unique short code with retry
+  let shortCode: string | undefined;
+  for (let attempt = 0; attempt < SHORT_CODE_MAX_RETRIES; attempt++) {
+    const candidate = generateShortCode();
+    if (store.setInviteShortCode(invite.token, candidate)) {
+      shortCode = candidate;
+      break;
+    }
+  }
+
+  return {
+    token: invite.token,
+    expiresAt: invite.expiresAt,
+    ...(shortCode ? { shortCode } : {}),
+  };
 }
 
 /**
@@ -85,6 +108,32 @@ export function resolveInvite(
   const now = options.now ?? new Date();
   if (Date.parse(invite.expiresAt) <= now.getTime()) {
     throw new InviteInvalidError('邀请链接已过期');
+  }
+  return { subjectId: invite.subjectId, questionnaire: FRIEND_V1 };
+}
+
+/**
+ * Resolve a short code to its subject and questionnaire.
+ *
+ * Short codes are case-insensitive and mapped one-to-one to long tokens.
+ * Throws {@link InviteInvalidError} for an unknown or expired short code.
+ */
+export function resolveShortCode(
+  store: Store,
+  code: string,
+  options: ResolveInviteOptions = {},
+): ResolvedInvite {
+  const normalized = normalizeShortCode(code);
+  if (!normalized) {
+    throw new InviteInvalidError('邀请码格式无效');
+  }
+  const invite = store.getInviteByShortCode(normalized);
+  if (!invite) {
+    throw new InviteInvalidError('邀请码无效或已被撤销');
+  }
+  const now = options.now ?? new Date();
+  if (Date.parse(invite.expiresAt) <= now.getTime()) {
+    throw new InviteInvalidError('邀请码已过期');
   }
   return { subjectId: invite.subjectId, questionnaire: FRIEND_V1 };
 }

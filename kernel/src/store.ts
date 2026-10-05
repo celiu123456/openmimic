@@ -154,6 +154,7 @@ interface InviteRow {
   subject_id: string;
   created_at: string;
   expires_at: string;
+  short_code: string | null;
 }
 
 interface RoomRow {
@@ -440,6 +441,17 @@ export class Store {
     if (!columns.includes('reflux_suspicion')) {
       this.db.exec('ALTER TABLE testimonies ADD COLUMN reflux_suspicion TEXT');
     }
+    // Short code alias for invites
+    const inviteColumns = this.db
+      .prepare<[], { name: string }>("SELECT name FROM pragma_table_info('invites')")
+      .all()
+      .map((row) => row.name);
+    if (!inviteColumns.includes('short_code')) {
+      this.db.exec('ALTER TABLE invites ADD COLUMN short_code TEXT');
+      this.db.exec(
+        'CREATE UNIQUE INDEX IF NOT EXISTS idx_invites_short_code ON invites (short_code)',
+      );
+    }
   }
 
   /* ---------------------------------------------------------------- */
@@ -565,6 +577,49 @@ export class Store {
       )
       .all(subjectId)
       .map((row) => this.rowToInvite(row));
+  }
+
+  /**
+   * Look up an invite by its short code alias.
+   * Short codes are case-insensitive (stored uppercase).
+   */
+  getInviteByShortCode(shortCode: string): Invite | undefined {
+    const row = this.db
+      .prepare<[string], InviteRow>(
+        'SELECT * FROM invites WHERE short_code = ?',
+      )
+      .get(shortCode.toUpperCase());
+    return row ? this.rowToInvite(row) : undefined;
+  }
+
+  /**
+   * Assign a short code alias to an existing invite.
+   * Returns false if the code is already taken (unique constraint).
+   */
+  setInviteShortCode(token: string, shortCode: string): boolean {
+    try {
+      const result = this.db
+        .prepare<[string, string]>(
+          'UPDATE invites SET short_code = ? WHERE token = ?',
+        )
+        .run(shortCode.toUpperCase(), token);
+      return result.changes > 0;
+    } catch {
+      // Unique constraint violation -> code already taken
+      return false;
+    }
+  }
+
+  /**
+   * Get the short code for an invite, if one has been assigned.
+   */
+  getInviteShortCode(token: string): string | undefined {
+    const row = this.db
+      .prepare<[string], { short_code: string | null }>(
+        'SELECT short_code FROM invites WHERE token = ?',
+      )
+      .get(token);
+    return row?.short_code ?? undefined;
   }
 
   /* ---------------------------------------------------------------- */

@@ -42,7 +42,16 @@ const FIXED_LINE =
   'TA 看不到你此刻写的内容。说法冲突不用怕——矛盾本身就是信息。';
 
 const route = useRoute();
-const token = computed(() => String(route.params.token ?? ''));
+
+/**
+ * Short code detection: if the URL parameter is 8 uppercase alphanumeric
+ * characters (no 0/O/1/I/L), it is a short code. The actual long token
+ * is resolved at load time and stored here.
+ */
+const SHORT_CODE_PATTERN = /^[A-Za-z0-9]{8}$/;
+const rawParam = computed(() => String(route.params.token ?? ''));
+const resolvedToken = ref('');
+const token = computed(() => resolvedToken.value || rawParam.value);
 
 const phase = ref<Phase>('loading');
 const displayName = ref('');
@@ -116,6 +125,23 @@ async function probeAsr(): Promise<void> {
 async function load(): Promise<void> {
   phase.value = 'loading';
   try {
+    // If it looks like a short code, try resolving it first
+    if (SHORT_CODE_PATTERN.test(rawParam.value) && rawParam.value.length === 8) {
+      try {
+        const resolved = await api.resolveShortCode(rawParam.value);
+        if (resolved.token) {
+          resolvedToken.value = resolved.token;
+          displayName.value = resolved.subjectDisplayName;
+          questionnaire.value = resolved.questionnaire;
+          draft.value = loadDraft(sessionStorage, token.value) ?? emptyDraft();
+          phase.value = canStart(draft.value) ? 'questions' : 'opening';
+          void probeAsr();
+          return;
+        }
+      } catch {
+        // Fall through to try as a regular token
+      }
+    }
     const invite = await api.fetchInvite(token.value);
     displayName.value = invite.subjectDisplayName;
     questionnaire.value = invite.questionnaire;

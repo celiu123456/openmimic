@@ -37,6 +37,37 @@ export interface CreatedInvitePayload {
   token: string;
   url: string;
   expiresAt: string;
+  shortCode?: string;
+  shortUrl?: string;
+}
+
+/** What resolving a short code returns. */
+export interface ShortCodePayload {
+  subjectDisplayName: string;
+  questionnaire: Questionnaire;
+  token: string;
+}
+
+/** Coverage summary for the inviter dashboard. */
+export interface DimensionCoveragePayload {
+  dimensionId: string;
+  label: string;
+  state: 'untouched' | 'shallow' | 'covered' | 'cautious';
+  witnessCount: number;
+  hasConcreteExample: boolean;
+  hearsayOnly: boolean;
+}
+
+export interface CoveragePayload {
+  subjectId: string;
+  dimensions: DimensionCoveragePayload[];
+  totalWitnesses: number;
+  relationTypes: string[];
+}
+
+export interface CoverageResponse {
+  coverage: CoveragePayload;
+  relationAdvice?: { message: string; missingTypes: string[] };
 }
 
 export interface ProgressPayload {
@@ -183,6 +214,10 @@ export interface ApiClient {
   finishInterview(sessionId: string, payload: SubmitPayload): Promise<SubmitResult>;
   /** Trigger the court (requires LLM). */
   runCourt(subjectId: string): Promise<CourtSessionPayload>;
+  /** Resolve a short code to the long token and invite info. */
+  resolveShortCode(code: string): Promise<ShortCodePayload>;
+  /** Get coverage overview for a subject. */
+  getCoverage(subjectId: string): Promise<CoverageResponse>;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -317,6 +352,14 @@ export function createApiClient(options: ApiClientOptions = {}): ApiClient {
       request<CourtSessionPayload>(
         `/api/subjects/${encodeURIComponent(subjectId)}/court`,
         { method: 'POST' },
+      ),
+
+    resolveShortCode: (code) =>
+      request<ShortCodePayload>(`/api/i/${encodeURIComponent(code)}`),
+
+    getCoverage: (subjectId) =>
+      request<CoverageResponse>(
+        `/api/subjects/${encodeURIComponent(subjectId)}/coverage`,
       ),
   };
 }

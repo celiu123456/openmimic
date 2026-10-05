@@ -12,3 +12,5 @@ export * from './questionnaires/friend-v1';
 export * from './questionnaires/witness-v2';
 export * from './retreat';
 export * from './testimony';
+export * from './coverage';
+export * from './short-code';

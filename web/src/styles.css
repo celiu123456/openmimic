@@ -501,3 +501,49 @@ html, body {
 @media (min-width: 46rem) {
   .contrast-grid { grid-template-columns: 1fr 1fr; gap: 2rem; }
 }
+
+/* ------------------------------------------------------------------ */
+/* Inviter: short code & coverage panel                                */
+/* ------------------------------------------------------------------ */
+
+.short-code {
+  font-size: 1.5rem;
+  font-weight: 600;
+  letter-spacing: 0.2em;
+}
+.coverage-panel {
+  margin-top: 2.2rem;
+  padding-top: 1.4rem;
+  border-top: 1px solid var(--line);
+}
+.coverage-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0.45rem;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.coverage-item {
+  display: flex;
+  align-items: center;
+  gap: 0.8rem;
+  padding: 0.55rem 0.9rem;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--panel);
+  font-size: 0.88rem;
+}
+.coverage-dim { flex: 1; }
+.coverage-state {
+  display: inline-block;
+  padding: 0.15rem 0.6rem;
+  border-radius: 999px;
+  font-size: 0.76rem;
+  font-weight: 500;
+}
+.state-untouched { background: rgba(138, 146, 161, 0.15); color: var(--muted); }
+.state-shallow { background: rgba(215, 168, 110, 0.18); color: var(--accent); }
+.state-covered { background: rgba(134, 196, 173, 0.18); color: #86c4ad; }
+.state-cautious { background: rgba(217, 139, 122, 0.18); color: var(--danger); }
+.coverage-meta { color: var(--muted); font-size: 0.76rem; white-space: nowrap; }

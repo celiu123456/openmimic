@@ -1,7 +1,13 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref } from 'vue';
 import { useRouter } from 'vue-router';
-import { ApiError, api, type RoomPayload } from '../api';
+import {
+  ApiError,
+  api,
+  type RoomPayload,
+  type CoverageResponse,
+  type DimensionCoveragePayload,
+} from '../api';
 import { rememberSubjectName, subjectNameFor } from '../room';
 
 /**
@@ -23,10 +29,14 @@ const displayName = ref('');
 const subjectName = ref('');
 const subjectId = ref('');
 const token = ref('');
+const shortCode = ref('');
 const testimonyCount = ref(0);
 const rooms = ref<RoomPayload[]>([]);
+const coverage = ref<DimensionCoveragePayload[]>([]);
+const relationAdvice = ref('');
 const busy = ref(false);
 const copied = ref(false);
+const copiedShort = ref(false);
 const error = ref('');
 const demoBusy = ref(false);
 const demoNote = ref('');
@@ -41,6 +51,9 @@ let timer: ReturnType<typeof setInterval> | null = null;
 
 const link = computed(() =>
   token.value === '' ? '' : `${window.location.origin}/i/${token.value}`,
+);
+const shortLink = computed(() =>
+  shortCode.value === '' ? '' : `${window.location.origin}/i/${shortCode.value}`,
 );
 const canOpenRoom = computed(
   () => subjectId.value !== '' && testimonyCount.value >= ROOM_THRESHOLD,
@@ -71,6 +84,7 @@ async function refreshProgress(): Promise<void> {
     // Transient polling failures are not worth an error banner.
   }
   await refreshRooms();
+  await refreshCoverage();
 }
 
 function stopPolling(): void {
@@ -101,10 +115,12 @@ async function create(): Promise<void> {
     subjectId.value = subject.id;
     subjectName.value = name;
     token.value = invite.token;
+    shortCode.value = invite.shortCode ?? '';
     localStorage.setItem(SUBJECT_KEY, subject.id);
     localStorage.setItem(TOKEN_KEY, invite.token);
     rememberSubjectName(localStorage, subject.id, name);
     await refreshProgress();
+    void refreshCoverage();
     startPolling();
   } catch {
     error.value = '创建失败，请稍后再试。';
@@ -122,6 +138,29 @@ async function copy(): Promise<void> {
     }, 2000);
   } catch {
     error.value = '复制失败，请手动长按选中链接。';
+  }
+}
+
+async function copyShort(): Promise<void> {
+  try {
+    await navigator.clipboard.writeText(shortLink.value);
+    copiedShort.value = true;
+    window.setTimeout(() => {
+      copiedShort.value = false;
+    }, 2000);
+  } catch {
+    error.value = '复制失败，请手动长按选中链接。';
+  }
+}
+
+async function refreshCoverage(): Promise<void> {
+  if (subjectId.value === '') return;
+  try {
+    const result = await api.getCoverage(subjectId.value);
+    coverage.value = result.coverage.dimensions;
+    relationAdvice.value = result.relationAdvice?.message ?? '';
+  } catch {
+    // Coverage is optional — swallow errors silently.
   }
 }
 
@@ -280,8 +319,30 @@ onBeforeUnmount(stopPolling);
       <div class="row" style="margin-top: 0.8rem">
         <button type="button" class="btn" @click="copy">{{ copied ? '已复制' : '复制链接' }}</button>
       </div>
+      <div v-if="shortCode !== ''" style="margin-top: 1rem">
+        <span class="label">短码（口头传达更方便）</span>
+        <p class="link short-code">{{ shortCode }}</p>
+        <p class="muted small">{{ shortLink }}</p>
+        <div class="row" style="margin-top: 0.4rem">
+          <button type="button" class="btn" @click="copyShort">{{ copiedShort ? '已复制' : '复制短链' }}</button>
+        </div>
+      </div>
       <p class="progress-line" style="margin-top: 1.6rem">已收到 {{ testimonyCount }} 份讲述</p>
       <p class="muted small">每 10 秒自动刷新一次。</p>
+    </section>
+
+    <section v-if="coverage.length > 0" class="coverage-panel">
+      <span class="label">维度覆盖</span>
+      <p v-if="relationAdvice" class="muted small" style="margin-bottom: 0.8rem">{{ relationAdvice }}</p>
+      <ul class="coverage-list">
+        <li v-for="dim in coverage" :key="dim.dimensionId" class="coverage-item">
+          <span class="coverage-dim">{{ dim.label }}</span>
+          <span :class="['coverage-state', `state-${dim.state}`]">
+            {{ { untouched: '未触及', shallow: '浅层', covered: '已覆盖', cautious: '需谨慎' }[dim.state] }}
+          </span>
+          <span class="coverage-meta">{{ dim.witnessCount }} 人提及</span>
+        </li>
+      </ul>
     </section>
 
     <section v-if="subjectId !== ''" class="room-panel">
