@@ -146,6 +146,8 @@ resp = client.chat.completions.create(
 **已实现并借鉴:**
 
 - conviction 置信分的思路、`contested` 状态命名、`contested` 否决流(contest/uncontest + re-raise)、论断权限墙(诊断词/危机词过滤)、危机词熔断思路借鉴自 [衔枝 Twig](https://github.com/qimingjiu/twig-memory)(MIT)。本项目将其从「单 AI 对一个人的纵向理解审计」扩展为「多信源证言之间的横向对质」,代码为全新实现;对照与范围见其 [ATTRIBUTION.md](https://github.com/qimingjiu/twig-memory/blob/main/ATTRIBUTION.md)。
+- 危机协议三原则(Twig §7):词表预扫描(多语言扩展)、危机模式系统提示词(温暖/陪伴/不推开/不编造热线号码)、静态帮助资源兜底、危机静默期、零缓存路径、访谈安全信号分支、审计表(仅时间+类型,不记原文)。已实现于 GateEngine 插件层 + 服务端聊天入口;Room 引擎的危机词拒绝是先前独立实现。
+- 过程评测三指标(Twig §6 化用):证据覆盖三元素版(支撑/反面/情境)、矛盾响应(12 场景 × 8 行为类型)、记忆修复(6 个旧态取代场景)。已有代码框架和 FakeLLM 结构测试;未接真模型运行,账簿标"未运行:等真人数据"。
 - DEPLOY-FOR-AI 的 onboarding 做法学自衔枝。
 
 论断配对(跨证人找语义相关论断,用 LLM / embedding / 关键词三级回落)是本项目自有机制,不是衔枝反证搜索的实现。
@@ -153,7 +155,6 @@ resp = client.chat.completions.create(
 **计划借鉴(尚未实现):**
 
 - 反证搜索(对既有论断先生成反面假设、再检索反证并强制回应)、盲推导审计同源自衔枝设计文档。
-- 过程评测三指标(证据覆盖/矛盾响应/记忆修复)为衔枝设计文档 §6 在证言场景下的计划化用;当前 CourtReport 仅实现 evidenceCoverage。
 
 **参照项目:**
 
@@ -198,6 +199,9 @@ resp = client.chat.completions.create(
 - 访谈员 v2:9 意图分类、退缩检测(5 类)、证据基础标注(4 类)、质量门(去重/单问题/防提前结束)、反机械追问
 - 留一证人(LOWO)评测 + 对照臂(baseline/claims-stripped/episodes-stripped)
 - 当面房间防泄密:no-talk list(LLM 生成 + 规则兜底) + 两级泄密检测 + guided rewrite(最多两次)
+- 危机协议(GateEngine + 聊天入口):词表预扫描(中英日韩)、危机模式系统提示词(温暖/陪伴/不推开)、静态帮助资源(不编造热线)、10 分钟静默期、零缓存路径、访谈安全信号分支、审计表(仅时间+类型)
+- 回流指纹增强:两层筛查(MinHash + 稀有短语/数字/专有名词匹配 + 可选 LLM 确认);四级检测(原文/轻改写/重改写/无关)
+- 过程评测框架:证据覆盖三元素版 + 矛盾响应 12 场景 × 8 行为类型 + 记忆修复 6 场景;FakeLLM 结构测试通过,未接真模型
 
 ### 计划
 
