@@ -23,9 +23,16 @@ const port = Number(process.env.PORT ?? DEFAULT_PORT);
 mkdirSync(dirname(DATABASE_PATH), { recursive: true });
 
 const store = new Store({ path: DATABASE_PATH });
+const adminToken = process.env.OPENMIMIC_ADMIN_TOKEN;
 const server = await startServer({ port, store });
 
-console.log(`openmimic collection API listening on ${server.url}`);
+if (!adminToken) {
+  console.log(
+    `openmimic collection API listening on ${server.url} (loopback only -- set OPENMIMIC_ADMIN_TOKEN to bind 0.0.0.0)`,
+  );
+} else {
+  console.log(`openmimic collection API listening on http://0.0.0.0:${server.port}`);
+}
 
 const shutdown = (): void => {
   void server.close().finally(() => {
