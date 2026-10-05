@@ -265,6 +265,7 @@ export const mountRestPlugin: Plugin<MountRestConfig> = {
           sessionId: started.sessionId,
           question: started.question,
           total: collector.questionnaire.questions.length,
+          ...(started.opening ? { opening: started.opening } : {}),
         },
       };
     }, { open: true });
@@ -575,8 +576,15 @@ export const mountRestPlugin: Plugin<MountRestConfig> = {
         throw new HttpError(400, 'asr_no_audio', 'No audio data received');
       }
       const input = await normalizeAudioInput(raw, context.contentType ?? '');
-      const text = await transcribeAudio(input, asr);
-      return { status: 200, body: { text } };
+      const result = await transcribeAudio(input, asr);
+      return {
+        status: 200,
+        body: {
+          text: result.text,
+          lowConfidence: result.lowConfidence,
+          confidence: result.confidence,
+        },
+      };
     }, { open: true });
   },
 };

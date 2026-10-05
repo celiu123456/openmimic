@@ -364,13 +364,35 @@ export const InterviewSessionStateSchema = z.object({
    * here. When absent, the default questionnaire order is used. Added in v3.
    */
   questionOrder: z.array(z.string().min(1)).optional(),
+  /**
+   * Latest navigator memo: structured stocktake generated every N answers.
+   * Influences follow-up generation and next-question selection as a soft
+   * signal. Never enters testimony or court. Added in v3.
+   */
+  navigatorMemo: z.unknown().optional(),
+  /**
+   * How many navigator memo calls have been spent. The budget is separate
+   * from followupCount but both count toward the session's total LLM budget.
+   * Added in v3.
+   */
+  navigatorCallCount: z.number().int().nonnegative().optional(),
+  /**
+   * Whether the witness has been shown the opening expectation line.
+   * Added in v3.
+   */
+  openingShown: z.boolean().optional(),
+  /**
+   * Consecutive short-answer count for graceful closing detection.
+   * Reset on a substantive answer. Added in v3.
+   */
+  consecutiveShortAnswers: z.number().int().nonnegative().optional(),
 });
 export type InterviewSessionState = z.infer<typeof InterviewSessionStateSchema>;
 
 /** One step of the interview, as handed back to a caller. */
 export type InterviewStep =
   | { followup: string }
-  | { question: WitnessQuestion; index: number }
+  | { question: WitnessQuestion; index: number; closingSuggested?: boolean }
   | { done: true };
 
 export interface NewInterviewState {
@@ -427,9 +449,13 @@ export function isFinished(
 export function stepOf(
   state: InterviewSessionState,
   questions: readonly WitnessQuestion[],
+  options?: { closingSuggested?: boolean },
 ): InterviewStep {
   const question = questionAt(state, questions);
-  return question ? { question, index: state.index } : { done: true };
+  if (!question) return { done: true };
+  return options?.closingSuggested
+    ? { question, index: state.index, closingSuggested: true }
+    : { question, index: state.index };
 }
 
 function withTimestamps(

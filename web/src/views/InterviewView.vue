@@ -41,6 +41,15 @@ const RELATIONS = ['朋友', '同事', '家人', '其他'];
 const FIXED_LINE =
   'TA 看不到你此刻写的内容。说法冲突不用怕——矛盾本身就是信息。';
 
+/**
+ * v3: whether the server suggested the witness may want to stop early.
+ * Shown as a gentle hint, not a forced exit.
+ */
+const closingSuggested = ref(false);
+
+/** v3: opening expectation line from the server. */
+const openingExpectation = ref('');
+
 const route = useRoute();
 
 /**
@@ -159,6 +168,7 @@ async function ensureSession(): Promise<void> {
   try {
     const started = await api.startInterview(token.value);
     draft.value = { ...draft.value, sessionId: started.sessionId };
+    if (started.opening) openingExpectation.value = started.opening;
   } catch (caught) {
     if (
       caught instanceof ApiError &&
@@ -239,6 +249,7 @@ function applyStep(step: InterviewStepPayload): void {
   followup.value = '';
   followupQid.value = '';
   followupDraft.value = '';
+  closingSuggested.value = false;
   if ('followup' in step) {
     followup.value = step.followup;
     followupQid.value = current.value?.qid ?? '';
@@ -249,6 +260,9 @@ function applyStep(step: InterviewStepPayload): void {
     return;
   }
   draft.value = { ...draft.value, currentIndex: step.index };
+  if (step.closingSuggested) {
+    closingSuggested.value = true;
+  }
 }
 
 function markCommitted(): void {
@@ -441,6 +455,9 @@ onMounted(() => {
     <p class="eyebrow">写给 {{ displayName }}</p>
     <h1 class="name">{{ displayName }}</h1>
     <p class="quote">{{ FIXED_LINE }}</p>
+    <p v-if="openingExpectation" class="muted" style="font-size: 0.88rem; margin-top: 0.6rem">
+      {{ openingExpectation }}
+    </p>
     <div>
       <span class="label">你们是什么关系？</span>
       <div class="relations">
@@ -555,6 +572,15 @@ onMounted(() => {
     </section>
 
     <p v-if="stepError" class="error small">{{ stepError }}</p>
+
+    <div v-if="closingSuggested && !followup" class="closing-hint">
+      <p class="muted" style="font-size: 0.88rem; margin-bottom: 0.5rem">
+        聊得差不多了,可以提前提交已经回答的部分。
+      </p>
+      <button type="button" class="btn ghost" @click="phase = 'submit'">
+        提前提交
+      </button>
+    </div>
 
     <div class="nav">
       <div class="inner">

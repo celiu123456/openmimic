@@ -6,6 +6,7 @@ export * from './interview';
 export * from './interview-state';
 export * from './invite';
 export * from './llm';
+export * from './navigator';
 export * from './plugin';
 export * from './privacy';
 export * from './questionnaires/friend-v1';

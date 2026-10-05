@@ -90,8 +90,10 @@ describe('api client', () => {
 
   it('uploads audio with the blob content type and returns the transcript', async () => {
     const { api, calls } = makeClient(() => jsonResponse({ text: '她总是提前买单。' }));
-    const text = await api.transcribe(new Blob(['bytes'], { type: 'audio/webm' }));
-    expect(text).toBe('她总是提前买单。');
+    const result = await api.transcribe(new Blob(['bytes'], { type: 'audio/webm' }));
+    expect(result.text).toBe('她总是提前买单。');
+    expect(result.lowConfidence).toBe(false);
+    expect(result.confidence).toBe(1);
     const headers = calls[0]?.init?.headers as Record<string, string> | undefined;
     expect(headers?.['content-type']).toBe('audio/webm');
   });
