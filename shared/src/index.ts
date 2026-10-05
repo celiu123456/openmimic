@@ -5,5 +5,6 @@ export * from './prompt/guards';
 export * from './prompt/render';
 export * from './prompt/untrusted';
 export * from './provider-error';
+export * from './qr';
 export * from './sanitize';
 export * from './schemas';

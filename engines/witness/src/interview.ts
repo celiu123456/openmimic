@@ -13,6 +13,7 @@ import { WITNESS_V2_QUESTIONNAIRES } from './questionnaires/witness-v2';
 import { classifyIntent } from './input-intent';
 import { detectRetreat } from './retreat';
 import { classifyBasis } from './basis';
+import { computeCoverage, planQuestions } from './coverage';
 import {
   INTERVIEW_SESSION_TTL_MS,
   InterviewSessionStateSchema,
@@ -108,6 +109,13 @@ export interface InterviewOptions {
   now?: () => Date;
   /** Id factory, injectable for deterministic tests. */
   newId?: () => string;
+  /**
+   * When true, the planner computes dimension coverage from prior testimonies
+   * and reorders questions so gaps are asked first. The resulting order is
+   * fixed at session start (session fixation). Defaults to false — turning
+   * it off gives the exact same linear behaviour as before.
+   */
+  adaptiveCoverage?: boolean;
 }
 
 /* ------------------------------------------------------------------ */
@@ -236,12 +244,41 @@ export function startInterview(
     ? resolved.questionnaire
     : (WITNESS_V2_QUESTIONNAIRES[qId] ?? resolved.questionnaire);
   const sessionId = (options.newId ?? (() => randomUUID()))();
+
+  // Adaptive coverage: compute a planned question order based on prior
+  // testimonies. The order is fixed at session start (session fixation).
+  let questionOrder: string[] | undefined;
+  if (options.adaptiveCoverage) {
+    const testimonies = store.listBySubject(resolved.subjectId);
+    const witnesses = store.listWitnessesBySubject(resolved.subjectId);
+    const allQuestionnaires = Object.values(WITNESS_V2_QUESTIONNAIRES);
+    const coverage = computeCoverage(
+      resolved.subjectId,
+      testimonies,
+      witnesses,
+      allQuestionnaires,
+    );
+    // Determine the witness's relation type. If the invite carries a
+    // default relation we could use it here; for now derive from the
+    // questionnaire id (friend/family/colleague).
+    const relation = qId.includes('family')
+      ? 'family'
+      : qId.includes('colleague')
+        ? 'colleague'
+        : 'friend';
+    const planned = planQuestions(coverage, relation, questionnaire);
+    questionOrder = planned.map((p) => p.question.qid);
+  }
+
   const state = createInterviewState({
     token,
     subjectId: resolved.subjectId,
     questionnaireId: questionnaire.id,
     now,
   });
+  if (questionOrder) {
+    state.questionOrder = questionOrder;
+  }
   store.putInterviewSession({
     id: sessionId,
     inviteToken: token,
@@ -276,13 +313,20 @@ export async function answerQuestion(
 
   const targetQid = parsed.qid ?? questionAt(state, questions)?.qid;
   if (targetQid === undefined) throw new InterviewStateError('这一场访谈已经结束了');
-  const targetIndex = questions.findIndex((question) => question.qid === targetQid);
+  // Find the question object in the questionnaire by qid
+  const questionObj = questions.find((q) => q.qid === targetQid);
+  if (!questionObj) throw new InterviewStateError(`未知的题目:${targetQid}`);
+  // Compute the progress index: in custom order mode, use the position in
+  // questionOrder; otherwise, the position in the questionnaire.
+  const targetIndex = state.questionOrder
+    ? state.questionOrder.indexOf(targetQid)
+    : questions.findIndex((q) => q.qid === targetQid);
   if (targetIndex < 0) throw new InterviewStateError(`未知的题目:${targetQid}`);
   if (state.pending && (parsed.qid === undefined || parsed.qid === state.pending.qid)) {
     throw new InterviewStateError('正在等待追问的回答');
   }
 
-  const target = questions[targetIndex] as WitnessQuestion;
+  const target = questionObj;
   const existing = state.answers.find((answer) => answer.qid === targetQid);
   const movingForward = targetIndex >= state.index;
 

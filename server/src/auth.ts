@@ -16,6 +16,7 @@ const OPEN_PREFIXES = [
   '/api/health',
   '/api/invites/',   // resolve invite, submit testimony, start interview
   '/api/interview/', // interview session (answer, followup, finish)
+  '/api/i/',         // short code invite resolution
   '/api/asr',        // speech -- gated by its own config, not auth
 ];
 

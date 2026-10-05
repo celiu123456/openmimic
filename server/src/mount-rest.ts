@@ -18,8 +18,14 @@ import {
   AnswerQuestionInputSchema,
   FinishInterviewInputSchema,
   SubmitTestimonyInputSchema,
+  computeCoverage,
+  adviseRelationGaps,
+  resolveShortCode,
+  WITNESS_V2_QUESTIONNAIRES,
+  WITNESS_V2_FRIEND,
   type WitnessCollector,
 } from '@openmimic/engine-witness';
+import { RateLimiter } from './auth';
 import { DEMO_SUBJECT_ID } from '../../fixtures/limo';
 import { redactForExternal, withholdSynthesisOnly } from './external';
 import {
@@ -111,6 +117,14 @@ export const mountRestPlugin: Plugin<MountRestConfig> = {
           token: invite.token,
           url: publicUrl ? `${publicUrl}${invitePath}` : invitePath,
           expiresAt: invite.expiresAt,
+          ...(invite.shortCode
+            ? {
+                shortCode: invite.shortCode,
+                shortUrl: publicUrl
+                  ? `${publicUrl}/i/${invite.shortCode}`
+                  : `/i/${invite.shortCode}`,
+              }
+            : {}),
         },
       };
     });
@@ -122,6 +136,30 @@ export const mountRestPlugin: Plugin<MountRestConfig> = {
       return {
         status: 200,
         body: { subjectDisplayName: subject.displayName, questionnaire: resolved.questionnaire },
+      };
+    });
+
+    /* Short code resolution — stricter rate limit against guessing */
+    const shortCodeLimiter = new RateLimiter({ maxRequests: 10, windowMs: 60_000 });
+
+    router.get('/api/i/:code', (context) => {
+      const code = context.params.code ?? '';
+      if (!shortCodeLimiter.check(`shortcode:${code.toUpperCase()}`)) {
+        throw new HttpError(429, 'rate_limited', '请求过于频繁，请稍后再试');
+      }
+      const resolved = resolveShortCode(store, code);
+      const subject = store.getSubject(resolved.subjectId);
+      if (!subject) throw new HttpError(404, 'subject_not_found', '当事人不存在');
+      // Return the same shape as the long token resolve, plus the long token
+      // so the client can switch to the token-based flow for the interview.
+      const invite = store.getInviteByShortCode(code.toUpperCase());
+      return {
+        status: 200,
+        body: {
+          subjectDisplayName: subject.displayName,
+          questionnaire: resolved.questionnaire,
+          token: invite?.token,
+        },
       };
     });
 
@@ -174,6 +212,24 @@ export const mountRestPlugin: Plugin<MountRestConfig> = {
           testimonyCount: store.listBySubject(subjectId).length,
           witnessCount: store.listWitnessesBySubject(subjectId).length,
         },
+      };
+    });
+
+    /* Coverage overview for the inviter page */
+
+    router.get('/api/subjects/:id/coverage', (context) => {
+      const subjectId = context.params.id ?? '';
+      if (!store.getSubject(subjectId)) {
+        throw new HttpError(404, 'subject_not_found', '当事人不存在');
+      }
+      const testimonies = store.listBySubject(subjectId);
+      const witnesses = store.listWitnessesBySubject(subjectId);
+      const questionnaires = Object.values(WITNESS_V2_QUESTIONNAIRES);
+      const coverage = computeCoverage(subjectId, testimonies, witnesses, questionnaires);
+      const relationAdvice = adviseRelationGaps(witnesses);
+      return {
+        status: 200,
+        body: { coverage, relationAdvice },
       };
     });
 

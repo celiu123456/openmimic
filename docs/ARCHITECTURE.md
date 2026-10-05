@@ -155,7 +155,8 @@ kernel/           microkernel (store, persona, plugin-host, gate, config, reflux
 engines/
   court/          CourtEngine plugin (filing, pairing, relation, conviction)
   room/           RoomEngine plugin (behind/front dual-mode rooms)
-  witness/        WitnessEngine plugin (testimony collection, invites, interview, basis)
+  witness/        WitnessEngine plugin (testimony collection, invites, interview, basis,
+                  coverage scheduling, short invite codes)
                   Interview strategy migrated from the author's earlier platform project.
   graph/          (planned) GraphEngine
   gate/           (planned) GateEngine as independent engine
@@ -193,6 +194,55 @@ room opened
   → behind mode: witnesses discuss subject
   → openDoor: subject enters, tone shifts
 ```
+
+## Interview subsystem
+
+### Coverage-aware scheduling (engines/witness/src/coverage.ts)
+
+Cross-witness topic coverage tracking, migrated from the author's earlier
+elder-life-topic platform and rewritten as "one subject x ten observer
+dimensions x multiple witnesses".
+
+- **computeCoverage()**: pure function. Scans all testimonies for one subject,
+  classifies each observer dimension as `untouched | shallow | covered | cautious`.
+  - `untouched`: no witness has answered any question in this dimension.
+  - `shallow`: at least one answer exists but none contains concrete detail
+    (measured by `hasConcreteDetail()`, 40-character threshold).
+  - `covered`: at least one answer with concrete first-hand detail.
+  - `cautious`: dimension where avoidance exceeds actual answers
+    (`avoidCount >= 2 && avoidCount > witnessCount`).
+- **planQuestions()**: given a coverage snapshot, a witness's relation type,
+  and a questionnaire, outputs `PlannedQuestion[]` sorted by priority:
+  priority (untouched/shallow) > normal > saturated (covered with >= 3
+  witnesses) > cautious. A `minQuestions` floor (default 5) prevents
+  over-trimming. When `respectCautious` is true (default), cautious
+  dimensions are placed last rather than removed.
+- **adviseRelationGaps()**: recommends which relation types (friend/family/
+  colleague) are underrepresented in the current witness pool.
+
+### Session fixation
+
+When `InterviewOptions.adaptiveCoverage` is true, `startInterview()` calls
+the planner and stores the resulting qid order in `state.questionOrder`.
+All subsequent steps (answer, followup, finish) follow this fixed order.
+When the option is false (default), the questionnaire's natural order is
+used and existing behaviour is unchanged.
+
+### Short invite codes (engines/witness/src/short-code.ts)
+
+8-character case-insensitive codes from a 30-character unambiguous alphabet
+(excludes 0/O/1/I/L). Generated with `crypto.randomInt` for uniform
+distribution. Stored in the `invites` table (`short_code` column, unique
+index). A stricter in-memory rate limiter (10 requests per minute per code)
+protects `GET /api/i/:code` against guessing.
+
+### API routes
+
+| Method | Path | Auth | Purpose |
+|--------|------|------|---------|
+| GET | `/api/i/:code` | open | Resolve short code to invite |
+| GET | `/api/subjects/:id/coverage` | admin | Coverage overview for inviter page |
+| POST | `/api/subjects/:id/invites` | admin | Create invite (now returns `shortCode` + `shortUrl`) |
 
 ## Expression and disclosure discipline
 
