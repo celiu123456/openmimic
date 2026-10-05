@@ -7,8 +7,8 @@
 
 OpenMimic is a persona simulation engine. You feed it testimony from people
 who know someone, and it builds a persona you can talk to. It runs as a local
-Node.js server with a SQLite database -- no cloud account, no Docker, no
-external services required.
+Node.js server with a SQLite database -- no cloud account, no external
+services required. Docker and systemd deployment are both supported.
 
 Two interfaces: an HTTP API (with an OpenAI-compatible `/v1/chat/completions`
 endpoint) and an MCP stdio server (for AI coding agents).
@@ -25,15 +25,11 @@ endpoint) and an MCP stdio server (for AI coding agents).
 
 ```bash
 # 1. Clone
-git clone https://github.com/anthropics/openmimic.git
+git clone https://github.com/celiu123456/openmimic.git
 cd openmimic
 
 # 2. Install dependencies
 npm install
-
-# 3. Approve native modules (better-sqlite3, esbuild)
-npm approve-scripts better-sqlite3
-npm approve-scripts esbuild
 ```
 
 Expected: no errors. If `better-sqlite3` fails to build, you need a C++
@@ -47,7 +43,7 @@ npx tsx server/src/main.ts
 
 Expected output:
 ```
-openmimic collection API listening on http://127.0.0.1:7860
+openmimic collection API listening on http://127.0.0.1:7860 (loopback only -- set OPENMIMIC_ADMIN_TOKEN to bind 0.0.0.0)
 ```
 
 Verify:
@@ -66,28 +62,44 @@ Override the port with:
 PORT=3000 npx tsx server/src/main.ts
 ```
 
+## Environment variables
+
+| Variable | Required | Description |
+|----------|----------|-------------|
+| `OPENMIMIC_ADMIN_TOKEN` | For public deploy | Protects management routes. Without it, server binds 127.0.0.1 only |
+| `LLM_BASE_URL` | For court/room | Any OpenAI-compatible API base URL |
+| `LLM_API_KEY` | For court/room | API key for the LLM provider |
+| `LLM_MODEL` | For court/room | Model name (e.g. `deepseek-chat`) |
+| `OPENMIMIC_PUBLIC_URL` | For public deploy | Full URL for invite links (e.g. `https://your.domain`) |
+| `OPENMIMIC_DB` | No | SQLite path (default: `data/openmimic.db`) |
+| `PORT` | No | Listen port (default: 7860) |
+
+## Access control
+
+When `OPENMIMIC_ADMIN_TOKEN` is set:
+- The server binds to `0.0.0.0` (all interfaces)
+- Management routes (create subject, view testimonies, run court, rooms, export, etc.) require `Authorization: Bearer <token>` header, `_token=<token>` cookie, or `?_token=<token>` query parameter
+- Invite/interview routes (friend path) are open -- the invite token is the auth
+- The `/v1/*` OpenAI-compatible endpoint requires the admin token
+- The MCP stdio server has no HTTP surface; protect it at the host level
+
+When `OPENMIMIC_ADMIN_TOKEN` is NOT set:
+- The server binds to `127.0.0.1` only (loopback)
+- All routes are open (safe for local use)
+
 ## Experience without an API key
 
-The MCP server auto-seeds an empty database with a demo persona: Lin Mo
-(林默), built from pre-written testimony. You can:
+An empty database auto-seeds a demo persona (Lin Mo / 林默). Open
+`http://localhost:7860` in a browser to:
 
-1. **List personas** -- no key needed
-2. **Read a persona's system prompt** -- no key needed
-3. **Run a behind-the-scenes room** -- returns pre-computed demo transcript
-4. **Use the OpenAI-compatible endpoint** -- needs an API key (see below)
+1. Walk into Lin Mo's room (pre-generated transcript)
+2. Create a new subject and share the invite link
+3. Submit testimony through the interview form
 
-Test the MCP server directly:
+Court, room generation, and meta-perception scoring need an LLM.
+Those endpoints return 501 with a clear message when unconfigured.
 
-```bash
-echo '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2024-11-05","capabilities":{},"clientInfo":{"name":"test","version":"1.0.0"}}}
-{"jsonrpc":"2.0","method":"notifications/initialized"}
-{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"persona_list","arguments":{}}}' \
-  | OPENMIMIC_DB=/tmp/openmimic-test.db npx tsx server/src/mcp/main.ts
-```
-
-Expected: JSON responses including `{"personas":[{"id":"limo","displayName":"林默","claimCount":5}]}`.
-
-## Configure an API key (for persona_speak and chat)
+## Configure an LLM
 
 Create `.env` in the repo root (it is gitignored):
 
@@ -102,36 +114,110 @@ EOF
 Any OpenAI-compatible endpoint works (OpenAI, DeepSeek, Groq, local Ollama,
 etc.). Restart the server after creating `.env`.
 
-Now `persona_speak` and `/v1/chat/completions` will work.
+## Deploy with Docker
+
+```bash
+# Build
+docker build -t openmimic .
+
+# Run
+docker run -d --name openmimic \
+  -p 7860:7860 \
+  -v openmimic-data:/app/data \
+  -e OPENMIMIC_ADMIN_TOKEN=your-secret \
+  -e LLM_BASE_URL=https://api.example.com/v1 \
+  -e LLM_API_KEY=sk-xxx \
+  -e LLM_MODEL=your-model \
+  -e OPENMIMIC_PUBLIC_URL=https://your.domain \
+  openmimic
+
+# Or with docker compose
+docker compose up -d
+```
+
+## Deploy without Docker (systemd)
+
+```bash
+# 1. Install Node.js 22+, clone repo, npm install
+# 2. Build the web frontend
+npm run build:web
+
+# 3. Create systemd unit
+sudo tee /etc/systemd/system/openmimic.service << 'EOF'
+[Unit]
+Description=OpenMimic Persona Engine
+After=network.target
+
+[Service]
+Type=simple
+User=openmimic
+WorkingDirectory=/opt/openmimic
+Environment=PORT=7860
+Environment=OPENMIMIC_DB=/opt/openmimic/data/openmimic.db
+Environment=OPENMIMIC_ADMIN_TOKEN=your-secret
+Environment=LLM_BASE_URL=https://api.example.com/v1
+Environment=LLM_API_KEY=sk-xxx
+Environment=LLM_MODEL=your-model
+Environment=OPENMIMIC_PUBLIC_URL=https://your.domain
+ExecStart=/usr/bin/npx tsx server/src/main.ts
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
+EOF
+
+sudo systemctl daemon-reload
+sudo systemctl enable --now openmimic
+```
+
+### Reverse proxy (nginx)
+
+```nginx
+server {
+    listen 443 ssl;
+    server_name your.domain;
+
+    ssl_certificate     /etc/letsencrypt/live/your.domain/fullchain.pem;
+    ssl_certificate_key /etc/letsencrypt/live/your.domain/privkey.pem;
+
+    location / {
+        proxy_pass http://127.0.0.1:7860;
+        proxy_set_header Host $host;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+    }
+}
+```
+
+HTTPS is required for production: invite links are shared via messaging apps,
+and browsers block clipboard access on non-HTTPS pages.
 
 ## Connect to your AI agent
 
 ### Option A: MCP (for Claude Code, dsh, OpenClaw, Cursor, etc.)
-
-See `integrations/mcp/README.md` for the generic MCP host config, or
-`integrations/dsh/` / `integrations/openclaw/` for agent-specific setup.
 
 The MCP server command is:
 ```
 npx tsx server/src/mcp/main.ts
 ```
 
+See `integrations/mcp/README.md` for the generic MCP host config.
+
 ### Option B: OpenAI-compatible endpoint
 
-Point any OpenAI SDK client at `http://127.0.0.1:7860/v1`. The model name
-in the request selects a persona by subject id:
+Point any OpenAI SDK client at `http://127.0.0.1:7860/v1`. When
+`OPENMIMIC_ADMIN_TOKEN` is set, pass it as the API key:
 
 ```bash
 curl http://127.0.0.1:7860/v1/chat/completions \
   -H "Content-Type: application/json" \
+  -H "Authorization: Bearer your-admin-token" \
   -d '{
     "model": "limo",
     "messages": [{"role": "user", "content": "Hey, what have you been up to?"}]
   }'
 ```
-
-No API key is required for the local endpoint itself; it calls the upstream
-LLM configured in `.env`.
 
 ## Common issues
 
@@ -139,21 +225,10 @@ LLM configured in `.env`.
 |---------|-------|-----|
 | `better-sqlite3` build fails | Missing C++ toolchain | Install `build-essential` (Linux) or Xcode CLT (macOS) |
 | `EADDRINUSE` on startup | Port 7860 already in use | Set `PORT=7861` or kill the other process |
-| `persona_speak` returns "服务器未配置语言模型" | No `.env` or missing `LLM_API_KEY` | Create `.env` with LLM variables (see above) |
-| MCP server exits immediately | stdin closed | MCP server reads from stdin; pipe input or use an MCP host |
+| 501 on court/room | No LLM configured | Create `.env` with LLM variables |
+| 401 on management routes | Missing admin token | Add `Authorization: Bearer <token>` header |
+| Invite link is relative | `OPENMIMIC_PUBLIC_URL` not set | Set it to the full public URL |
 | `tsx: not found` | `npx` cannot find tsx | Run `npm install` first; tsx is a devDependency |
-
-## File layout
-
-```
-openmimic/
-  server/src/main.ts          HTTP server entry point
-  server/src/mcp/main.ts      MCP stdio server entry point
-  data/openmimic.db            SQLite database (auto-created)
-  fixtures/limo.ts             Demo persona seed data
-  integrations/                Agent-specific setup guides
-  .env                         Your LLM credentials (gitignored)
-```
 
 ## Type check and test
 

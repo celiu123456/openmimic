@@ -1,6 +1,6 @@
 # README 声明逐条审计
 
-> 生成时间:2026-10-05 · 基线:main(350 测试)
+> 生成时间:2026-10-06 · 基线:main(484 测试)
 
 状态说明:
 - **已实现**:有代码路径,有测试覆盖
@@ -42,7 +42,7 @@
 
 | 声明 | 状态 | 代码依据 | 备注 |
 |---|---|---|---|
-| docker compose up -d | 计划 | — | 仓库根目录无 docker-compose.yml 或 Dockerfile |
+| docker compose up -d | 已实现 | `Dockerfile` · `docker-compose.yml` | P4 新增;未在本机实测(无 Docker) |
 | 打开 http://localhost:7860 | 已实现 | `server/src/main.ts:22-23` | 默认端口 7860 |
 | 内置演示房间(虚构人物林默) | 已实现 | `fixtures/limo.ts` · `server/src/server.ts:703-704` | 空库自动 seed,无 API Key 也可体验 |
 
@@ -123,7 +123,7 @@
 | 论断权限墙(借鉴衔枝) | 已实现 | `engines/gate/src/gate.ts`(validateClaimText/filterSessionClaims) | 独立 GateEngine:诊断词/危机词(>=20 个)命中→论断自动 retired |
 | 危机协议三原则(借鉴衔枝) | 部分 | `engines/room/src/wordlist.ts` · `engines/room/src/room.ts:365-370` | 危机词拒绝开房;诊断词重写/降级;但"三原则"整体未完整体现 |
 | 过程评测三指标(证据覆盖/矛盾响应/记忆修复)(借鉴衔枝) | 部分 | `shared/src/schemas.ts:162-172`(CourtReport.evidenceCoverage 等) | evidenceCoverage 在 CourtReport 中;challengeCount 可视为矛盾响应代理指标;但"记忆修复"无对应 |
-| DEPLOY-FOR-AI 做法(借鉴衔枝) | 计划 | — | 仓库中不存在 docs/DEPLOY-FOR-AI.md |
+| DEPLOY-FOR-AI 做法(借鉴衔枝) | 已实现 | `docs/DEPLOY-FOR-AI.md` | P4 更新,含 Docker / systemd / 反向代理 / 访问控制 |
 | BettaFish ForumEngine 工程范式(参照) | — | — | 致谢条目,非功能声明 |
 | MiroFish 组织级群体模拟(对位参照) | — | — | 致谢条目,非功能声明 |
 
@@ -195,6 +195,6 @@ divergences 段落已占满 6000 字符预算,episodes 是第一个被砍的段�
 
 | 状态 | 条数 |
 |---|---|
-| 已实现 | 42 |
+| 已实现 | 44 |
 | 部分 | 4 |
-| 计划 | 10 |
+| 计划 | 8 |

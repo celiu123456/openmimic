@@ -1,6 +1,6 @@
 # OpenMimic
 
-> **状态:早期开发中(v0.0.2-p3),下表为逐项实现状态** — 详见 [docs/claims-audit.md](docs/claims-audit.md)
+> **状态:早期开发中(v0.0.2-p4),下表为逐项实现状态** — 详见 [docs/claims-audit.md](docs/claims-audit.md)
 
 **通用人格仿真引擎:复刻任何人,预演万局。**
 
@@ -25,20 +25,22 @@
 ## 快速开始
 
 ```bash
-git clone https://github.com/<org>/openmimic.git
+git clone https://github.com/celiu123456/openmimic.git
 cd openmimic
 npm install
-npm run dev
+npx tsx server/src/main.ts
 # 打开 http://localhost:7860
 ```
 
-**不需要任何 API Key 即可体验**:内置一个预制演示房间(虚构人物与预生成证言),房间、推门、证据链全流程可玩。要让人格真正开口对话,在 `.env` 填一个任意 OpenAI 兼容接口:
+**不需要任何 API Key 即可体验**:内置一个预制演示房间(虚构人物与预生成证言),房间、推门、证据链全流程可玩;也可以当场创建新的被复刻者、生成邀请链接、填写证言。要让法庭和房间真正运行,在 `.env` 填一个任意 OpenAI 兼容接口:
 
 ```env
 LLM_BASE_URL=https://api.your-provider.com/v1
 LLM_API_KEY=sk-xxx
 LLM_MODEL=your-model
 ```
+
+**公网部署**:设置 `OPENMIMIC_ADMIN_TOKEN` 环境变量启用访问控制(管理操作需口令,朋友凭邀请链接填写证言)。详见 [docs/DEPLOY-FOR-AI.md](docs/DEPLOY-FOR-AI.md)。也提供 Dockerfile 和 docker-compose.yml。
 
 把人格当模型调用:
 
@@ -149,7 +151,7 @@ resp = client.chat.completions.create(
 
 - 反证搜索、盲推导审计、contested 否决流、论断权限墙同源自衔枝设计文档。
 - 过程评测三指标(证据覆盖/矛盾响应/记忆修复)为衔枝设计文档 §6 在证言场景下的计划化用;当前 CourtReport 仅实现 evidenceCoverage。
-- DEPLOY-FOR-AI 的 onboarding 做法学自衔枝,当前仓库中 `docs/DEPLOY-FOR-AI.md` 尚不存在。
+- DEPLOY-FOR-AI 的 onboarding 做法学自衔枝。
 
 **参照项目:**
 
@@ -183,7 +185,5 @@ resp = client.chat.completions.create(
 - 插件市场
 - OpenClaw skill、dsh bundle
 - 社区人格包分发机制
-- DEPLOY-FOR-AI 文档
 - 反证搜索、盲推导审计
 - 过程评测三指标完整实现
-- docker compose 部署
