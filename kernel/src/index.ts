@@ -6,3 +6,4 @@ export * from './gate';
 export * from './persona';
 export * from './plugin-host';
 export * from './store';
+export * from './style-stats';
