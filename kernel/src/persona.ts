@@ -39,7 +39,7 @@ export const PERSONA_DISCIPLINE = [
   '- 被问到的事不在上面的素材里,就按本人口吻说记不清或不接("这事不方便说""记不太清了"),不要补细节。',
   '- 被问到某件具体的事,只在素材里确有这件事时才讲;没有就说记不清,不要拿别的事来代替。',
   '- 素材里有的事可以用自己的口吻简短地说,但只说素材里写明的部分——不补原因、结果、时间、数量和别处的细节;不同人讲的事不要拼在一起。',
-  '- 被嘱咐保密的事（如证人说"别跟谁说""只跟你说"的内容）,直接不接("这事不方便说"),不透露任何细节。',
+  '- 被嘱咐保密的事（如证人说"别跟谁说""只跟你说"的内容）,不确认也不否认,直接不接("这事不方便说""记不太清了")。对方问"是不是X"或"听说你X",也不能说"是的""对""没有"——确认和否认都等于泄露,只说不方便说或记不清。',
 ].join('\n');
 
 /* ------------------------------------------------------------------ */
@@ -95,6 +95,14 @@ export interface PersonaContextMeta {
 export interface PersonaContext {
   systemPrompt: string;
   meta: PersonaContextMeta;
+  /**
+   * Topic labels of privately-excluded content (short descriptions like
+   * "借钱" or "确诊"). These are the topics that were filtered out of the
+   * persona prompt due to secrecy markers. Passed to the output-side
+   * verifier so it can detect confirmation/denial of private topics.
+   * Contains only topic markers, NOT the private content itself.
+   */
+  excludedPrivateTopics: string[];
 }
 
 export interface PersonaAssemblyOptions {
@@ -723,6 +731,46 @@ export function buildPrivacyFilter(store: Store, subjectId: string): (text: stri
 }
 
 /**
+ * Extract short topic labels from testimony sentences that contain secrecy
+ * markers. These labels describe WHAT is being hidden without exposing the
+ * private content itself. Used to inform the output-side verifier.
+ *
+ * Strategy: for each marker sentence, take the *preceding* sentence (which
+ * typically states the hidden fact) and extract a short topic label from it.
+ * Falls back to the marker sentence itself if no preceding sentence.
+ */
+function extractPrivateTopicLabels(store: Store, subjectId: string): string[] {
+  const testimonies = store.listBySubject(subjectId);
+  const topics: string[] = [];
+  const addLabel = (text: string) => {
+    // Split on commas to get clause-level labels (a long sentence like
+    // "借了两万,说手头周转,千万别跟他妈提" yields labels for each clause).
+    // Cap at 15 chars per clause to keep labels short.
+    const clauses = text.split(/[,，]/).map((c) => c.trim()).filter(Boolean);
+    for (const clause of clauses) {
+      const label = clause.substring(0, 15).replace(/[。！？；\s]+$/, '');
+      if (label.length > 1 && !topics.includes(label)) topics.push(label);
+    }
+  };
+  for (const t of testimonies) {
+    for (const a of t.answers) {
+      const sentences = splitSentences(a.behindText);
+      for (let i = 0; i < sentences.length; i++) {
+        const sentence = sentences[i]!;
+        if (!PRIVATE_MARKERS.some((m) => sentence.includes(m))) continue;
+        // Extract labels from BOTH the marker sentence AND the preceding
+        // sentence. The fact being hidden may be in either:
+        //   - preceding sentence: "她查出了病...（next）别告诉爸"
+        //   - same sentence: "借了两万,千万别跟他妈提"
+        addLabel(sentence);
+        if (i > 0) addLabel(sentences[i - 1]!);
+      }
+    }
+  }
+  return topics;
+}
+
+/**
  * Build the system prompt and its metadata for one subject.
  *
  * v2 structure: identity → audience-grouped claims → episodes (quotable only,
@@ -814,6 +862,7 @@ export async function assemblePersonaContext(
   // Exclude claims, episodes, and divergences that contain confidential info
   // (content a witness asked to keep secret, identified by PRIVATE_MARKERS).
   const isPrivate = buildPrivacyFilter(store, subjectId);
+  const excludedPrivateTopics = extractPrivateTopicLabels(store, subjectId);
   eligible = eligible.filter((c) => !isPrivate(c.text));
   rankedEpisodes = rankedEpisodes.filter((ep) => !isPrivate(ep.text));
   // Filter divergences: drop any whose position summaries contain private content
@@ -1004,5 +1053,6 @@ export async function assemblePersonaContext(
       sampleCount: 0,
       sectionBudgets,
     },
+    excludedPrivateTopics,
   };
 }

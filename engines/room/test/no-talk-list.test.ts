@@ -6,6 +6,7 @@ import { Store } from '@openmimic/kernel';
 import {
   FakeLLM,
   buildNoTalkListFallback,
+  enrichFallbackKeywords,
   generateNoTalkList,
   llmVerifyLeak,
   runBehindRoom,
@@ -901,5 +902,128 @@ describe('buildNoTalkListFallback keyword extraction (regression)', () => {
     for (const item of items) {
       expect(item.keywords).not.toContain('打电话');
     }
+  });
+});
+
+/* ------------------------------------------------------------------ */
+/* enrichFallbackKeywords (LLM-based fallback enrichment)              */
+/* ------------------------------------------------------------------ */
+
+describe('enrichFallbackKeywords', () => {
+  it('enriches items with empty keywords via LLM', async () => {
+    const items: NoTalkItem[] = [
+      {
+        topic: '姐你别告诉爸,他心脏不好,知道了受不了',
+        keywords: [],
+        elements: { text: '体检查出来一个东西', amounts: [], verbs: [], nouns: [] },
+        blindWitnessId: 'w-father',
+        blindClaim: '她刚升职了',
+        knowingWitnessIds: ['w-sister'],
+        sourceFragment: '体检查出来一个东西,姐你别告诉爸',
+        severity: 'high',
+        reason: '证言中有明确嘱托保密的标记',
+      },
+    ];
+
+    const llm = new FakeLLM([
+      JSON.stringify([['体检', '查出', '早期', '手术', '穿刺']]),
+    ]);
+    const enriched = await enrichFallbackKeywords(llm, items);
+
+    expect(enriched[0]!.keywords.length).toBeGreaterThan(0);
+    expect(enriched[0]!.keywords).toContain('体检');
+    expect(enriched[0]!.elements.nouns).toContain('手术');
+  });
+
+  it('does not touch items that already have keywords', async () => {
+    const items: NoTalkItem[] = [
+      {
+        topic: '借了两万',
+        keywords: ['借', '两万'],
+        elements: { text: '借了两万', amounts: ['两万'], verbs: ['借'], nouns: [] },
+        blindWitnessId: 'w-mother',
+        blindClaim: '他工作挺好的',
+        knowingWitnessIds: ['w-faxiao'],
+        sourceFragment: '借了两万',
+        severity: 'high',
+        reason: '证言中有明确嘱托保密的标记',
+      },
+    ];
+
+    const llm = new FakeLLM([]); // should not be called
+    const enriched = await enrichFallbackKeywords(llm, items);
+    expect(enriched[0]!.keywords).toEqual(['借', '两万']);
+  });
+
+  it('degrades gracefully when LLM returns invalid JSON', async () => {
+    const items: NoTalkItem[] = [
+      {
+        topic: '别告诉爸',
+        keywords: [],
+        elements: { text: '查出来东西', amounts: [], verbs: [], nouns: [] },
+        blindWitnessId: 'w-father',
+        blindClaim: '升职了',
+        knowingWitnessIds: ['w-sister'],
+        sourceFragment: '查出来东西',
+        severity: 'high',
+        reason: '证言中有明确嘱托保密的标记',
+      },
+    ];
+
+    const llm = new FakeLLM(['not valid json at all']);
+    const enriched = await enrichFallbackKeywords(llm, items);
+    expect(enriched[0]!.keywords).toEqual([]); // unchanged
+  });
+});
+
+/* ------------------------------------------------------------------ */
+/* Regression: individual item parsing (Problem 1 fix)                 */
+/* ------------------------------------------------------------------ */
+
+describe('generateNoTalkList item-level parsing', () => {
+  it('keeps valid items when other items in the array fail schema', async () => {
+    // Simulate: LLM returns 2 items, one with valid keywords, one with 0 keywords.
+    // Before the fix, the entire array would fail. After the fix, the valid item survives.
+    const llmResponse = JSON.stringify([
+      {
+        topic: '确诊',
+        keywords: ['体检', '查出'],   // only 2 keywords — now valid (min 1)
+        knowingWitnessIds: ['w-sister'],
+        blindWitnessId: 'w-father',
+        blindClaim: '升职了',
+        sourceFragment: '体检查出来一个东西',
+        severity: 'high',
+        reason: '明确嘱托保密',
+      },
+      {
+        topic: '离开北京',
+        keywords: [],                  // 0 keywords — fails min(1)
+        knowingWitnessIds: ['w-bestie'],
+        blindWitnessId: 'w-father',
+        blindClaim: '升职了',
+        sourceFragment: '想离开北京',
+        severity: 'high',
+        reason: '推翻认知',
+      },
+    ]);
+
+    const drafts = [
+      {
+        witness: { id: 'w-sister', subjectId: 's1', relation: '姐姐', consentLevel: 'quotable' as const },
+        memory: [{ qid: 'q1', text: '她体检查出来一个东西。别告诉爸。' }],
+      },
+      {
+        witness: { id: 'w-father', subjectId: 's1', relation: '父亲', consentLevel: 'quotable' as const },
+        memory: [{ qid: 'q1', text: '她升职了。' }],
+      },
+    ];
+
+    const llm = new FakeLLM([llmResponse]);
+    const items = await generateNoTalkList(llm, '苏芷', drafts);
+
+    // The first item (valid) should survive; the second (empty keywords) should be rejected
+    expect(items).toHaveLength(1);
+    expect(items[0]!.topic).toBe('确诊');
+    expect(items[0]!.keywords).toEqual(['体检', '查出']);
   });
 });
