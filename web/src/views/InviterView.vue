@@ -204,6 +204,10 @@ function goToBiography(): void {
   void router.push({ name: 'biography', params: { id: subjectId.value } });
 }
 
+function goToChatlogImport(): void {
+  void router.push({ name: 'chatlog-import', params: { id: subjectId.value } });
+}
+
 function enterRoom(room: RoomPayload): void {
   const name = activeName();
   void router.push({
@@ -339,6 +343,7 @@ onBeforeUnmount(stopPolling);
           <button type="button" class="btn" @click="goToCourtReport">查看报告</button>
           <button type="button" class="btn" @click="goToMetaPerception">元知觉</button>
           <button type="button" class="btn" @click="goToBiography">Biography</button>
+          <button type="button" class="btn" @click="goToChatlogImport">导入聊天记录</button>
         </div>
       </div>
       <p v-if="courtNeedsKey" class="muted small">

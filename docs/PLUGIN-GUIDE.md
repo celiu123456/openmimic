@@ -234,6 +234,45 @@ plugins:
       qualityThreshold: 75  # below this score => requires rewrite
 ```
 
+## Chat log import plugin
+
+The `collector-chatlog` plugin imports chat exports (WeChat text, CSV, JSON)
+into the subject's corpus. It parses messages, identifies senders, and stores
+only the designated person's own words.
+
+**Routes:**
+
+| Method | Path | Purpose |
+|--------|------|---------|
+| `POST` | `/api/subjects/:id/chatlog/preview` | Parse and preview (no DB writes) |
+| `POST` | `/api/subjects/:id/chatlog/import` | Import to corpus with sender attribution |
+| `GET` | `/api/subjects/:id/chatlog/imports` | List past imports |
+| `DELETE` | `/api/subjects/:id/chatlog/imports/:importId` | Undo an import |
+
+**Key rules:**
+
+- The raw file never touches disk; all parsing happens in memory.
+- Only the subject's own words enter the corpus (source='imported').
+- PII is anonymized, injection is flagged, reflux is excluded.
+- Imported records are used for mimicking speech style only, not as facts.
+- Consecutive short messages stay as separate items (rhythm is style data).
+- Deduplication collapses identical text, counting occurrences as catchphrase signals.
+- When over the item limit (default 500), uniform time-based sampling keeps
+  temporal diversity instead of recency bias.
+
+**Config:**
+
+```yaml
+plugins:
+  - use: "./plugins/collector-chatlog"
+    config:
+      maxSizeBytes: 5242880   # 5 MB default
+      maxItems: 500           # per-import corpus item cap
+      maxLength: 120          # max chars per item
+```
+
+See `docs/chatlog-import.md` for format details and examples.
+
 ## Unloading
 
 `PluginHost.unload(name)` runs the dispose callback, removes provided services, collector/scenario registrations, and event listeners. It refuses to unload a plugin if another loaded plugin depends on one of its services.

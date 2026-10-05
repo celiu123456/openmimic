@@ -29,6 +29,11 @@ export const router = createRouter({
       name: 'biography',
       component: () => import('./views/BiographyView.vue'),
     },
+    {
+      path: '/chatlog/:id',
+      name: 'chatlog-import',
+      component: () => import('./views/ChatlogImportView.vue'),
+    },
     { path: '/:pathMatch(.*)*', redirect: '/' },
   ],
   scrollBehavior: () => ({ top: 0 }),
