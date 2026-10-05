@@ -11,6 +11,7 @@ loadEnv();
 import { OpenAICompatClient } from '@openmimic/engine-court';
 import { Store } from '@openmimic/kernel';
 import { seedDemo, DEMO_SUBJECT_ID } from '@openmimic/fixtures';
+import { createEvalLLM } from './eval-llm';
 import { runStability } from './stability';
 
 async function main(): Promise<void> {
@@ -27,15 +28,19 @@ async function main(): Promise<void> {
   const progressIdx = args.indexOf('--progress');
   const progressFile = progressIdx >= 0 && args[progressIdx + 1] ? args[progressIdx + 1] : undefined;
 
-  const courtClient = new OpenAICompatClient({ timeoutMs: 120_000 });
+  const withLlmMatch = args.includes('--llm-match');
 
-  if (!courtClient.configured) {
-    console.error('LLM not configured: set LLM_BASE_URL and LLM_MODEL in .env');
+  const courtClient = new OpenAICompatClient({ timeoutMs: 120_000 });
+  const evalClient = withLlmMatch ? createEvalLLM() : undefined;
+
+  if (!courtClient.configured || (withLlmMatch && evalClient && !evalClient.configured)) {
+    console.error('LLM not configured: set LLM_BASE_URL, LLM_API_KEY, and LLM_MODEL in .env');
     process.exit(1);
   }
 
   const modelName = process.env.LLM_MODEL ?? 'unknown';
   console.log(`Running stability for subject: ${subjectId}, model: ${modelName}, K=${K}, maxSubsets=${maxSubsets}`);
+  if (withLlmMatch) console.log('LLM-judge claim matching enabled (dual calibre)');
   if (progressFile) console.log(`Checkpoint file: ${progressFile}`);
 
   // Load demo data
@@ -50,13 +55,16 @@ async function main(): Promise<void> {
       K,
       maxSubsets,
       progressFile,
+      matchLlm: evalClient,
     });
 
     console.log('\n=== Stability Results ===');
     console.log(`Repeat runs (K=${result.repeat.K}):`);
     console.log(`  Claim counts: ${result.repeat.claimCounts.join(', ')}`);
-    console.log(`  Overlap mean: ${(result.repeat.overlap.mean * 100).toFixed(1)}%`);
-    console.log(`  Overlap std:  ${(result.repeat.overlap.stddev * 100).toFixed(1)}%`);
+    console.log(`  Overlap (bigram Jaccard): ${(result.repeat.overlap.mean * 100).toFixed(1)}% +/- ${(result.repeat.overlap.stddev * 100).toFixed(1)}%`);
+    if (result.repeat.overlapLlm) {
+      console.log(`  Overlap (LLM judge):     ${(result.repeat.overlapLlm.mean * 100).toFixed(1)}% +/- ${(result.repeat.overlapLlm.stddev * 100).toFixed(1)}%`);
+    }
     for (const cs of result.repeat.courtStats) {
       console.log(`  Court: ${cs.claimCount} claims in ${(cs.durationMs / 1000).toFixed(1)}s`);
     }

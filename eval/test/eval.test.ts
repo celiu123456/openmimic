@@ -22,7 +22,11 @@ import {
   CALIBRATION_MAX_BIAS,
 } from '../src/calibrate';
 import { wilsonInterval } from '../src/wilson';
-import { bigramJaccard, matchClaims, pairwiseOverlap } from '../src/stability';
+import {
+  bigramJaccard, matchClaims, pairwiseOverlap,
+  llmClaimMatch, matchClaimsLlm, pairwiseOverlapLlm,
+  loadClaimMatchPrompt, getClaimMatchPromptSha,
+} from '../src/stability';
 import { writeRun, RUNS_DIR, findCalibrationRun, requireCalibration } from '../src/ledger';
 import type { Claim } from '@openmimic/shared';
 
@@ -448,6 +452,107 @@ describe('Stability: claim matching', () => {
     expect(result.mean).toBeGreaterThanOrEqual(0);
     expect(result.mean).toBeLessThanOrEqual(1);
     expect(result.stddev).toBeGreaterThanOrEqual(0);
+  });
+});
+
+/* ------------------------------------------------------------------ */
+/* 7b. LLM-judge claim matching                                        */
+/* ------------------------------------------------------------------ */
+
+function makeClaimMatchResponse(verdict: 'same' | 'different', reason: string = 'test'): string {
+  return JSON.stringify({ verdict, reason });
+}
+
+describe('LLM claim matching', () => {
+  const baseClaim = (id: string, text: string): Claim => ({
+    id,
+    subjectId: 'test',
+    text,
+    conviction: 0.8,
+    evidence: ['t1'],
+    status: 'surviving',
+    courtSessionId: 'cs1',
+  });
+
+  it('claim-match prompt file loads and has a stable SHA', () => {
+    const prompt = loadClaimMatchPrompt();
+    expect(prompt).toContain('verdict');
+    const sha = getClaimMatchPromptSha();
+    expect(sha).toHaveLength(64);
+    expect(getClaimMatchPromptSha()).toBe(sha); // deterministic
+  });
+
+  it('llmClaimMatch returns true when both directions agree "same"', async () => {
+    const llm = new FakeLLM([
+      makeClaimMatchResponse('same'),      // A,B
+      makeClaimMatchResponse('same'),      // B,A (swap)
+    ]);
+    const result = await llmClaimMatch(llm, 'claim A', 'claim B');
+    expect(result).toBe(true);
+  });
+
+  it('llmClaimMatch returns false when first direction says "different"', async () => {
+    const llm = new FakeLLM([
+      makeClaimMatchResponse('different'),
+    ]);
+    const result = await llmClaimMatch(llm, 'claim A', 'claim B');
+    expect(result).toBe(false);
+  });
+
+  it('llmClaimMatch returns false on position swap disagreement', async () => {
+    const llm = new FakeLLM([
+      makeClaimMatchResponse('same'),      // A,B says same
+      makeClaimMatchResponse('different'), // B,A says different => inconsistent
+    ]);
+    const result = await llmClaimMatch(llm, 'claim A', 'claim B');
+    expect(result).toBe(false);
+  });
+
+  it('llmClaimMatch returns false on parse failure', async () => {
+    const llm = new FakeLLM([
+      'not json at all!',
+      'still not json!',  // retry
+    ]);
+    const result = await llmClaimMatch(llm, 'claim A', 'claim B');
+    expect(result).toBe(false);
+  });
+
+  it('matchClaimsLlm returns 1 for identical claims (all same)', async () => {
+    const claims = [baseClaim('c1', 'text')];
+    // For 1 vs 1: need 2 calls (forward + swap)
+    const llm = new FakeLLM([
+      makeClaimMatchResponse('same'),
+      makeClaimMatchResponse('same'),
+    ]);
+    const rate = await matchClaimsLlm(claims, claims, llm);
+    expect(rate).toBe(1);
+  });
+
+  it('matchClaimsLlm returns 0 for claims judged different', async () => {
+    const a = [baseClaim('c1', 'he is kind')];
+    const b = [baseClaim('c2', 'he is tall')];
+    const llm = new FakeLLM([
+      makeClaimMatchResponse('different'),
+    ]);
+    const rate = await matchClaimsLlm(a, b, llm);
+    expect(rate).toBe(0);
+  });
+
+  it('pairwiseOverlapLlm computes mean over pairs', async () => {
+    const sets = [
+      [baseClaim('c1', 'text1')],
+      [baseClaim('c2', 'text2')],
+    ];
+    // 1 pair: A->B forward+swap, B->A forward+swap = 4 calls total
+    const llm = new FakeLLM([
+      makeClaimMatchResponse('same'),  // A in B: forward
+      makeClaimMatchResponse('same'),  // A in B: swap
+      makeClaimMatchResponse('same'),  // B in A: forward
+      makeClaimMatchResponse('same'),  // B in A: swap
+    ]);
+    const result = await pairwiseOverlapLlm(sets, llm);
+    expect(result.pairs).toBe(1);
+    expect(result.mean).toBe(1);
   });
 });
 
