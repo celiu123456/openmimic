@@ -11,6 +11,9 @@ import type { Plugin } from '@openmimic/kernel';
 import { witnessPlugin } from '@openmimic/engine-witness';
 import { courtPlugin } from '@openmimic/engine-court';
 import { roomPlugin } from '@openmimic/engine-room';
+import { gatePlugin } from '@openmimic/engine-gate';
+import { metaPerceptionPlugin } from '@openmimic/meta-perception';
+import { silenceSignalPlugin } from '@openmimic/silence-signal';
 import { mountRestPlugin } from './mount-rest';
 import { mountOpenaiPlugin } from './mount-openai';
 import { mountMcpPlugin } from './mount-mcp';
@@ -33,6 +36,9 @@ const BUILTIN_PLUGINS: ReadonlyMap<string, Plugin> = new Map<string, Plugin>([
   ['@openmimic/engine-witness', witnessPlugin],
   ['@openmimic/engine-court', courtPlugin],
   ['@openmimic/engine-room', roomPlugin],
+  ['@openmimic/engine-gate', gatePlugin],
+  ['@openmimic/meta-perception', metaPerceptionPlugin],
+  ['@openmimic/silence-signal', silenceSignalPlugin],
   ['@openmimic/mount-rest', mountRestPlugin],
   ['@openmimic/mount-openai', mountOpenaiPlugin],
   ['@openmimic/mount-mcp', mountMcpPlugin],

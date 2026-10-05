@@ -30,6 +30,7 @@ import {
 import { readAsrConfig, type AsrConfig } from './asr';
 import { createStaticHandler, type StaticHandler } from './static';
 import { resolvePlugin } from './plugin-resolver';
+import { requireAdmin, RateLimiter, rateLimitKey, isOpenRoute } from './auth';
 import type { MountRestConfig } from './mount-rest';
 import type { MountOpenAIConfig } from './mount-openai';
 import type { MountMcpConfig } from './mount-mcp';
@@ -74,6 +75,12 @@ export interface StartServerOptions {
   skipDemo?: boolean;
   /** Built SPA directory served outside `/api/*`; defaults to `web/dist`. */
   webDistDir?: string;
+  /**
+   * Admin token for management routes. When omitted the server reads
+   * `OPENMIMIC_ADMIN_TOKEN` from the environment; when that is also unset
+   * the server binds only to 127.0.0.1 (loopback) and all routes are open.
+   */
+  adminToken?: string;
 }
 
 export interface RunningServer {
@@ -121,10 +128,27 @@ async function handleRequest(
   router: Router,
   store: Store,
   staticHandler: StaticHandler | undefined,
+  adminToken: string | undefined,
+  submitLimiter: RateLimiter,
 ): Promise<void> {
   try {
     const url = new URL(request.url ?? '/', 'http://localhost');
     const method = request.method ?? 'GET';
+
+    // Access control
+    if (adminToken) {
+      requireAdmin(request, adminToken, url.pathname);
+    }
+
+    // Rate limiting for testimony/interview submission routes
+    if (method === 'POST' && isOpenRoute(url.pathname)) {
+      const key = rateLimitKey(request, url.pathname);
+      if (!submitLimiter.check(key)) {
+        sendJson(response, 429, errorBody('rate_limited', '请求太频繁,请稍后再试'), store);
+        return;
+      }
+    }
+
     const match = router.match(method, url.pathname);
     if (!match) {
       if (!url.pathname.startsWith('/api/') && staticHandler) {
@@ -202,6 +226,13 @@ export async function startServer(options: StartServerOptions): Promise<RunningS
   const llm = options.llm ?? envReady;
   const chat = options.chat ?? envReady;
 
+  // Access control
+  const adminToken = options.adminToken ?? process.env.OPENMIMIC_ADMIN_TOKEN;
+  const bindLoopbackOnly = !adminToken;
+
+  // Rate limiter: 30 requests per minute per IP/token for submission routes
+  const submitLimiter = new RateLimiter({ maxRequests: 30, windowMs: 60_000 });
+
   // Demo seed
   const skipDemo = options.skipDemo ?? process.env.OPENMIMIC_SKIP_DEMO === '1';
   if (!skipDemo && store.listSubjects().length === 0) {
@@ -231,6 +262,9 @@ export async function startServer(options: StartServerOptions): Promise<RunningS
   const useNames = [
     '@openmimic/engine-witness',
     ...(llm ? ['@openmimic/engine-court', '@openmimic/engine-room'] : []),
+    '@openmimic/engine-gate',
+    '@openmimic/meta-perception',
+    '@openmimic/silence-signal',
     '@openmimic/mount-rest',
     '@openmimic/mount-openai',
     '@openmimic/mount-mcp',
@@ -248,12 +282,13 @@ export async function startServer(options: StartServerOptions): Promise<RunningS
   const staticHandler = distDir === '' ? undefined : createStaticHandler(distDir);
 
   const server = createServer((request, response) => {
-    void handleRequest(request, response, router, store, staticHandler);
+    void handleRequest(request, response, router, store, staticHandler, adminToken, submitLimiter);
   });
 
+  const bindHost = bindLoopbackOnly ? '127.0.0.1' : '0.0.0.0';
   await new Promise<void>((resolve, reject) => {
     server.once('error', reject);
-    server.listen(options.port, () => {
+    server.listen(options.port, bindHost, () => {
       server.off('error', reject);
       resolve();
     });
