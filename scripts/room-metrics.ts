@@ -16,7 +16,13 @@
  */
 
 import type { RoomUtterance, UtteranceTier } from '@openmimic/shared';
-import { hasFrontThirdPerson, normalizePronoun } from '@openmimic/engine-room';
+import {
+  hasFrontThirdPerson,
+  normalizePronoun,
+  extractFactElements,
+  hasFactLevelLeak,
+  type PrivateFactElements,
+} from '@openmimic/engine-room';
 
 /* ------------------------------------------------------------------ */
 /* 1. Tier distribution                                                */
@@ -159,16 +165,23 @@ export interface LeakResult {
   fragment: PrivateFragment;
   /** The room line that leaked it. */
   utteranceText: string;
-  /** The type of match (substring or numeric). */
-  matchType: 'substring' | 'numeric';
+  /** The type of match. */
+  matchType: 'substring' | 'numeric' | 'fact-level';
 }
+
+/**
+ * Chinese amount pattern: 两万, 三千五, etc. + Arabic with units.
+ */
+const CN_AMOUNT_PATTERN =
+  /[一二两三四五六七八九十百千万亿\d]+[万千百亿](?:[一二两三四五六七八九十百千万]*)(?:块|元)?|\d[\d,.]*(?:万|千|百|元|块)/g;
 
 /**
  * Check whether any room line leaks private content.
  *
- * A "leak" is a line that has either:
- *   - >=8 contiguous characters in common with a private fragment, OR
- *   - the same specific number/amount that appears in the private fragment.
+ * Three-layer detection:
+ *   1. Substring overlap: >= 6 contiguous characters in common with a private fragment
+ *   2. Numeric match: same amount (Chinese or Arabic) appears
+ *   3. Fact-level: matches 2+ categories of extracted fact elements (amounts, verbs, nouns)
  */
 export function detectLeaks(
   utterances: readonly RoomUtterance[],
@@ -176,16 +189,24 @@ export function detectLeaks(
 ): LeakResult[] {
   const leaks: LeakResult[] = [];
 
-  // Extract numbers from private fragments
-  const numberPattern = /\d[\d,.]*\d|\d/g;
+  // Extract fact elements for each fragment
+  const fragElements: PrivateFactElements[] = privateFragments.map((f) =>
+    extractFactElements(f.text),
+  );
+
+  const arabicNumberPattern = /\d[\d,.]*\d|\d/g;
 
   for (const u of utterances) {
     if (u.kind === 'stage') continue;
-    for (const frag of privateFragments) {
-      // Substring overlap: >= 8 contiguous characters
+    for (let fi = 0; fi < privateFragments.length; fi++) {
+      const frag = privateFragments[fi]!;
       const fragText = frag.text;
-      for (let start = 0; start + 8 <= fragText.length; start++) {
-        const sub = fragText.slice(start, start + 8);
+      let matched = false;
+
+      // Layer 1: Substring overlap >= 8 contiguous characters
+      const MIN_OVERLAP = 8;
+      for (let start = 0; start + MIN_OVERLAP <= fragText.length; start++) {
+        const sub = fragText.slice(start, start + MIN_OVERLAP);
         if (u.text.includes(sub)) {
           leaks.push({
             witnessId: u.witnessId,
@@ -193,31 +214,46 @@ export function detectLeaks(
             utteranceText: u.text,
             matchType: 'substring',
           });
-          break; // one match per fragment-utterance pair is enough
+          matched = true;
+          break;
         }
       }
+      if (matched) continue;
 
-      // Numeric match: same specific number appears
-      const fragNumbers = [...fragText.matchAll(numberPattern)].map((m) => m[0]);
-      if (fragNumbers.length === 0) continue;
-      const uttNumbers = [...u.text.matchAll(numberPattern)].map((m) => m[0]);
-      for (const n of fragNumbers) {
-        // Only flag numbers >= 2 digits (single digits are too generic)
-        if (n.length >= 2 && uttNumbers.includes(n)) {
-          // Check if the leak hasn't already been recorded as substring
-          const already = leaks.some(
-            (l) => l.utteranceText === u.text && l.fragment === frag,
-          );
-          if (!already) {
+      // Layer 2: Chinese amount match
+      const fragCnAmounts = [...fragText.matchAll(CN_AMOUNT_PATTERN)].map((m) => m[0]);
+      const fragArabicNumbers = [...fragText.matchAll(arabicNumberPattern)].map((m) => m[0]);
+      const allFragAmounts = [...fragCnAmounts, ...fragArabicNumbers];
+
+      if (allFragAmounts.length > 0) {
+        const uttCnAmounts = [...u.text.matchAll(CN_AMOUNT_PATTERN)].map((m) => m[0]);
+        const uttArabicNumbers = [...u.text.matchAll(arabicNumberPattern)].map((m) => m[0]);
+        const allUttAmounts = [...uttCnAmounts, ...uttArabicNumbers];
+
+        for (const a of allFragAmounts) {
+          if (a.length >= 2 && allUttAmounts.includes(a)) {
             leaks.push({
               witnessId: u.witnessId,
               fragment: frag,
               utteranceText: u.text,
               matchType: 'numeric',
             });
+            matched = true;
+            break;
           }
-          break;
         }
+      }
+      if (matched) continue;
+
+      // Layer 3: Fact-level element matching (2+ categories)
+      const el = fragElements[fi]!;
+      if (hasFactLevelLeak(u.text, [el])) {
+        leaks.push({
+          witnessId: u.witnessId,
+          fragment: frag,
+          utteranceText: u.text,
+          matchType: 'fact-level',
+        });
       }
     }
   }

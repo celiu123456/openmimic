@@ -261,6 +261,8 @@ interface BuildSystemExtra {
   halfTruthSlot?: boolean;
   /** For front mode: whether the previous turn was the half-truth (so deflect). */
   deflectAfterHalfTruth?: boolean;
+  /** Max character length for the utterance (used on retry). */
+  lengthHint?: number;
 }
 
 function buildSystem(
@@ -364,6 +366,9 @@ function buildSystem(
   if (witness.stance) lines.push(`你的态度:${witness.stance}。`);
   if (witness.consentLevel === 'synthesis_only') {
     lines.push('你之前的话只授权用于合成转述,你只能用自己的话重讲,绝不能复述原话。');
+  }
+  if (extra.lengthHint) {
+    lines.push(`★这句话不要超过${extra.lengthHint}个字。短一点,像对话不像念稿。`);
   }
   lines.push('只输出 JSON,形如 {"text":"你要说的话","qids":["q1"]},qids 填你这句话依据的记忆编号(没有就给空数组)。不要输出任何别的内容。');
   return lines.join('\n');
@@ -482,11 +487,18 @@ const PRIVATE_MARKERS = [
 ];
 
 /**
+ * Split Chinese text into sentences on common sentence-end punctuation.
+ */
+function splitSentences(text: string): string[] {
+  return text.split(/(?<=[。！？；\n])/).map((s) => s.trim()).filter(Boolean);
+}
+
+/**
  * Extract private sentence ranges from a testimony text.
  * Returns the private sentences (sentence containing a marker + the preceding one).
  */
 function extractPrivateSentences(text: string): string[] {
-  const sentences = text.split(/(?<=[。！？；\n])/).map((s) => s.trim()).filter(Boolean);
+  const sentences = splitSentences(text);
   const result: string[] = [];
   for (let i = 0; i < sentences.length; i++) {
     const sentence = sentences[i]!;
@@ -498,23 +510,333 @@ function extractPrivateSentences(text: string): string[] {
   return result;
 }
 
+/* ------------------------------------------------------------------ */
+/* Fact-level private content elements                                 */
+/* ------------------------------------------------------------------ */
+
+/**
+ * Chinese amount patterns: 两万, 三千, 十万, 五百, 一千二, etc.
+ * Also captures Arabic numerals with 万/千/百/元/块.
+ * Excludes "千万别/千万不" (emphasis, not an amount).
+ */
+const CN_AMOUNT_PATTERN =
+  /(?<!千)[一二两三四五六七八九十百\d]+[万千百亿](?:[一二两三四五六七八九十百千万]*)(?:块|元)?|\d[\d,.]*(?:万|千|百|元|块)/g;
+
+/**
+ * Action verbs that indicate private-content-related actions.
+ */
+const PRIVATE_ACTION_VERBS = [
+  '借', '还钱', '欠', '转账', '打电话', '求',
+];
+
+/**
+ * Key fact elements extracted from a private fragment.
+ * A leak is detected when a generated line matches 2+ element categories.
+ */
+export interface PrivateFactElements {
+  /** The full private text (for substring fallback). */
+  text: string;
+  /** Chinese/Arabic amounts found in the private text. */
+  amounts: string[];
+  /** Action verbs found in the private text. */
+  verbs: string[];
+  /** Key nouns (>= 2 chars, not in stop list) extracted from the private text. */
+  nouns: string[];
+}
+
+/** Common words that should not be treated as significant nouns. */
+const NOUN_STOP_LIST = new Set([
+  '他', '她', '我', '你', '的', '了', '是', '在', '和', '也',
+  '就', '都', '还', '又', '说', '这', '那', '有', '不', '很',
+  '他们', '她们', '我们', '你们', '什么', '怎么', '一个', '一下',
+  '但是', '因为', '所以', '如果', '虽然', '但', '而',
+  '上个月', '下个月', '这个月', '那天', '最近', '以前',
+]);
+
+/**
+ * Key topic nouns that are specific enough to identify private content
+ * when combined with a verb or amount.
+ */
+const PRIVATE_TOPIC_NOUNS = [
+  '借钱', '借款', '欠钱', '欠债', '手头紧', '周转',
+  '辞职', '辞了', '裸辞', '离职',
+  '钱', '工资', '债', '贷款',
+];
+
+/**
+ * Derived compound nouns: verb + object patterns that indicate the topic
+ * even when the original text uses a different form (e.g. "借了两万" -> "借钱").
+ */
+const VERB_DERIVED_NOUNS: Record<string, string[]> = {
+  '借': ['借钱', '借款'],
+  '欠': ['欠钱', '欠债', '欠款'],
+  '还钱': ['还债'],
+};
+
+/**
+ * Extract fact-level elements from private text.
+ */
+export function extractFactElements(text: string): PrivateFactElements {
+  // Amounts
+  const amounts = [...text.matchAll(CN_AMOUNT_PATTERN)].map((m) => m[0]);
+
+  // Verbs
+  const verbs = PRIVATE_ACTION_VERBS.filter((v) => text.includes(v));
+
+  // Key nouns: topic-specific nouns found in the private text
+  const nouns = PRIVATE_TOPIC_NOUNS.filter((n) => text.includes(n));
+
+  // Add derived nouns for detected verbs (e.g. 借 -> 借钱)
+  for (const v of verbs) {
+    const derived = VERB_DERIVED_NOUNS[v];
+    if (derived) {
+      for (const d of derived) {
+        if (!nouns.includes(d)) nouns.push(d);
+      }
+    }
+  }
+
+  return { text, amounts, verbs, nouns };
+}
+
+/**
+ * Fact-level leak detection: check whether a generated line reveals private
+ * content by matching 2+ categories of fact elements (amounts, verbs, nouns).
+ *
+ * This catches paraphrased leaks that substring matching would miss.
+ * E.g. "借了两万" -> amount "两万" + verb "借" = 2 categories = leak.
+ */
+export function hasFactLevelLeak(
+  utteranceText: string,
+  elements: readonly PrivateFactElements[],
+): boolean {
+  for (const el of elements) {
+    let categoryHits = 0;
+
+    // Check amounts
+    if (el.amounts.some((a) => utteranceText.includes(a))) {
+      categoryHits++;
+    }
+
+    // Check verbs
+    if (el.verbs.some((v) => utteranceText.includes(v))) {
+      categoryHits++;
+    }
+
+    // Check nouns (any significant noun match)
+    if (el.nouns.some((n) => utteranceText.includes(n))) {
+      categoryHits++;
+    }
+
+    if (categoryHits >= 2) return true;
+  }
+  return false;
+}
+
 /**
  * Check if a generated line leaks private content from testimony.
- * Returns true if there is a >= 8 character substring overlap with private content.
+ *
+ * Two-layer detection:
+ *   1. Substring overlap: >= 6 contiguous characters in common with private text
+ *   2. Fact-level: matches 2+ categories of extracted fact elements
  */
 function hasPrivateLeak(
   text: string,
   privateTexts: readonly string[],
+  privateElements: readonly PrivateFactElements[] = [],
 ): boolean {
-  const MIN_OVERLAP = 8;
-  if (text.length < MIN_OVERLAP) return false;
+  const MIN_OVERLAP = 8; // substring overlap (fact-level catches paraphrases)
+  // Layer 1: substring overlap
   for (const priv of privateTexts) {
-    if (priv.length < MIN_OVERLAP) continue;
+    if (priv.length < MIN_OVERLAP || text.length < MIN_OVERLAP) continue;
     for (let start = 0; start + MIN_OVERLAP <= priv.length; start++) {
       if (text.includes(priv.slice(start, start + MIN_OVERLAP))) return true;
     }
   }
+  // Layer 2: fact-level element matching
+  if (privateElements.length > 0 && hasFactLevelLeak(text, privateElements)) {
+    return true;
+  }
   return false;
+}
+
+/* ------------------------------------------------------------------ */
+/* Memory sanitisation: strip private facts from generation context    */
+/* ------------------------------------------------------------------ */
+
+/**
+ * Remove private sentences from a testimony text, replacing them with
+ * a content-free marker. The witness's prompt memory should never contain
+ * the actual private facts -- only the knowledge that something private exists.
+ */
+export function sanitiseMemory(text: string): string {
+  const sentences = splitSentences(text);
+  const privateIndices = new Set<number>();
+
+  for (let i = 0; i < sentences.length; i++) {
+    const sentence = sentences[i]!;
+    if (PRIVATE_MARKERS.some((m) => sentence.includes(m))) {
+      privateIndices.add(i);
+      if (i > 0) privateIndices.add(i - 1); // the fact sentence too
+    }
+  }
+
+  if (privateIndices.size === 0) return text;
+
+  // Replace private sentences with a marker (at most one marker per block)
+  const result: string[] = [];
+  let markerInserted = false;
+  for (let i = 0; i < sentences.length; i++) {
+    if (privateIndices.has(i)) {
+      if (!markerInserted) {
+        result.push('(你知道一件TA嘱咐别外传的事,群里不能说;最多欲言又止一次)');
+        markerInserted = true;
+      }
+    } else {
+      result.push(sentences[i]!);
+      markerInserted = false; // reset for next block
+    }
+  }
+
+  return result.join('');
+}
+
+/* ------------------------------------------------------------------ */
+/* Cross-witness knowledge conflict detection ("no-talk list")         */
+/* ------------------------------------------------------------------ */
+
+/**
+ * A topic that should not be discussed in the room because mentioning it
+ * would reveal to a present witness something they demonstrably don't know.
+ */
+export interface NoTalkItem {
+  /** What should not be discussed. */
+  topic: string;
+  /** Fact elements to detect this topic in generated text. */
+  elements: PrivateFactElements;
+  /** Which witness would be harmed by this being said. */
+  blindWitnessId: string;
+  /** The claim the blind witness holds instead. */
+  blindClaim: string;
+}
+
+/**
+ * Build a no-talk list from cross-witness knowledge conflicts.
+ *
+ * When one witness's testimony contradicts another's understanding
+ * (e.g., faxiao knows he resigned, mother thinks he's still employed),
+ * the contradicting facts are treated as private in the behind room --
+ * saying them would let the uninformed witness discover they've been deceived.
+ *
+ * This uses the testimony data directly (no LLM call):
+ *   - Detect explicit secrecy markers ("千万别跟XX提")
+ *   - Look for key contradictions: resignation vs employment, debt, etc.
+ */
+export function buildNoTalkList(
+  drafts: readonly { witness: Witness; memory: readonly MemoryEntry[] }[],
+): NoTalkItem[] {
+  const items: NoTalkItem[] = [];
+
+  // Strategy: for each witness that has a private marker mentioning another
+  // person (别跟他妈提 → mother), extract the fact that should be hidden
+  // from that person.
+  for (const draft of drafts) {
+    for (const mem of draft.memory) {
+      const sentences = splitSentences(mem.text);
+      for (let i = 0; i < sentences.length; i++) {
+        const sentence = sentences[i]!;
+        if (!PRIVATE_MARKERS.some((m) => sentence.includes(m))) continue;
+
+        // The private fact is the preceding sentence(s)
+        const factSentences: string[] = [];
+        if (i > 0) factSentences.push(sentences[i - 1]!);
+        factSentences.push(sentence);
+        const factText = factSentences.join('');
+
+        const elements = extractFactElements(factText);
+
+        // Try to identify who should NOT know this
+        // Common patterns: 别跟他妈/她妈/我妈/妈 提 → mother
+        const blindTargets: string[] = [];
+        if (/妈|母亲|老妈/.test(sentence)) {
+          // Find a mother among the witnesses
+          for (const d of drafts) {
+            if (d.witness.relation.includes('母') || d.witness.relation.includes('妈')) {
+              blindTargets.push(d.witness.id);
+            }
+          }
+        }
+        if (/爸|父亲|老爸/.test(sentence)) {
+          for (const d of drafts) {
+            if (d.witness.relation.includes('父') || d.witness.relation.includes('爸')) {
+              blindTargets.push(d.witness.id);
+            }
+          }
+        }
+
+        for (const blindId of blindTargets) {
+          // Find what the blind witness believes
+          const blindDraft = drafts.find((d) => d.witness.id === blindId);
+          const blindClaim = blindDraft
+            ? blindDraft.memory.map((m) => m.text).join(' ').substring(0, 50)
+            : '(unknown)';
+
+          items.push({
+            topic: factText.substring(0, 30),
+            elements,
+            blindWitnessId: blindId,
+            blindClaim,
+          });
+        }
+      }
+    }
+  }
+
+  // Also detect direct contradictions: one witness says "辞职/辞了/离职"
+  // while another says "公司器重/在工作/没辞职"
+  // Build knowledge sets
+  const resignationWitnesses: string[] = [];
+  const employedWitnesses: string[] = [];
+  const resignationTexts: string[] = [];
+
+  for (const draft of drafts) {
+    const fullText = draft.memory.map((m) => m.text).join(' ');
+    if (/辞职|辞了|裸辞|离职|把工作.*辞/.test(fullText)) {
+      resignationWitnesses.push(draft.witness.id);
+      // Extract the resignation sentences
+      for (const mem of draft.memory) {
+        const sents = splitSentences(mem.text);
+        for (const s of sents) {
+          if (/辞职|辞了|裸辞|离职|把工作.*辞/.test(s)) {
+            resignationTexts.push(s);
+          }
+        }
+      }
+    }
+    if (/公司器重|在工作|没辞|升职|加班/.test(fullText) && !/辞职|辞了|裸辞|离职/.test(fullText)) {
+      employedWitnesses.push(draft.witness.id);
+    }
+  }
+
+  // If some witnesses know about resignation and others think he's still employed,
+  // resignation facts should not be said in front of the employed-believers
+  if (resignationWitnesses.length > 0 && employedWitnesses.length > 0) {
+    const factText = resignationTexts.join(' ');
+    const elements = extractFactElements(factText);
+    // Add resignation-specific verbs and nouns
+    elements.verbs.push('辞职', '辞了', '裸辞', '离职');
+    for (const blindId of employedWitnesses) {
+      const blindDraft = drafts.find((d) => d.witness.id === blindId);
+      items.push({
+        topic: '辞职/离职',
+        elements,
+        blindWitnessId: blindId,
+        blindClaim: blindDraft?.memory[0]?.text.substring(0, 50) ?? '',
+      });
+    }
+  }
+
+  return items;
 }
 
 /**
@@ -538,6 +860,7 @@ async function composeLine(
   privateTexts: readonly string[] = [],
   secretLeakBudget?: { remaining: number },
   extra: BuildSystemExtra = {},
+  privateElements: readonly PrivateFactElements[] = [],
 ): Promise<ComposedLine | undefined> {
   const system = buildSystem(context, mode, topicSeed, actionHint, extra);
   const user = buildUser(context, mode, topicSeed, transcript, actionHint, extra);
@@ -553,9 +876,9 @@ async function composeLine(
     containsConsentOverlap(first.value.text, memoryTexts);
   const diagnosisWord = findDiagnosisWord(first.value.text);
 
-  // Check for private content leak
+  // Check for private content leak (substring + fact-level)
   const leaksSecret =
-    privateTexts.length > 0 && hasPrivateLeak(first.value.text, privateTexts);
+    privateTexts.length > 0 && hasPrivateLeak(first.value.text, privateTexts, privateElements);
 
   if (!consentHit && !diagnosisWord && !leaksSecret) {
     return { kind: 'speech', text: first.value.text, qids: first.value.qids };
@@ -577,7 +900,7 @@ async function composeLine(
       },
       2,
     );
-    if (rewritten.ok && !hasPrivateLeak(rewritten.value.text, privateTexts)) {
+    if (rewritten.ok && !hasPrivateLeak(rewritten.value.text, privateTexts, privateElements)) {
       return { kind: 'speech', text: rewritten.value.text, qids: rewritten.value.qids };
     }
     // Skip the turn entirely rather than leak
@@ -595,7 +918,7 @@ async function composeLine(
       containsConsentOverlap(rewritten.value.text, memoryTexts);
     const stillDiagnosing = findDiagnosisWord(rewritten.value.text);
     const stillLeaking =
-      privateTexts.length > 0 && hasPrivateLeak(rewritten.value.text, privateTexts);
+      privateTexts.length > 0 && hasPrivateLeak(rewritten.value.text, privateTexts, privateElements);
     if (!stillQuoting && !stillDiagnosing && !stillLeaking) {
       return { kind: 'speech', text: rewritten.value.text, qids: rewritten.value.qids };
     }
@@ -773,6 +1096,7 @@ async function runSchedule(
   displayLabels: Map<string, string>,
   privateTexts: readonly string[] = [],
   frontConfig?: FrontScheduleConfig,
+  privateElements: readonly PrivateFactElements[] = [],
 ): Promise<RoomUtterance[]> {
   const utterances: RoomUtterance[] = [];
   const turnCounts = new Map<string, number>();
@@ -855,6 +1179,8 @@ async function runSchedule(
       ? privateTexts
       : []; // front mode: no private content to guard (frontText is already filtered)
 
+    const witnessPrivateElements = mode === 'behind' ? privateElements : [];
+
     const line = await composeLine(
       llm,
       context,
@@ -865,6 +1191,7 @@ async function runSchedule(
       witnessPrivateTexts,
       secretLeakBudget,
       extra,
+      witnessPrivateElements,
     );
     if (!line) {
       // unparseable twice: skip this turn but still count
@@ -886,6 +1213,7 @@ async function runSchedule(
         witnessPrivateTexts,
         secretLeakBudget,
         extra,
+        witnessPrivateElements,
       );
       if (retryLine && retryLine.kind === 'speech' && !hasDedupConflict(retryLine.text, utterances)) {
         // Use the retry
@@ -903,7 +1231,7 @@ async function runSchedule(
     if (mode === 'front' && line.kind === 'speech' && hasFrontThirdPerson(line.text)) {
       const retryLine = await composeLine(
         llm, context, mode, topicSeed, utterances,
-        actionHint, witnessPrivateTexts, secretLeakBudget, extra,
+        actionHint, witnessPrivateTexts, secretLeakBudget, extra, witnessPrivateElements,
       );
       if (retryLine && retryLine.kind === 'speech' && !hasFrontThirdPerson(retryLine.text)) {
         Object.assign(line, retryLine);
@@ -912,6 +1240,34 @@ async function runSchedule(
         line.kind = 'stage';
         line.text = stageLine();
         line.qids = [];
+      }
+    }
+
+    // Front room length guard: single utterances must not exceed 45 chars
+    const FRONT_MAX_CHARS = 45;
+    if (mode === 'front' && line.kind === 'speech' && line.text.length > FRONT_MAX_CHARS) {
+      const retryLine = await composeLine(
+        llm, context, mode, topicSeed, utterances,
+        actionHint, witnessPrivateTexts, secretLeakBudget,
+        { ...extra, lengthHint: FRONT_MAX_CHARS },
+        witnessPrivateElements,
+      );
+      if (retryLine && retryLine.kind === 'speech' && retryLine.text.length <= FRONT_MAX_CHARS) {
+        Object.assign(line, retryLine);
+      } else if (line.text.length > FRONT_MAX_CHARS) {
+        // Truncate at last natural break within limit, preserving meaning
+        const truncated = line.text.substring(0, FRONT_MAX_CHARS);
+        const lastBreak = Math.max(
+          truncated.lastIndexOf('，'),
+          truncated.lastIndexOf('。'),
+          truncated.lastIndexOf('；'),
+          truncated.lastIndexOf('——'),
+        );
+        if (lastBreak > 10) {
+          line.text = truncated.substring(0, lastBreak + 1);
+        } else {
+          line.text = truncated;
+        }
       }
     }
 
@@ -937,7 +1293,7 @@ async function runSchedule(
         // Rewrite once
         const retryLine = await composeLine(
           llm, context, mode, topicSeed, utterances,
-          actionHint, witnessPrivateTexts, secretLeakBudget, extra,
+          actionHint, witnessPrivateTexts, secretLeakBudget, extra, witnessPrivateElements,
         );
         if (retryLine && retryLine.kind === 'speech' && !looksLikeHalfTruth(retryLine.text)) {
           Object.assign(line, retryLine);
@@ -1024,7 +1380,9 @@ export async function runBehindRoom(
 
   const subjectName = store.getSubject(subjectId)?.displayName ?? 'TA';
   const testimonies = store.listBySubject(subjectId);
-  const drafts = store
+
+  // First pass: build raw drafts (unsanitised, for extracting private content)
+  const rawDrafts = store
     .listWitnessesBySubject(subjectId)
     .map((witness) => {
       const witTestimonies = testimonies.filter((t) => t.witnessId === witness.id);
@@ -1050,12 +1408,31 @@ export async function runBehindRoom(
 
   // Extract private content from all testimony for the secret leak guard
   const privateTexts: string[] = [];
-  for (const draft of drafts) {
+  const privateElements: PrivateFactElements[] = [];
+  for (const draft of rawDrafts) {
     for (const mem of draft.memory) {
       const sentences = extractPrivateSentences(mem.text);
       privateTexts.push(...sentences);
+      for (const s of sentences) {
+        privateElements.push(extractFactElements(s));
+      }
     }
   }
+
+  // Build no-talk list from cross-witness knowledge conflicts
+  const noTalkList = buildNoTalkList(rawDrafts);
+  for (const item of noTalkList) {
+    privateElements.push(item.elements);
+  }
+
+  // Second pass: sanitise each witness's memory (strip private sentences)
+  const drafts = rawDrafts.map((draft) => ({
+    ...draft,
+    memory: draft.memory.map((mem) => ({
+      qid: mem.qid,
+      text: sanitiseMemory(mem.text),
+    })),
+  }));
 
   let stageCursor = 0;
   const utterances = await runSchedule(
@@ -1074,6 +1451,8 @@ export async function runBehindRoom(
     },
     displayLabels,
     privateTexts,
+    undefined, // no frontConfig for behind room
+    privateElements,
   );
 
   const room: Room = {

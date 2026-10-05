@@ -16,6 +16,12 @@ import {
   checkCriteria,
 } from '../../../scripts/room-metrics';
 import type { RoomUtterance } from '@openmimic/shared';
+import {
+  extractFactElements,
+  hasFactLevelLeak,
+  sanitiseMemory,
+  buildNoTalkList,
+} from '@openmimic/engine-room';
 
 const u = (
   overrides: Partial<RoomUtterance> & { text: string },
@@ -429,5 +435,176 @@ describe('checkCriteria', () => {
     const checks = checkCriteria(report);
     const extrapolateCheck = checks.find((c) => c.name === 'behind-extrapolate-ratio');
     expect(extrapolateCheck?.pass).toBe(true);
+  });
+});
+
+/* ------------------------------------------------------------------ */
+/* Fact-level private content detection                                */
+/* ------------------------------------------------------------------ */
+
+describe('extractFactElements', () => {
+  it('extracts Chinese amounts', () => {
+    const el = extractFactElements('借了两万,说手头周转一下');
+    expect(el.amounts).toContain('两万');
+  });
+
+  it('extracts action verbs', () => {
+    const el = extractFactElements('上个月他半夜给我打电话,借了两万');
+    expect(el.verbs).toContain('借');
+    expect(el.verbs).toContain('打电话');
+  });
+
+  it('extracts nouns', () => {
+    const el = extractFactElements('还嘱咐我千万别跟他妈提借钱的事');
+    expect(el.nouns.length).toBeGreaterThan(0);
+  });
+});
+
+describe('hasFactLevelLeak', () => {
+  const privateText = '上个月他半夜给我打电话,借了两万,说手头周转一下,还嘱咐我千万别跟他妈提';
+  const elements = [extractFactElements(privateText)];
+
+  it('catches Run 9 regression: paraphrased private content (borrowing money)', () => {
+    // This is the EXACT line from Run 9 that leaked private content
+    expect(hasFactLevelLeak(
+      '上个月他还跟我借了两万,让我千万别跟您提',
+      elements,
+    )).toBe(true);
+  });
+
+  it('catches paraphrased borrowing even without secrecy clause', () => {
+    expect(hasFactLevelLeak(
+      '他跟我借了两万,手头有点紧',
+      elements,
+    )).toBe(true);
+  });
+
+  it('allows vague hesitation without fact elements', () => {
+    // This line has no specific amount, no borrowing verb -- just vague worry
+    expect(hasFactLevelLeak(
+      '他最近手头好像有点紧……算了不说了',
+      elements,
+    )).toBe(false);
+  });
+
+  it('allows unrelated conversation', () => {
+    expect(hasFactLevelLeak(
+      '他最近联系少了,约他吃饭老说忙',
+      elements,
+    )).toBe(false);
+  });
+});
+
+describe('detectLeaks (fact-level regression)', () => {
+  it('catches Run 9 regression line via fact-level detection', () => {
+    const frags = [
+      {
+        witnessId: 'w-faxiao',
+        qid: 'q1',
+        text: '上个月他半夜给我打电话,借了两万,说手头周转一下,还嘱咐我千万别跟他妈提',
+      },
+    ];
+    const utterances = [
+      // The EXACT leak from Run 9
+      u({ text: '上个月他还跟我借了两万,让我千万别跟您提', witnessId: 'w-faxiao' }),
+    ];
+    const leaks = detectLeaks(utterances, frags);
+    expect(leaks.length).toBeGreaterThan(0);
+  });
+
+  it('catches Chinese amount match (两万)', () => {
+    const frags = [
+      { witnessId: 'w-a', qid: 'q1', text: '他借了两万还嘱咐我千万别说' },
+    ];
+    const utterances = [
+      u({ text: '听说两万的事了吧', witnessId: 'w-a' }),
+    ];
+    const leaks = detectLeaks(utterances, frags);
+    expect(leaks.length).toBeGreaterThan(0);
+    expect(leaks[0]!.matchType).toBe('numeric');
+  });
+
+  it('allows vague hesitation that does not leak facts', () => {
+    const frags = [
+      {
+        witnessId: 'w-faxiao',
+        qid: 'q1',
+        text: '上个月他半夜给我打电话,借了两万,说手头周转一下,还嘱咐我千万别跟他妈提',
+      },
+    ];
+    const utterances = [
+      u({ text: '他最近手头好像有点紧……算了不说了', witnessId: 'w-faxiao' }),
+    ];
+    expect(detectLeaks(utterances, frags)).toEqual([]);
+  });
+});
+
+/* ------------------------------------------------------------------ */
+/* Memory sanitisation                                                 */
+/* ------------------------------------------------------------------ */
+
+describe('sanitiseMemory', () => {
+  it('strips private sentences and replaces with marker', () => {
+    const text = '他花钱分裂。上个月他半夜给我打电话,借了两万。还嘱咐我千万别跟他妈提。他最近联系确实少了。';
+    const sanitised = sanitiseMemory(text);
+    expect(sanitised).not.toContain('借了两万');
+    expect(sanitised).not.toContain('千万别');
+    expect(sanitised).toContain('嘱咐别外传的事');
+    expect(sanitised).toContain('他花钱分裂');
+    expect(sanitised).toContain('他最近联系确实少了');
+  });
+
+  it('returns original text when no private markers', () => {
+    const text = '他最近联系少了,约他吃饭老说忙。';
+    expect(sanitiseMemory(text)).toBe(text);
+  });
+});
+
+/* ------------------------------------------------------------------ */
+/* Cross-witness knowledge conflicts                                   */
+/* ------------------------------------------------------------------ */
+
+describe('buildNoTalkList', () => {
+  it('detects private marker targeting mother', () => {
+    const drafts = [
+      {
+        witness: { id: 'w-faxiao', subjectId: 's1', relation: '发小', consentLevel: 'quotable' as const },
+        memory: [
+          { qid: 'q1', text: '上个月他半夜给我打电话,借了两万。还嘱咐我千万别跟他妈提。' },
+        ],
+      },
+      {
+        witness: { id: 'w-mother', subjectId: 's1', relation: '母亲', consentLevel: 'quotable' as const },
+        memory: [
+          { qid: 'q1', text: '他现在工作忙,上个月还跟我说公司器重他。' },
+        ],
+      },
+    ];
+    const list = buildNoTalkList(drafts);
+    expect(list.length).toBeGreaterThan(0);
+    expect(list.some((item) => item.blindWitnessId === 'w-mother')).toBe(true);
+  });
+
+  it('detects resignation/employment contradiction', () => {
+    const drafts = [
+      {
+        witness: { id: 'w-faxiao', subjectId: 's1', relation: '发小', consentLevel: 'quotable' as const },
+        memory: [
+          { qid: 'q10', text: '就他辞职那天。他谁都没说,周五下班把工牌往桌上一放就走了。' },
+        ],
+      },
+      {
+        witness: { id: 'w-mother', subjectId: 's1', relation: '母亲', consentLevel: 'quotable' as const },
+        memory: [
+          { qid: 'q1', text: '他现在工作忙,周末也加班。上个月他还跟我说公司器重他。' },
+        ],
+      },
+    ];
+    const list = buildNoTalkList(drafts);
+    // Should have an item flagging resignation as a no-talk for mother
+    const resignItem = list.find(
+      (item) => item.blindWitnessId === 'w-mother' && item.topic.includes('辞职'),
+    );
+    expect(resignItem).toBeDefined();
   });
 });
