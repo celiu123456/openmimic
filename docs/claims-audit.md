@@ -219,6 +219,7 @@ divergences 段落已占满 6000 字符预算,episodes 是第一个被砍的段�
 | 证据基础分类修复("大概"+数字不触发 inferred) | 已实现 | `engines/witness/src/basis.ts` | 负向前瞻检查 4 字符内有无数字 |
 | 一人称事件叙事归 witnessed | 已实现 | `engines/witness/src/basis.ts`(FIRST_PERSON_EVENT_PATTERN) | 9 种常见叙事形式 |
 | unknown 上限 0.6→0.85 | 已实现 | `engines/witness/src/basis.ts`(basisConvictionCeiling) | 不再惩罚未使用明确目击词语的事实陈述 |
+| 输出侧事实核对(人格对话回答验证) | 已实现 | `kernel/src/persona-verify.ts`(verifyPersonaResponse) · `server/src/mount-openai.ts`(mountOpenaiPlugin) | 已接入 `/v1/chat/completions` 真实路径;预筛→核对→重写→兜底;流式缓冲后重发;`PERSONA_VERIFY` 环境变量切换;测试: `server/test/openai-verify.test.ts`(8 项) |
 
 ---
 
@@ -226,6 +227,6 @@ divergences 段落已占满 6000 字符预算,episodes 是第一个被砍的段�
 
 | 状态 | 条数 |
 |---|---|
-| 已实现 | 57 |
+| 已实现 | 58 |
 | 部分 | 4 |
 | 计划 | 8 |

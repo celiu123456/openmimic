@@ -140,6 +140,22 @@ Nine error classes (RATE_LIMIT, AUTH_FAILED, QUOTA_EXHAUSTED, TIMEOUT, etc.) wit
 - Retry-after header parsing
 - `isRetryable()` prevents blind retry of non-retryable errors (402/quota, 401/auth)
 
+### Output-side persona verification (kernel/src/persona-verify.ts)
+
+Verifies persona chat responses against the evidence assembled into the
+system prompt. Wired into the live `/v1/chat/completions` endpoint in
+`server/src/mount-openai.ts` (the `mountOpenaiPlugin.apply` function).
+
+- Pre-screen: short/safe responses (greetings, dodges) skip verification
+- Verify → rewrite → re-verify pipeline (up to 3 LLM calls per response)
+- Fallback: if rewrite still fabricates, returns conservative response
+- Stream: buffers full response server-side, verifies, then re-emits as SSE
+- Toggle: `PERSONA_VERIFY` env (default on; `0`/`off`/`false` to disable)
+- LLM calls tagged `persona-verify` in usage ledger
+- `x-openmimic-verify` response header reports outcome
+
+See docs/AUTH.md "Output-side persona verification" for full specification.
+
 ### Evidence basis classification (engines/witness/src/basis.ts)
 
 Rule-based epistemic basis classifier with fixes for:

@@ -94,15 +94,21 @@ The `omk_` prefix makes tokens identifiable by secret-scanning tools
 ## Token hashing
 
 Tokens are hashed with SHA-256 using an instance-level salt. The salt is
-derived from `OPENMIMIC_ADMIN_TOKEN` via HMAC-SHA256:
+a random 256-bit value generated once on first server start and persisted
+in the `api_settings` table under the key `token_salt`.
 
 ```
-salt = HMAC-SHA256(adminToken, "openmimic:token-salt:v1")
+salt = random(32 bytes)          -- stored in DB, generated once
 hash = SHA-256(salt + plaintext)
 ```
 
-When no admin token is configured, a random salt is generated at process
-start (tokens are session-scoped in that case).
+The salt is independent of the admin token. Rotating
+`OPENMIMIC_ADMIN_TOKEN` does **not** invalidate existing scoped tokens.
+
+> **Migration from versions before 2026-10-06**: the salt was previously
+> derived from the admin token via HMAC-SHA256. After upgrading, existing
+> tokens will fail to resolve (401 `unauthorized`). Affected users must
+> recreate their scoped tokens once.
 
 ## Subject binding
 
@@ -221,6 +227,89 @@ Response format:
 }
 ```
 
+## Route-scope table
+
+Every route declares its required scope. Routes without a declaration
+default to `admin` (fail-closed). The table below is the authoritative
+reference; a test (`scoped-auth.test.ts`) enforces zero undeclared routes.
+
+| Method | Path | Scope |
+|--------|------|-------|
+| GET | `/api/health` | open |
+| GET | `/api/capabilities` | open |
+| GET | `/api/invites/:token` | open |
+| POST | `/api/invites/:token/interview` | open |
+| POST | `/api/invites/:token/interview/:id/answer` | open |
+| POST | `/api/invites/:token/interview/:id/submit` | open |
+| GET | `/api/i/:code` | open |
+| GET | `/api/asr/available` | open |
+| POST | `/api/asr` | open |
+| POST | `/api/collector/freetext` | open |
+| GET | `/api/subjects` | persona.read |
+| POST | `/api/subjects` | admin |
+| GET | `/api/subjects/:id` | persona.read |
+| GET | `/api/subjects/:id/claims` | testimony.read |
+| GET | `/api/subjects/:id/coverage` | admin |
+| POST | `/api/subjects/:id/invites` | admin |
+| GET | `/api/subjects/:id/export` | export |
+| GET | `/api/subjects/:id/rooms` | room.read |
+| POST | `/api/subjects/:id/room` | room.run |
+| GET | `/api/rooms/:id` | room.read |
+| POST | `/api/subjects/:id/court` | court.run |
+| GET | `/api/court/:sessionId` | testimony.read |
+| POST | `/api/import` | admin |
+| GET | `/api/tokens` | admin |
+| POST | `/api/tokens` | admin |
+| DELETE | `/api/tokens/:id` | admin |
+| GET | `/v1/models` | persona.read |
+| POST | `/v1/chat/completions` | persona.chat |
+| GET | `/api/subjects/:id/gate/contested` | testimony.read |
+| POST | `/api/subjects/:id/gate/contest` | admin |
+| POST | `/api/subjects/:id/gate/uncontest` | admin |
+| GET | `/api/subjects/:id/meta-perception/*` | admin |
+| GET | `/api/subjects/:id/chatlog/imports` | admin |
+| POST | `/api/subjects/:id/chatlog/*` | admin |
+| DELETE | `/api/subjects/:id/chatlog/imports/:id` | admin |
+| POST | `/api/subjects/:id/biography/generate` | admin |
+| GET | `/api/subjects/:id/biography` | export |
+| POST | `/api/subjects/:id/biography/sections/*/veto` | admin |
+| GET | `/api/subjects/:id/export/character-card` | export |
+| POST | `/api/import/character-card` | admin |
+
+## Output-side persona verification
+
+When a persona replies via `/v1/chat/completions`, the server optionally
+verifies the response against the evidence assembled into the system prompt.
+
+- **Toggle**: `PERSONA_VERIFY` environment variable (default: **enabled**).
+  Set to `0`, `off`, or `false` to disable.
+- **Requirement**: an LLM client must be available in the DI container
+  (the same one used by room/court). Without it, verification is silently
+  disabled.
+- **Non-stream**: after the upstream model responds, the verifier checks
+  for unfounded content. If found, it rewrites the response (up to one
+  rewrite + re-verify cycle). On failure, a conservative fallback response
+  is returned. The `x-openmimic-verify` header reports the outcome:
+  `passed`, `rewritten`, or `failed`.
+- **Stream**: when verification is enabled, streaming requests are buffered
+  server-side (the full response is collected before verification). After
+  verification, the final response is re-emitted as valid SSE chunks. The
+  `x-openmimic-verify` header is set to `buffered`, `buffered-passed`,
+  `buffered-rewritten`, or `failed`. **This adds first-token latency**
+  equal to the full generation time plus one or more verification LLM
+  calls (~1-5s depending on response length). When verification is
+  disabled, streaming passes through directly with no additional latency.
+- **No request-level override**: scoped tokens (`persona.chat`) cannot
+  disable verification via request parameters. The toggle is instance-level
+  only.
+- **Usage accounting**: verification LLM calls are tagged `persona-verify`
+  in the usage ledger and count against the instance's budget.
+- **Error handling**: if the verification LLM call fails (timeout, budget
+  exhaustion, etc.), the unverified response is **never** returned. Instead,
+  a conservative in-character fallback is sent with `x-openmimic-verify:
+  failed`. Upstream errors (402, 429, etc.) are not swallowed -- they
+  propagate as 502 before verification is attempted.
+
 ## Known limitations
 
 - **Single instance**: this is a simple, single-instance token system. There
@@ -229,10 +318,9 @@ Response format:
   no distributed rate limiting.
 - **No token rotation**: to rotate a token, delete the old one and create a
   new one. The client must update its configuration.
-- **Salt tied to admin token**: changing the admin token invalidates all
-  existing scoped tokens (their hashes won't match the new salt). This is
-  intentional: if the admin token is compromised, all derived tokens should
-  be invalidated.
+- **One-way salt migration**: upgrading from the old admin-derived salt
+  invalidates existing tokens (see "Token hashing" above). New tokens
+  are unaffected by admin password rotation.
 - **Loopback mode**: when no admin token is set, the server binds to
   127.0.0.1 only. Scoped tokens still work but there is no network
   protection -- the documentation warns about this risk.
