@@ -18,6 +18,7 @@ import {
   validateSystemPrompt,
   sanitiseOutput,
   checkGuards,
+  checkOpeningIdentity,
   isAcknowledgementPlusQuestion,
   buildRepairInstruction,
   createChatSession,
@@ -47,7 +48,7 @@ function createSubjectAndInvite(store: Store): { subjectId: string; token: strin
   return { subjectId, token: invite.token };
 }
 
-const VALID_OPENING = '你好，我是访谈员，这段对话用来更完整地理解林小满，随时可以停。你们是怎么认识的？';
+const VALID_OPENING = '你好，我是受林小满之托来聊聊的 AI 访谈助手，这段对话用来更完整地理解林小满，随时可以停。你们是怎么认识的？';
 const VALID_ACK_QUESTION = '听起来那天挺难的。你后来是怎么跟他说的？';
 const VALID_QUESTION_2 = '你觉得他是一个怎样的人？';
 const VALID_QUESTION_3 = '他有什么特别的习惯吗？';
@@ -155,6 +156,50 @@ describe('system prompt rendering', () => {
       'unresolved placeholder',
     );
     expect(() => validateSystemPrompt('hello world？')).not.toThrow();
+  });
+
+  it('system prompt always contains AI identity disclosure', () => {
+    const ctx: PromptContext = {
+      mode: 'informant',
+      respondentName: '你',
+      relatedName: '林小满',
+      relation: '朋友',
+      uncoveredAspects: [],
+      isOpening: false,
+    };
+    const prompt = buildSystemPrompt(ctx);
+    expect(prompt).toContain('你是 AI');
+    expect(prompt).toContain('不要自称真人');
+  });
+
+  it('informant opening instruction says AI 访谈助手 and forbids human identity', () => {
+    const ctx: PromptContext = {
+      mode: 'informant',
+      respondentName: '你',
+      relatedName: '林小满',
+      relation: '朋友',
+      uncoveredAspects: [],
+      isOpening: true,
+    };
+    const prompt = buildSystemPrompt(ctx);
+    expect(prompt).toContain('AI 访谈助手');
+    expect(prompt).toContain('受 林小满 之托');
+    expect(prompt).toContain('不要自称朋友');
+  });
+
+  it('self opening instruction says AI 访谈助手 and forbids human identity', () => {
+    const ctx: PromptContext = {
+      mode: 'self',
+      respondentName: '张三',
+      relatedName: '张三',
+      relation: '自己',
+      uncoveredAspects: [],
+      isOpening: true,
+    };
+    const prompt = buildSystemPrompt(ctx);
+    expect(prompt).toContain('AI 访谈助手');
+    expect(prompt).toContain('理解自己');
+    expect(prompt).toContain('不要自称朋友');
   });
 });
 
@@ -304,8 +349,29 @@ describe('guards', () => {
     expect(checkGuards('听起来那天挺难的。你后来是怎么跟他说的？', [])).toBeUndefined();
   });
 
-  it('passes opening: 你好，我是访谈员…你们是怎么认识的？', () => {
-    expect(checkGuards(VALID_OPENING, [])).toBeUndefined();
+  it('passes opening with AI identity', () => {
+    expect(checkGuards(VALID_OPENING, [], true)).toBeUndefined();
+  });
+
+  it('rejects opening that claims human identity (朋友)', () => {
+    const bad = '你好，我是你的朋友，想跟你聊聊林小满。你们怎么认识的？';
+    expect(checkGuards(bad, [], true)).toBe('opening_identity');
+  });
+
+  it('rejects opening that claims human identity (同事)', () => {
+    const bad = '你好，我是TA的同事，想了解下你们的关系。你们怎么认识的？';
+    expect(checkGuards(bad, [], true)).toBe('opening_identity');
+  });
+
+  it('rejects opening without "AI" mention', () => {
+    const noAi = '你好，我是访谈员。想跟你聊聊林小满。你们怎么认识的？';
+    expect(checkGuards(noAi, [], true)).toBe('opening_identity');
+  });
+
+  it('does NOT apply opening_identity guard on non-opening turns', () => {
+    // Text without AI mention — would fail opening guard but passes as non-opening
+    const noAi = '你好，我是访谈员，想跟你聊聊林小满。你们怎么认识的？';
+    expect(checkGuards(noAi, [])).toBeUndefined();
   });
 
   it('rejects chained questions: 他挺好的？那具体呢？', () => {
@@ -318,6 +384,41 @@ describe('guards', () => {
 
   it('rejects newline in output', () => {
     expect(checkGuards('听起来挺好的。\n你后来呢？', [])).toBe('not_single_question');
+  });
+});
+
+/* ------------------------------------------------------------------ */
+/* 3b. Opening identity guard (unit)                                   */
+/* ------------------------------------------------------------------ */
+
+describe('checkOpeningIdentity', () => {
+  it('accepts text with AI and no human identity claim', () => {
+    expect(checkOpeningIdentity('你好，我是 AI 访谈助手。你们怎么认识的？')).toBe(true);
+  });
+
+  it('rejects text claiming to be a friend', () => {
+    expect(checkOpeningIdentity('我是你的朋友，想跟你聊聊。你们怎么认识的？')).toBe(false);
+  });
+
+  it('rejects text claiming to be a colleague (同事)', () => {
+    expect(checkOpeningIdentity('我是他的同事。你们关系怎么样？')).toBe(false);
+  });
+
+  it('rejects text claiming to be a classmate', () => {
+    expect(checkOpeningIdentity('我是她的同学，想聊聊 AI 辅助的话题。你们怎么认识的？')).toBe(false);
+  });
+
+  it('rejects text claiming to be a teacher', () => {
+    expect(checkOpeningIdentity('我是TA的老师。你觉得这个学生怎么样？')).toBe(false);
+  });
+
+  it('rejects text without any AI mention', () => {
+    expect(checkOpeningIdentity('你好，我是访谈员。你们怎么认识的？')).toBe(false);
+  });
+
+  it('accepts "ai" in any casing', () => {
+    expect(checkOpeningIdentity('我是一个ai助手。你们怎么认识的？')).toBe(true);
+    expect(checkOpeningIdentity('这是Ai访谈。你们怎么认识的？')).toBe(true);
   });
 });
 
@@ -382,6 +483,39 @@ describe('repair chain', () => {
     // Effective turns: opening assistant + user (rejected ones filtered out)
     const effectiveAssistant = history.turns.filter((t) => t.role === 'assistant');
     expect(effectiveAssistant).toHaveLength(1); // only the opening
+  });
+});
+
+/* ------------------------------------------------------------------ */
+/* 4b. Opening identity guard integration                              */
+/* ------------------------------------------------------------------ */
+
+describe('opening identity guard (startChat)', () => {
+  it('rejects opening claiming human identity, retries repair, throws on second failure', async () => {
+    const store = newStore();
+    const { token } = createSubjectAndInvite(store);
+    const llm = new FakeLLM([
+      '我是你的朋友，想跟你聊聊林小满。你们是怎么认识的？', // claims friend
+      '我是他的同事，想了解一下林小满。你们是怎么认识的？', // claims colleague
+    ]);
+    const options = makeOptions(llm);
+    await expect(startChat(store, token, options)).rejects.toThrow(
+      'interview_generation_failed',
+    );
+    expect(llm.calls).toHaveLength(2); // original + repair
+  });
+
+  it('rejects opening without AI mention, repair with AI succeeds', async () => {
+    const store = newStore();
+    const { token } = createSubjectAndInvite(store);
+    const llm = new FakeLLM([
+      '你好，我是访谈员。想跟你聊聊林小满。你们是怎么认识的？', // no AI
+      VALID_OPENING, // repair includes AI
+    ]);
+    const options = makeOptions(llm);
+    const result = await startChat(store, token, options);
+    expect(result.message.text).toBe(VALID_OPENING);
+    expect(llm.calls).toHaveLength(2);
   });
 });
 
@@ -712,13 +846,13 @@ describe('self-interview mode', () => {
 
   it('startChat picks invite mode when no explicit mode given', async () => {
     const { token } = createSelfInvite(store);
-    const llm = new FakeLLM(['你好，这段对话用来更完整地理解你自己，随时可以停。最近过得怎么样？']);
+    const llm = new FakeLLM(['你好，我是 AI 访谈助手，这段对话用来帮你更完整地理解自己，随时可以停。最近过得怎么样？']);
     const options = makeOptions(llm);
     const result = await startChat(store, token, options);
     expect(result.mode).toBe('self');
   });
 
-  it('self system prompt uses "如何理解自己" and opening says "你自己"', () => {
+  it('self system prompt uses "如何理解自己" and opening says AI', () => {
     const ctx: PromptContext = {
       mode: 'self',
       respondentName: '张三',
@@ -729,7 +863,8 @@ describe('self-interview mode', () => {
     };
     const prompt = buildSystemPrompt(ctx);
     expect(prompt).toContain('张三如何理解自己');
-    expect(prompt).toContain('理解你自己');
+    expect(prompt).toContain('AI 访谈助手');
+    expect(prompt).toContain('理解自己');
     expect(prompt).not.toContain('理解张三');
   });
 

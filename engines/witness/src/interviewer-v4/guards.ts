@@ -168,19 +168,50 @@ export function isAcknowledgementPlusQuestion(text: string): string | undefined 
 export type GuardFailure =
   | 'not_single_question'
   | 'premature_ending'
-  | 'duplicate';
+  | 'duplicate'
+  | 'opening_identity';
+
+/* ------------------------------------------------------------------ */
+/* Opening-only identity guard                                         */
+/* ------------------------------------------------------------------ */
+
+/**
+ * Pattern matching openings where the model claims to be a friend,
+ * colleague, classmate, family member, relative, or teacher.
+ */
+const CLAIMS_HUMAN_IDENTITY_RE =
+  /我是(?:你的|他的|她的|TA的)?(?:朋友|同事|同学|家人|亲戚|老师)/u;
+
+/**
+ * Check whether an opening turn properly identifies itself as AI.
+ *
+ * Rejects when:
+ *   1. The output claims a human relationship identity, OR
+ *   2. The output does not contain "AI" (case-insensitive).
+ *
+ * Only applied to opening turns — non-opening turns skip this guard.
+ */
+export function checkOpeningIdentity(candidate: string): boolean {
+  if (CLAIMS_HUMAN_IDENTITY_RE.test(candidate)) return false;
+  if (!/ai/i.test(candidate)) return false;
+  return true;
+}
 
 /**
  * Run all guards on a candidate v4 output.
  *
  * @param candidate - sanitised model output
  * @param recentQuestions - the last N questions asked (for dedup)
+ * @param isOpening - whether this is the opening turn (enables identity guard)
  * @returns undefined if passed, or the failure reason
  */
 export function checkGuards(
   candidate: string,
   recentQuestions: readonly string[],
+  isOpening: boolean = false,
 ): GuardFailure | undefined {
+  // Opening-only identity guard
+  if (isOpening && !checkOpeningIdentity(candidate)) return 'opening_identity';
   const questionPart = isAcknowledgementPlusQuestion(candidate);
   if (questionPart === undefined) return 'not_single_question';
   // Premature ending check on the whole text

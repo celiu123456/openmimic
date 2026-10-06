@@ -67,7 +67,7 @@ describe('v4 chat API routes', () => {
 
   it('POST /api/invites/:token/chat starts a chat session', async () => {
     const { token } = await newInvite(base);
-    llm.push('你好，我是访谈员，这段对话用来更完整地理解林小满，随时可以停。你们是怎么认识的？');
+    llm.push('你好，我是受林小满之托来聊聊的 AI 访谈助手，这段对话用来更完整地理解林小满，随时可以停。你们是怎么认识的？');
 
     const opened = await api(base, 'POST', `/api/invites/${token}/chat`);
     expect(opened.status).toBe(201);
@@ -78,7 +78,7 @@ describe('v4 chat API routes', () => {
 
   it('POST /api/chat/:sid/say returns a message', async () => {
     const { token } = await newInvite(base);
-    llm.push('你好，我是访谈员。你们是怎么认识的？');
+    llm.push('你好，我是 AI 访谈助手。你们是怎么认识的？');
     const opened = await api(base, 'POST', `/api/invites/${token}/chat`);
     const sid = opened.body.sessionId as string;
 
@@ -92,7 +92,7 @@ describe('v4 chat API routes', () => {
 
   it('POST /api/chat/:sid/say returns 503 on generation failure', async () => {
     const { token } = await newInvite(base);
-    llm.push('你好，我是访谈员。你们是怎么认识的？');
+    llm.push('你好，我是 AI 访谈助手。你们是怎么认识的？');
     const opened = await api(base, 'POST', `/api/invites/${token}/chat`);
     const sid = opened.body.sessionId as string;
 
@@ -111,7 +111,7 @@ describe('v4 chat API routes', () => {
 
   it('POST /api/chat/:sid/finish submits testimony', async () => {
     const { token, subjectId } = await newInvite(base);
-    llm.push('你好，我是访谈员。你们是怎么认识的？');
+    llm.push('你好，我是 AI 访谈助手。你们是怎么认识的？');
     const opened = await api(base, 'POST', `/api/invites/${token}/chat`);
     const sid = opened.body.sessionId as string;
 
@@ -129,7 +129,7 @@ describe('v4 chat API routes', () => {
 
   it('GET /api/chat/:sid returns session history', async () => {
     const { token } = await newInvite(base);
-    llm.push('你好，我是访谈员。你们是怎么认识的？');
+    llm.push('你好，我是 AI 访谈助手。你们是怎么认识的？');
     const opened = await api(base, 'POST', `/api/invites/${token}/chat`);
     const sid = opened.body.sessionId as string;
 
@@ -201,7 +201,7 @@ describe('self-interview mode (server-level)', () => {
     const invite = await api(base, 'POST', `/api/subjects/${subjectId}/invites`, { mode: 'self' });
     const token = invite.body.token as string;
 
-    llm.push('你好，这段对话用来更完整地理解你自己，随时可以停。最近过得怎么样？');
+    llm.push('你好，我是 AI 访谈助手，这段对话用来帮你更完整地理解自己，随时可以停。最近过得怎么样？');
     const opened = await api(base, 'POST', `/api/invites/${token}/chat`);
     expect(opened.status).toBe(201);
     expect(opened.body.mode).toBe('self');
@@ -222,7 +222,7 @@ describe('self-interview mode (server-level)', () => {
     // mode should be absent or undefined for informant
     expect(resolved.body.mode).toBeUndefined();
 
-    llm.push('你好，我是访谈员。你们是怎么认识的？');
+    llm.push('你好，我是 AI 访谈助手。你们是怎么认识的？');
     const opened = await api(base, 'POST', `/api/invites/${token}/chat`);
     expect(opened.body.mode).toBe('informant');
   });

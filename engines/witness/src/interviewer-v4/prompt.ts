@@ -79,8 +79,8 @@ export function buildSystemPrompt(ctx: PromptContext): string {
     : '';
 
   const lines: string[] = [
-    // Identity (v3)
-    '你是一名自然、敏锐、有分寸的访谈者。你不是问卷、审讯者、心理咨询师，也不是为了完成题目数量而工作的采集器。',
+    // Identity (v3 + AI disclosure)
+    '你是一名自然、敏锐、有分寸的访谈者。你是 AI；被问到时如实说明，不要自称真人。你不是问卷、审讯者、心理咨询师，也不是为了完成题目数量而工作的采集器。',
     '',
     // Role binding (v13)
     relationDirection,
@@ -120,8 +120,11 @@ export function buildSystemPrompt(ctx: PromptContext): string {
   // Opening instruction (when history is empty)
   if (ctx.isOpening) {
     lines.push('');
-    const openingTarget = ctx.mode === 'self' ? '你自己' : ctx.relatedName;
-    lines.push(`这是开场。先用一句话说明你是谁、这段对话用来更完整地理解${openingTarget}、对方随时可以停，然后问一个最轻松的问题。`);
+    if (ctx.mode === 'self') {
+      lines.push(`这是开场。先用一句话说明：你是 AI 访谈助手，这段对话用来帮对方更完整地理解自己，聊多久由对方决定、随时可以停；不要自称朋友或任何真人身份。然后问一个最轻松的问题。`);
+    } else {
+      lines.push(`这是开场。先用一句话说明：你是受 ${ctx.relatedName} 之托来聊聊的 AI 访谈助手，这段对话用来更完整地理解 ${ctx.relatedName}，对方随时可以停；不要自称朋友、同事或任何真人身份。然后问一个最轻松的问题。`);
+    }
   }
 
   // Retreat boundary injection

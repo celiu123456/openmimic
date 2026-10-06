@@ -304,15 +304,15 @@ export async function startChat(
   const raw = await callLLM(options.llm, systemPrompt, '', state);
   const sanitised = sanitiseOutput(raw);
 
-  // Guards on opening (single attempt, no repair for opening)
-  const failure = checkGuards(sanitised, []);
+  // Guards on opening (with identity check, repair once)
+  const failure = checkGuards(sanitised, [], true);
   if (failure) {
     // Repair once
     const repairCtx: PromptContext = { ...ctx, repairInjection: buildRepairInstruction(sanitised) };
     const repairSystem = buildSystemPrompt(repairCtx);
     const repairRaw = await callLLM(options.llm, repairSystem, '', state);
     const repairSanitised = sanitiseOutput(repairRaw);
-    const repairFailure = checkGuards(repairSanitised, []);
+    const repairFailure = checkGuards(repairSanitised, [], true);
     if (repairFailure) {
       logGenerationFailure({
         route: 'start',

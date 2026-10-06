@@ -29,13 +29,13 @@ The same module handles both; only the objective sentence and relationship bindi
 
 The system prompt is built by `buildSystemPrompt(ctx)` in `prompt.ts`. It includes:
 
-1. **Identity**: Natural, perceptive, boundaried interviewer (not a questionnaire, interrogator, therapist, or data collector).
+1. **Identity**: Natural, perceptive, boundaried interviewer (not a questionnaire, interrogator, therapist, or data collector). Always identifies itself as AI; never claims to be a real person.
 2. **Role binding**: Respondent name, related name, relationship direction. "You" always addresses the respondent; "I" always means the respondent. Never swap behaviours, dialogue, feelings, or responses between the two. Self-mode adds: respondent and related are the same person.
 3. **Objective**: Scenario-specific goal sentence (see `objective.ts`).
 4. **Method rules**: 9 constraints covering active listening, open questions, no evaluation, retreat on pushback, no fabrication, no model-decided endpoint.
 5. **Uncovered aspects** (optional): Up to 6 dimension names from `coverage.ts` as reference, not a checklist.
 6. **Output format**: At most one acknowledgement + one question ending with `?`. No analysis, rules, numbering, JSON, or Markdown.
-7. **Opening instruction** (first turn only): Introduce yourself, explain purpose, mention they can stop anytime, ask the lightest question.
+7. **Opening instruction** (first turn only): Explicitly identify as AI assistant, explain purpose (informant: on behalf of the subject; self: to help understand yourself), mention they can stop anytime, forbid claiming any human identity (friend, colleague, etc.), ask the lightest question.
 8. **Retreat injection** (when detected): Brief "no worries", immediately switch direction.
 9. **Repair injection** (after guard failure): Re-generate instruction.
 
@@ -47,6 +47,7 @@ Guards run in `guards.ts`, reusing existing implementations from `interview-stat
 2. **Premature ending**: Regex catches closing/wrap-up language.
 3. **Dedup**: 2-gram Jaccard >= 0.58 or containment >= 0.72 against last 12 questions.
 4. **Acknowledgement check**: The acknowledgement part must not contain its own question mark.
+5. **Opening identity** (opening turn only): Rejects outputs that claim a human relationship identity (`我是你的朋友/同事/同学/家人/亲戚/老师`) or that do not mention "AI" (case-insensitive). Only applied when `isOpening=true`.
 
 ### Repair Chain
 
