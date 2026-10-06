@@ -8,7 +8,7 @@
  */
 import { computed, onMounted, ref } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
-import { ApiError } from '../api';
+import { ApiError, getAdminToken } from '../api';
 
 const route = useRoute();
 const router = useRouter();
@@ -74,11 +74,15 @@ function onFileSelect(event: Event): void {
 /* ------------------------------------------------------------------ */
 
 async function chatlogRequest<T>(method: string, path: string, body?: unknown): Promise<T> {
+  const headers: Record<string, string> = {};
+  const adminToken = getAdminToken();
+  if (adminToken) headers['authorization'] = `Bearer ${adminToken}`;
   const init: RequestInit = { method };
   if (body !== undefined) {
-    init.headers = { 'content-type': 'application/json' };
+    headers['content-type'] = 'application/json';
     init.body = JSON.stringify(body);
   }
+  init.headers = headers;
   const response = await fetch(path, init);
   const text = await response.text();
   const parsed = text.trim() ? (JSON.parse(text) as unknown) : {};

@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { ref, computed, onMounted } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
+import { getAdminToken } from '../api';
 
 interface DivergencePosition {
   witnessId: string;
@@ -67,8 +68,13 @@ const gateEnabled = ref(false);
 const confirmingClaimId = ref<string | null>(null);
 const contestedExpanded = ref(false);
 
+function authHeaders(): Record<string, string> {
+  const token = getAdminToken();
+  return token ? { authorization: `Bearer ${token}` } : {};
+}
+
 async function fetchJson<T>(path: string): Promise<T> {
-  const response = await fetch(path);
+  const response = await fetch(path, { headers: authHeaders() });
   if (!response.ok) throw new Error(`${response.status}`);
   return (await response.json()) as T;
 }
@@ -157,6 +163,7 @@ async function contestClaim(claimId: string): Promise<void> {
   try {
     const response = await fetch(`/api/claims/${encodeURIComponent(claimId)}/contest`, {
       method: 'POST',
+      headers: authHeaders(),
     });
     if (!response.ok) {
       const body = await response.json().catch(() => ({}));
@@ -176,6 +183,7 @@ async function uncontestClaim(claimId: string): Promise<void> {
   try {
     const response = await fetch(`/api/claims/${encodeURIComponent(claimId)}/uncontest`, {
       method: 'POST',
+      headers: authHeaders(),
     });
     if (!response.ok) {
       const body = await response.json().catch(() => ({}));

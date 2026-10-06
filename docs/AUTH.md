@@ -129,6 +129,29 @@ Tokens are sent the same way as the admin token:
 2. `_token=omk_...` cookie
 3. `?_token=omk_...` query parameter
 
+## Web UI authentication
+
+The web management UI (served at `/`) stores the admin token in
+`localStorage` (key `openmimic.adminToken`) and attaches it as a
+`Bearer` header on every management API call. The token is never sent
+on open (public) routes such as `/api/invites/...`, `/api/chat/...` or
+`/api/interview/...`.
+
+### Providing the token
+
+Three ways:
+
+1. **One-time URL parameter**: open `http://host:port/?admin=<token>`.
+   The page stores the token and strips the parameter from the URL via
+   `history.replaceState` (it does not appear in browser history or
+   Referer headers).
+
+2. **Manual entry**: when a management call returns 401, the page shows
+   an inline panel asking for the token. The footer also has a
+   "管理令牌" link to enter or clear the token at any time.
+
+3. **localStorage directly**: set `openmimic.adminToken` in DevTools.
+
 ## Route scope enforcement
 
 Every route declares the scope it requires. The enforcement order is:

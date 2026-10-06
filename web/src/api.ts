@@ -268,6 +268,87 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
 }
 
+/* ------------------------------------------------------------------ */
+/* Admin token storage                                                 */
+/* ------------------------------------------------------------------ */
+
+const ADMIN_TOKEN_KEY = 'openmimic.adminToken';
+
+/** Read the stored admin token (returns empty string when absent). */
+export function getAdminToken(): string {
+  try {
+    return localStorage.getItem(ADMIN_TOKEN_KEY) ?? '';
+  } catch {
+    return '';
+  }
+}
+
+/** Persist the admin token (empty string clears it). */
+export function setAdminToken(token: string): void {
+  try {
+    if (token) {
+      localStorage.setItem(ADMIN_TOKEN_KEY, token);
+    } else {
+      localStorage.removeItem(ADMIN_TOKEN_KEY);
+    }
+  } catch {
+    // localStorage unavailable — silently ignored.
+  }
+}
+
+/* ------------------------------------------------------------------ */
+/* Open-route detection                                                */
+/* ------------------------------------------------------------------ */
+
+/**
+ * Prefixes of routes that never require authentication.
+ *
+ * Derived from server/src/auth.ts OPEN_PREFIXES and
+ * server/src/mount-rest.ts `{ open: true }` declarations:
+ *   /api/health, /api/capabilities, /api/invites/:token,
+ *   /api/i/:code, /api/interview/:sid/*, /api/chat/:sid/*,
+ *   /api/asr, /api/asr/available
+ */
+const OPEN_PREFIXES = [
+  '/api/health',
+  '/api/capabilities',
+  '/api/invites/',
+  '/api/i/',
+  '/api/interview/',
+  '/api/chat/',
+  '/api/asr',
+];
+
+/** Returns true when `path` is an open (unauthenticated) route. */
+export function isOpenRoute(path: string): boolean {
+  return OPEN_PREFIXES.some((prefix) => path.startsWith(prefix));
+}
+
+/* ------------------------------------------------------------------ */
+/* ?admin= query-param helper                                          */
+/* ------------------------------------------------------------------ */
+
+/**
+ * If the current URL contains `?admin=<token>`, store the token and strip
+ * the parameter from the address bar (so it is not leaked in Referer /
+ * browser history). Returns the token if one was consumed, empty otherwise.
+ */
+export function consumeAdminQueryParam(): string {
+  try {
+    const url = new URL(window.location.href);
+    const token = url.searchParams.get('admin');
+    if (token) {
+      setAdminToken(token);
+      url.searchParams.delete('admin');
+      window.history.replaceState(null, '', url.pathname + url.search + url.hash);
+      return token;
+    }
+  } catch {
+    // ignore
+  }
+  return '';
+}
+
 export function createApiClient(options: ApiClientOptions = {}): ApiClient {
   const baseUrl = (options.baseUrl ?? '').replace(/\/+$/, '');
   const doFetch = options.fetchImpl ?? ((...args: Parameters<typeof fetch>) => fetch(...args));
@@ -277,6 +358,32 @@ export function createApiClient(options: ApiClientOptions = {}): ApiClient {
     init: RequestInit = {},
     accept = 'application/json',
   ): Promise<T> {
+    // Attach admin token for management (non-open) routes on same origin.
+    if (!isOpenRoute(path)) {
+      const adminToken = getAdminToken();
+      if (adminToken) {
+        const isSameOrigin = baseUrl === '' || (() => {
+          try {
+            const origin = typeof window !== 'undefined' ? window.location.origin : undefined;
+            return origin ? new URL(baseUrl).origin === origin : true;
+          } catch {
+            return true;
+          }
+        })();
+        if (isSameOrigin) {
+          const existing = init.headers ?? {};
+          const merged: Record<string, string> =
+            existing instanceof Headers
+              ? Object.fromEntries(existing.entries())
+              : Array.isArray(existing)
+                ? Object.fromEntries(existing)
+                : { ...existing } as Record<string, string>;
+          merged['authorization'] = `Bearer ${adminToken}`;
+          init = { ...init, headers: merged };
+        }
+      }
+    }
+
     let response: Response;
     try {
       response = await doFetch(`${baseUrl}${path}`, init);

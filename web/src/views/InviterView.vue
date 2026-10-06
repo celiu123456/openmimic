@@ -5,6 +5,9 @@ import { qrToSvg } from '@openmimic/shared/browser';
 import {
   ApiError,
   api,
+  getAdminToken,
+  setAdminToken,
+  consumeAdminQueryParam,
   type RoomPayload,
   type CoverageResponse,
   type DimensionCoveragePayload,
@@ -49,6 +52,10 @@ const courtBusy = ref(false);
 const courtNeedsKey = ref(false);
 const courtError = ref('');
 const courtDone = ref(false);
+const nameHint = ref('');
+const showTokenPanel = ref(false);
+const tokenInput = ref('');
+const tokenSaved = ref(false);
 let timer: ReturnType<typeof setInterval> | null = null;
 
 const link = computed(() =>
@@ -139,12 +146,51 @@ function startPolling(): void {
   }, POLL_MS);
 }
 
+/** Classify an ApiError into a user-facing message. Returns true if handled as auth. */
+function handleAuthError(caught: unknown): boolean {
+  if (caught instanceof ApiError) {
+    if (caught.status === 401) {
+      error.value = '';
+      showTokenPanel.value = true;
+      return true;
+    }
+    if (caught.status === 403) {
+      error.value = '令牌权限不足，请检查后重试。';
+      return true;
+    }
+  }
+  return false;
+}
+
+function saveToken(): void {
+  const raw = tokenInput.value.trim();
+  setAdminToken(raw);
+  showTokenPanel.value = false;
+  tokenSaved.value = true;
+  window.setTimeout(() => { tokenSaved.value = false; }, 2000);
+  // Retry the last user action by re-running create.
+  void create();
+}
+
+function openTokenSettings(): void {
+  tokenInput.value = getAdminToken();
+  showTokenPanel.value = true;
+}
+
+function clearToken(): void {
+  setAdminToken('');
+  tokenInput.value = '';
+  showTokenPanel.value = false;
+}
+
 async function create(): Promise<void> {
   const name = displayName.value.trim();
   if (name === '') {
-    error.value = '先写一个称呼。';
+    nameHint.value = '称呼不能为空。';
+    error.value = '';
     return;
   }
+  nameHint.value = '';
   busy.value = true;
   error.value = '';
   try {
@@ -160,8 +206,10 @@ async function create(): Promise<void> {
     await refreshProgress();
     void refreshCoverage();
     startPolling();
-  } catch {
-    error.value = '创建失败，请稍后再试。';
+  } catch (caught) {
+    if (!handleAuthError(caught)) {
+      error.value = '创建失败，请稍后再试。';
+    }
   } finally {
     busy.value = false;
   }
@@ -239,7 +287,9 @@ async function openOwnRoom(): Promise<void> {
     await api.createRoom(subjectId.value);
     await refreshRooms();
   } catch (caught) {
-    if (caught instanceof ApiError && caught.status === 501) {
+    if (handleAuthError(caught)) {
+      // handled
+    } else if (caught instanceof ApiError && caught.status === 501) {
       // No model configured: the button goes grey and says why.
       roomNeedsKey.value = true;
     } else {
@@ -259,7 +309,9 @@ async function runCourt(): Promise<void> {
     await api.runCourt(subjectId.value);
     courtDone.value = true;
   } catch (caught) {
-    if (caught instanceof ApiError && caught.status === 501) {
+    if (handleAuthError(caught)) {
+      // handled
+    } else if (caught instanceof ApiError && caught.status === 501) {
       courtNeedsKey.value = true;
     } else {
       courtError.value = '法庭没能开成,稍后再试。';
@@ -306,6 +358,7 @@ function roomStatusLabel(room: RoomPayload): string {
 }
 
 onMounted(() => {
+  consumeAdminQueryParam();
   subjectId.value = localStorage.getItem(SUBJECT_KEY) ?? '';
   token.value = localStorage.getItem(TOKEN_KEY) ?? '';
   subjectName.value = subjectNameFor(localStorage, subjectId.value) ?? '';
@@ -345,7 +398,9 @@ onBeforeUnmount(stopPolling);
           type="text"
           placeholder="比如：林小满"
           @keyup.enter="create"
+          @input="nameHint = ''"
         />
+        <p v-if="nameHint" class="error small" style="margin-top: 0.3rem">{{ nameHint }}</p>
       </div>
       <div style="margin-top: 0.6rem">
         <span class="label">采访模式</span>
@@ -374,6 +429,21 @@ onBeforeUnmount(stopPolling);
         </button>
       </div>
       <p v-if="error" class="error">{{ error }}</p>
+
+      <div v-if="showTokenPanel" class="token-panel" style="margin-top: 1rem">
+        <p class="muted small">此服务已开启访问控制，请输入管理令牌</p>
+        <input
+          v-model="tokenInput"
+          class="input"
+          type="password"
+          placeholder="管理令牌"
+          @keyup.enter="saveToken"
+        />
+        <div class="row" style="margin-top: 0.5rem; gap: 0.5rem">
+          <button type="button" class="btn primary" @click="saveToken">保存</button>
+          <button type="button" class="btn" @click="clearToken">清除</button>
+        </div>
+      </div>
     </div>
 
     <section v-if="token !== ''" style="margin-top: 2.4rem">
@@ -478,5 +548,13 @@ onBeforeUnmount(stopPolling);
       <p v-if="courtDone" class="muted small">法庭已结束，点「查看报告」看结果。</p>
       <p v-if="courtError" class="error small">{{ courtError }}</p>
     </section>
+
+    <footer style="margin-top: 3rem; text-align: center">
+      <button
+        type="button"
+        class="btn ghost small"
+        @click="openTokenSettings"
+      >管理令牌</button>
+    </footer>
   </main>
 </template>

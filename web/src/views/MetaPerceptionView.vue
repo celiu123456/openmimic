@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { ref, onMounted, computed } from 'vue';
 import { useRoute } from 'vue-router';
+import { getAdminToken } from '../api';
 
 interface MetaQuestion {
   qid: string;
@@ -47,8 +48,14 @@ const phase = ref<'loading' | 'predict' | 'submitted' | 'result'>('loading');
 const error = ref('');
 const scoring = ref(false);
 
+function authHeaders(): Record<string, string> {
+  const token = getAdminToken();
+  return token ? { authorization: `Bearer ${token}` } : {};
+}
+
 async function fetchJson<T>(path: string, init?: RequestInit): Promise<T> {
-  const response = await fetch(path, init);
+  const merged = { ...init, headers: { ...authHeaders(), ...(init?.headers as Record<string, string> | undefined) } };
+  const response = await fetch(path, merged);
   if (!response.ok) throw new Error(`${response.status}`);
   return (await response.json()) as T;
 }
@@ -60,7 +67,7 @@ function predKey(witnessId: string, qid: string): string {
 onMounted(async () => {
   try {
     // Check if result already exists
-    const resResponse = await fetch(`/api/subjects/${encodeURIComponent(subjectId)}/meta/result`);
+    const resResponse = await fetch(`/api/subjects/${encodeURIComponent(subjectId)}/meta/result`, { headers: authHeaders() });
     if (resResponse.ok) {
       const data = (await resResponse.json()) as MetaResult;
       if (data.pending) {

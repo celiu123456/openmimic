@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { ref, onMounted, computed } from 'vue';
 import { useRoute } from 'vue-router';
+import { getAdminToken } from '../api';
 
 interface Paragraph {
   text: string;
@@ -40,8 +41,14 @@ const error = ref('');
 const generating = ref(false);
 const includeConfidential = ref(false);
 
+function authHeaders(): Record<string, string> {
+  const token = getAdminToken();
+  return token ? { authorization: `Bearer ${token}` } : {};
+}
+
 async function fetchJson<T>(path: string, init?: RequestInit): Promise<T> {
-  const response = await fetch(path, init);
+  const merged = { ...init, headers: { ...authHeaders(), ...(init?.headers as Record<string, string> | undefined) } };
+  const response = await fetch(path, merged);
   if (!response.ok) {
     const body = await response.json().catch(() => ({}));
     const msg = (body as any)?.error?.message ?? `${response.status}`;
