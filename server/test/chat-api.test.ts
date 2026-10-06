@@ -109,6 +109,29 @@ describe('v4 chat API routes', () => {
     );
   });
 
+  it('POST /api/chat/:sid/say returns 503 on transport error', async () => {
+    const { token } = await newInvite(base);
+    llm.push('你好，我是 AI 访谈助手。你们是怎么认识的？');
+    const opened = await api(base, 'POST', `/api/invites/${token}/chat`);
+    const sid = opened.body.sessionId as string;
+
+    // Simulate a transport error (checked by name, not import)
+    llm.push(() => {
+      const err = new Error('LLM transport failed after 3 attempts: fetch failed');
+      err.name = 'LLMTransportError';
+      (err as unknown as { code: string }).code = 'ECONNRESET';
+      throw err;
+    });
+
+    const step = await api(base, 'POST', `/api/chat/${sid}/say`, {
+      text: '他人挺好的',
+    });
+    expect(step.status).toBe(503);
+    expect((step.body.error as Record<string, unknown>).code).toBe(
+      'interview_generation_failed',
+    );
+  });
+
   it('POST /api/chat/:sid/finish submits testimony', async () => {
     const { token, subjectId } = await newInvite(base);
     llm.push('你好，我是 AI 访谈助手。你们是怎么认识的？');

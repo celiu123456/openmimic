@@ -111,15 +111,29 @@ function logGenerationFailure(opts: {
   finishReason?: string;
   outputLength: number;
   outputHead?: string;
+  errorName?: string;
+  errorCode?: string;
 }): void {
   const head = opts.outputHead
     ? ` output_head=${JSON.stringify(opts.outputHead.slice(0, 40))}`
     : '';
+  const errPart = opts.errorName
+    ? ` error=${opts.errorName}${opts.errorCode ? `(${opts.errorCode})` : ''}`
+    : '';
   console.error(
     `[interview-v4] generation_failed route=${opts.route} session=${opts.sessionId}` +
     ` reason=${opts.reason} finish_reason=${opts.finishReason ?? 'unknown'}` +
-    ` output_len=${opts.outputLength}${head}`,
+    ` output_len=${opts.outputLength}${head}${errPart}`,
   );
+}
+
+/**
+ * Check if an error is a transport/provider error (LLMTransportError from
+ * the court engine, or any network-level error that is not a logic bug).
+ * We check by name rather than importing from court to avoid a dependency.
+ */
+function isProviderError(err: unknown): boolean {
+  return err instanceof Error && err.name === 'LLMTransportError';
 }
 
 /* ------------------------------------------------------------------ */
@@ -301,7 +315,24 @@ export async function startChat(
   const systemPrompt = buildSystemPrompt(ctx);
   validateSystemPrompt(systemPrompt);
 
-  const raw = await callLLM(options.llm, systemPrompt, '', state);
+  let raw: string;
+  try {
+    raw = await callLLM(options.llm, systemPrompt, '', state);
+  } catch (err: unknown) {
+    if (isProviderError(err)) {
+      const te = err as Error & { code?: string };
+      logGenerationFailure({
+        route: 'start',
+        sessionId,
+        reason: 'provider_error',
+        outputLength: 0,
+        errorName: te.name,
+        errorCode: te.code,
+      });
+      throw new InterviewStateError('interview_generation_failed');
+    }
+    throw err;
+  }
   const sanitised = sanitiseOutput(raw);
 
   // Guards on opening (with identity check, repair once)
@@ -310,7 +341,24 @@ export async function startChat(
     // Repair once
     const repairCtx: PromptContext = { ...ctx, repairInjection: buildRepairInstruction(sanitised) };
     const repairSystem = buildSystemPrompt(repairCtx);
-    const repairRaw = await callLLM(options.llm, repairSystem, '', state);
+    let repairRaw: string;
+    try {
+      repairRaw = await callLLM(options.llm, repairSystem, '', state);
+    } catch (repairErr: unknown) {
+      if (isProviderError(repairErr)) {
+        const te = repairErr as Error & { code?: string };
+        logGenerationFailure({
+          route: 'start',
+          sessionId,
+          reason: 'provider_error',
+          outputLength: 0,
+          errorName: te.name,
+          errorCode: te.code,
+        });
+        throw new InterviewStateError('interview_generation_failed');
+      }
+      throw repairErr;
+    }
     const repairSanitised = sanitiseOutput(repairRaw);
     const repairFailure = checkGuards(repairSanitised, [], true);
     if (repairFailure) {
@@ -359,9 +407,19 @@ export async function say(
 
   const text = input.text.trim();
 
-  // Record user turn
-  const userTurnId = newId(options);
-  state = addUserTurn(state, userTurnId, text, now);
+  // Idempotent user turn: if the last effective turn is a user turn with
+  // the same text, the client is retrying after a failed generation — do
+  // not append a duplicate.
+  const effectiveTurns = state.turns.filter((t) => !t.rejected);
+  const lastTurn = effectiveTurns[effectiveTurns.length - 1];
+  const isRetry = lastTurn?.role === 'user' && lastTurn.text === text;
+
+  if (!isRetry) {
+    const userTurnId = newId(options);
+    state = addUserTurn(state, userTurnId, text, now);
+    // Persist user turn so it survives a provider error
+    saveChatSession(store, sessionId, state);
+  }
 
   // Retreat detection
   const retreat = detectRetreat(text);
@@ -398,7 +456,25 @@ export async function say(
   validateSystemPrompt(systemPrompt);
 
   // Generate response
-  const raw = await callLLM(options.llm, systemPrompt, text, state);
+  let raw: string;
+  try {
+    raw = await callLLM(options.llm, systemPrompt, text, state);
+  } catch (err: unknown) {
+    if (isProviderError(err)) {
+      const te = err as Error & { code?: string };
+      logGenerationFailure({
+        route: 'say',
+        sessionId,
+        reason: 'provider_error',
+        outputLength: 0,
+        errorName: te.name,
+        errorCode: te.code,
+      });
+      // User turn is already persisted; client can retry same text
+      throw new InterviewStateError('interview_generation_failed');
+    }
+    throw err;
+  }
   const sanitised = sanitiseOutput(raw);
   const recentQs = askedQuestions(state);
   const failure = checkGuards(sanitised, recentQs);
@@ -418,7 +494,24 @@ export async function say(
   // One repair attempt
   const repairCtx: PromptContext = { ...ctx, repairInjection: buildRepairInstruction(sanitised) };
   const repairSystem = buildSystemPrompt(repairCtx);
-  const repairRaw = await callLLM(options.llm, repairSystem, text, state);
+  let repairRaw: string;
+  try {
+    repairRaw = await callLLM(options.llm, repairSystem, text, state);
+  } catch (repairErr: unknown) {
+    if (isProviderError(repairErr)) {
+      const te = repairErr as Error & { code?: string };
+      logGenerationFailure({
+        route: 'say',
+        sessionId,
+        reason: 'provider_error',
+        outputLength: 0,
+        errorName: te.name,
+        errorCode: te.code,
+      });
+      throw new InterviewStateError('interview_generation_failed');
+    }
+    throw repairErr;
+  }
   const repairSanitised = sanitiseOutput(repairRaw);
   const repairFailure = checkGuards(repairSanitised, recentQs);
 

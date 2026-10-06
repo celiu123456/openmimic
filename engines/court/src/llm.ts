@@ -55,6 +55,27 @@ export interface OpenAICompatClientOptions {
    * Default: auto-detected from baseUrl (enabled for deepseek endpoints).
    */
   disableThinking?: boolean;
+  /**
+   * Injectable sleep function for transport-retry backoff.
+   * Defaults to real `setTimeout`-based sleep. Tests inject a no-op.
+   */
+  sleep?: (ms: number) => Promise<void>;
+  /**
+   * Per-attempt timeout in milliseconds.  Each transport attempt is bounded
+   * by this value via `AbortSignal.timeout` so a single connect hang cannot
+   * burn the whole user-facing budget.  Default: 8000 ms.
+   */
+  perAttemptTimeoutMs?: number;
+}
+
+/** Error subclass for transport / provider errors that survived retries. */
+export class LLMTransportError extends Error {
+  readonly code: string;
+  constructor(message: string, code: string) {
+    super(message);
+    this.name = 'LLMTransportError';
+    this.code = code;
+  }
 }
 
 const ChatCompletionResponseSchema = z.object({
@@ -84,6 +105,24 @@ const ChatCompletionResponseSchema = z.object({
  * nothing here performs I/O until {@link OpenAICompatClient.complete} is called,
  * and the W1 test suite never calls it.
  */
+/** Transport error cause codes that are retryable (DNS, connect, socket). */
+const RETRYABLE_CAUSE_CODES = new Set([
+  'ENOTFOUND', 'EAI_AGAIN', 'ECONNRESET', 'ETIMEDOUT',
+  'UND_ERR_CONNECT_TIMEOUT', 'UND_ERR_SOCKET',
+]);
+
+/** HTTP status codes from the upstream that warrant a retry. */
+const RETRYABLE_HTTP_STATUSES = new Set([502, 503, 504]);
+
+/** Maximum number of transport retries (after the first attempt). */
+const MAX_TRANSPORT_RETRIES = 2;
+
+/** Default backoff schedule in milliseconds (one entry per retry). */
+const BACKOFF_MS = [300, 1200];
+
+const defaultSleep = (ms: number): Promise<void> =>
+  new Promise((resolve) => setTimeout(resolve, ms));
+
 export class OpenAICompatClient implements LLMClient {
   private readonly baseUrl: string;
   private readonly apiKey: string;
@@ -91,6 +130,8 @@ export class OpenAICompatClient implements LLMClient {
   private readonly fetchImpl: typeof fetch;
   private readonly timeoutMs: number;
   private readonly disableThinking: boolean;
+  private readonly sleep: (ms: number) => Promise<void>;
+  private readonly perAttemptTimeoutMs: number;
 
   /**
    * The `finish_reason` from the most recent `complete()` call.
@@ -107,6 +148,8 @@ export class OpenAICompatClient implements LLMClient {
     // Auto-detect DeepSeek endpoints to disable thinking by default
     this.disableThinking = options.disableThinking ??
       (/deepseek/i.test(this.baseUrl) || /deepseek/i.test(this.model));
+    this.sleep = options.sleep ?? defaultSleep;
+    this.perAttemptTimeoutMs = options.perAttemptTimeoutMs ?? 8_000;
   }
 
   /**
@@ -172,82 +215,132 @@ export class OpenAICompatClient implements LLMClient {
 
     checkBudget();
 
-    const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), this.timeoutMs);
-    try {
-      const body: Record<string, unknown> = {
-        model: this.model,
-        temperature: 0,
-        messages: [
-          { role: 'system', content: system },
-          { role: 'user', content: user },
-        ],
-      };
-      if (maxTokens !== undefined) {
-        body.max_tokens = maxTokens;
-      }
-      // Disable thinking/reasoning when requested per-call or per-client,
-      // gated by LLM_THINKING_PARAM and provider detection.
-      const wantDisable = thinking === 'disabled' || this.disableThinking;
-      if (this.shouldSendThinking(wantDisable)) {
-        body.thinking = { type: 'disabled' };
-      }
-
-      const response = await this.fetchImpl(`${this.baseUrl}/chat/completions`, {
-        method: 'POST',
-        headers: {
-          'content-type': 'application/json',
-          ...(this.apiKey ? { authorization: `Bearer ${this.apiKey}` } : {}),
-        },
-        body: JSON.stringify(body),
-        signal: controller.signal,
-      });
-
-      if (!response.ok) {
-        const detail = await response.text().catch(() => '');
-        if (response.status === 402) {
-          throw new InsufficientBalanceError(402, detail.slice(0, 500));
-        }
-        throw new Error(
-          `LLM request failed: ${response.status} ${response.statusText}${detail ? ` — ${detail.slice(0, 500)}` : ''}`,
-        );
-      }
-
-      const parsed = ChatCompletionResponseSchema.parse(await response.json());
-      const content = parsed.choices[0]?.message.content ?? '';
-      const reasoningContent = parsed.choices[0]?.message.reasoning_content ?? '';
-      const finishReason = parsed.choices[0]?.finish_reason ?? undefined;
-
-      // Surface finish_reason for callers that need it
-      this.lastFinishReason = finishReason ?? undefined;
-
-      // Record usage from first attempt
-      const tag = purpose ?? 'other';
-      const usage: CallUsage = {
-        promptTokens: parsed.usage?.prompt_tokens ?? 0,
-        completionTokens: parsed.usage?.completion_tokens ?? 0,
-        cachedTokens: parsed.usage?.prompt_cache_hit_tokens
-          ?? parsed.usage?.cached_tokens
-          ?? 0,
-      };
-      recordUsage(tag, usage);
-
-      if (content) return content;
-
-      // Thinking model fallback: content is empty but reasoning_content is non-empty.
-      // Disable thinking and raise max_tokens, then retry once (counts toward budget).
-      if (reasoningContent && this.disableThinking) {
-        // Already disabled — nothing more to try
-        throw new Error('LLM response contained no message content (reasoning_content present but thinking already disabled)');
-      }
-      if (reasoningContent) {
-        return this.retryWithThinkingDisabled({ system, user, maxTokens, purpose });
-      }
-
-      throw new Error('LLM response contained no message content');
-    } finally {
-      clearTimeout(timer);
+    const body: Record<string, unknown> = {
+      model: this.model,
+      temperature: 0,
+      messages: [
+        { role: 'system', content: system },
+        { role: 'user', content: user },
+      ],
+    };
+    if (maxTokens !== undefined) {
+      body.max_tokens = maxTokens;
     }
+    // Disable thinking/reasoning when requested per-call or per-client,
+    // gated by LLM_THINKING_PARAM and provider detection.
+    const wantDisable = thinking === 'disabled' || this.disableThinking;
+    if (this.shouldSendThinking(wantDisable)) {
+      body.thinking = { type: 'disabled' };
+    }
+
+    const response = await this.fetchWithRetry(body);
+
+    if (!response.ok) {
+      const detail = await response.text().catch(() => '');
+      if (response.status === 402) {
+        throw new InsufficientBalanceError(402, detail.slice(0, 500));
+      }
+      // Non-retryable HTTP error (4xx other than 402, or unexpected codes)
+      throw new Error(
+        `LLM request failed: ${response.status} ${response.statusText}${detail ? ` — ${detail.slice(0, 500)}` : ''}`,
+      );
+    }
+
+    const parsed = ChatCompletionResponseSchema.parse(await response.json());
+    const content = parsed.choices[0]?.message.content ?? '';
+    const reasoningContent = parsed.choices[0]?.message.reasoning_content ?? '';
+    const finishReason = parsed.choices[0]?.finish_reason ?? undefined;
+
+    // Surface finish_reason for callers that need it
+    this.lastFinishReason = finishReason ?? undefined;
+
+    // Record usage (failed transport attempts consumed no tokens)
+    const tag = purpose ?? 'other';
+    const usage: CallUsage = {
+      promptTokens: parsed.usage?.prompt_tokens ?? 0,
+      completionTokens: parsed.usage?.completion_tokens ?? 0,
+      cachedTokens: parsed.usage?.prompt_cache_hit_tokens
+        ?? parsed.usage?.cached_tokens
+        ?? 0,
+    };
+    recordUsage(tag, usage);
+
+    if (content) return content;
+
+    // Thinking model fallback: content is empty but reasoning_content is non-empty.
+    // Disable thinking and raise max_tokens, then retry once (counts toward budget).
+    if (reasoningContent && this.disableThinking) {
+      // Already disabled — nothing more to try
+      throw new Error('LLM response contained no message content (reasoning_content present but thinking already disabled)');
+    }
+    if (reasoningContent) {
+      return this.retryWithThinkingDisabled({ system, user, maxTokens, purpose });
+    }
+
+    throw new Error('LLM response contained no message content');
+  }
+
+  /**
+   * Execute a fetch with transport-level retry.
+   *
+   * Retries on:
+   *   - fetch rejecting with TypeError (DNS/connect failures)
+   *   - HTTP 502, 503, 504
+   *
+   * Does NOT retry:
+   *   - 4xx responses (401, 402, 429 etc.)
+   *   - AbortError from the caller's own timeout
+   *
+   * Each attempt is bounded by `perAttemptTimeoutMs` via AbortSignal.timeout
+   * so a single connect hang cannot burn the whole caller's budget.
+   */
+  private async fetchWithRetry(body: Record<string, unknown>): Promise<Response> {
+    let lastError: unknown;
+    for (let attempt = 0; attempt <= MAX_TRANSPORT_RETRIES; attempt++) {
+      try {
+        const response = await this.fetchImpl(`${this.baseUrl}/chat/completions`, {
+          method: 'POST',
+          headers: {
+            'content-type': 'application/json',
+            ...(this.apiKey ? { authorization: `Bearer ${this.apiKey}` } : {}),
+          },
+          body: JSON.stringify(body),
+          signal: AbortSignal.timeout(this.perAttemptTimeoutMs),
+        });
+
+        // Non-retryable HTTP — return immediately for caller to handle
+        if (response.ok || !RETRYABLE_HTTP_STATUSES.has(response.status)) {
+          return response;
+        }
+
+        // Retryable HTTP status (502/503/504)
+        lastError = new Error(
+          `LLM upstream error: ${response.status} ${response.statusText}`,
+        );
+      } catch (err: unknown) {
+        // AbortError from AbortSignal.timeout = per-attempt timeout, retryable
+        // but TypeError "fetch failed" with cause codes is the primary case
+        if (isRetryableTransportError(err)) {
+          lastError = err;
+        } else {
+          // Non-retryable (e.g. AbortError from caller's controller, or unknown)
+          throw err;
+        }
+      }
+
+      // Backoff before next attempt (skip if this was the last attempt)
+      if (attempt < MAX_TRANSPORT_RETRIES) {
+        await this.sleep(BACKOFF_MS[attempt] ?? BACKOFF_MS[BACKOFF_MS.length - 1]!);
+      }
+    }
+
+    // All attempts exhausted — throw a transport error
+    const code = extractErrorCode(lastError);
+    const message = lastError instanceof Error ? lastError.message : String(lastError);
+    throw new LLMTransportError(
+      `LLM transport failed after ${MAX_TRANSPORT_RETRIES + 1} attempts: ${message}`,
+      code,
+    );
   }
 
   /**
@@ -259,61 +352,84 @@ export class OpenAICompatClient implements LLMClient {
   ): Promise<string> {
     checkBudget();
 
-    const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), this.timeoutMs);
-    try {
-      const body: Record<string, unknown> = {
-        model: this.model,
-        temperature: 0,
-        messages: [
-          { role: 'system', content: system },
-          { role: 'user', content: user },
-        ],
-        max_tokens: Math.max(maxTokens ?? 4096, 4096),
-      };
-      if (this.shouldSendThinking(true)) {
-        body.thinking = { type: 'disabled' };
-      }
-
-      const response = await this.fetchImpl(`${this.baseUrl}/chat/completions`, {
-        method: 'POST',
-        headers: {
-          'content-type': 'application/json',
-          ...(this.apiKey ? { authorization: `Bearer ${this.apiKey}` } : {}),
-        },
-        body: JSON.stringify(body),
-        signal: controller.signal,
-      });
-
-      if (!response.ok) {
-        const detail = await response.text().catch(() => '');
-        if (response.status === 402) {
-          throw new InsufficientBalanceError(402, detail.slice(0, 500));
-        }
-        throw new Error(
-          `LLM request failed (thinking retry): ${response.status} ${response.statusText}${detail ? ` — ${detail.slice(0, 500)}` : ''}`,
-        );
-      }
-
-      const parsed = ChatCompletionResponseSchema.parse(await response.json());
-      const content = parsed.choices[0]?.message.content ?? '';
-      if (!content) {
-        throw new Error('LLM response contained no message content even after disabling thinking');
-      }
-
-      const tag = purpose ?? 'other';
-      const usage: CallUsage = {
-        promptTokens: parsed.usage?.prompt_tokens ?? 0,
-        completionTokens: parsed.usage?.completion_tokens ?? 0,
-        cachedTokens: parsed.usage?.prompt_cache_hit_tokens
-          ?? parsed.usage?.cached_tokens
-          ?? 0,
-      };
-      recordUsage(tag, usage);
-
-      return content;
-    } finally {
-      clearTimeout(timer);
+    const body: Record<string, unknown> = {
+      model: this.model,
+      temperature: 0,
+      messages: [
+        { role: 'system', content: system },
+        { role: 'user', content: user },
+      ],
+      max_tokens: Math.max(maxTokens ?? 4096, 4096),
+    };
+    if (this.shouldSendThinking(true)) {
+      body.thinking = { type: 'disabled' };
     }
+
+    const response = await this.fetchWithRetry(body);
+
+    if (!response.ok) {
+      const detail = await response.text().catch(() => '');
+      if (response.status === 402) {
+        throw new InsufficientBalanceError(402, detail.slice(0, 500));
+      }
+      throw new Error(
+        `LLM request failed (thinking retry): ${response.status} ${response.statusText}${detail ? ` — ${detail.slice(0, 500)}` : ''}`,
+      );
+    }
+
+    const parsed = ChatCompletionResponseSchema.parse(await response.json());
+    const content = parsed.choices[0]?.message.content ?? '';
+    if (!content) {
+      throw new Error('LLM response contained no message content even after disabling thinking');
+    }
+
+    const tag = purpose ?? 'other';
+    const usage: CallUsage = {
+      promptTokens: parsed.usage?.prompt_tokens ?? 0,
+      completionTokens: parsed.usage?.completion_tokens ?? 0,
+      cachedTokens: parsed.usage?.prompt_cache_hit_tokens
+        ?? parsed.usage?.cached_tokens
+        ?? 0,
+    };
+    recordUsage(tag, usage);
+
+    return content;
   }
+}
+
+/* ------------------------------------------------------------------ */
+/* Transport error classification                                      */
+/* ------------------------------------------------------------------ */
+
+/**
+ * Check whether an error thrown by `fetch` is retryable at the transport
+ * level (DNS failure, connect timeout, socket reset, per-attempt timeout).
+ */
+function isRetryableTransportError(err: unknown): boolean {
+  // AbortError from AbortSignal.timeout = per-attempt timeout, retryable
+  if (err instanceof DOMException && err.name === 'TimeoutError') return true;
+
+  // Node TypeError "fetch failed" with cause
+  if (err instanceof TypeError) {
+    const cause = (err as { cause?: { code?: string } }).cause;
+    if (cause && typeof cause.code === 'string') {
+      return RETRYABLE_CAUSE_CODES.has(cause.code);
+    }
+    // Generic "fetch failed" without a structured cause — still transport
+    if (/fetch failed/i.test(err.message)) return true;
+  }
+
+  return false;
+}
+
+/**
+ * Extract a short error code from a transport error for logging.
+ */
+function extractErrorCode(err: unknown): string {
+  if (err instanceof TypeError) {
+    const cause = (err as { cause?: { code?: string } }).cause;
+    if (cause && typeof cause.code === 'string') return cause.code;
+  }
+  if (err instanceof Error) return err.name;
+  return 'UNKNOWN';
 }

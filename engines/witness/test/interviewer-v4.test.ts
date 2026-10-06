@@ -54,6 +54,14 @@ const VALID_QUESTION_2 = '你觉得他是一个怎样的人？';
 const VALID_QUESTION_3 = '他有什么特别的习惯吗？';
 const VALID_FOLLOWUP = '你能举个例子吗？';
 
+/** Simulate an LLMTransportError (checked by name, not import). */
+function makeTransportError(code = 'ECONNRESET'): Error {
+  const err = new Error(`LLM transport failed after 3 attempts: fetch failed`);
+  err.name = 'LLMTransportError';
+  (err as unknown as { code: string }).code = code;
+  return err;
+}
+
 let idCounter = 0;
 function deterministicId(): string {
   return `id-${++idCounter}`;
@@ -516,6 +524,76 @@ describe('opening identity guard (startChat)', () => {
     const result = await startChat(store, token, options);
     expect(result.message.text).toBe(VALID_OPENING);
     expect(llm.calls).toHaveLength(2);
+  });
+});
+
+/* ------------------------------------------------------------------ */
+/* 4c. Provider/transport error handling                                */
+/* ------------------------------------------------------------------ */
+
+describe('provider error → interview_generation_failed', () => {
+  it('startChat maps transport error to interview_generation_failed', async () => {
+    const store = newStore();
+    const { token } = createSubjectAndInvite(store);
+    const llm = new FakeLLM([
+      () => { throw makeTransportError(); },
+    ]);
+    const options = makeOptions(llm);
+    await expect(startChat(store, token, options)).rejects.toThrow(
+      'interview_generation_failed',
+    );
+  });
+
+  it('say maps transport error to interview_generation_failed', async () => {
+    const store = newStore();
+    const { token } = createSubjectAndInvite(store);
+    const llm = new FakeLLM([VALID_OPENING]);
+    const options = makeOptions(llm);
+    const started = await startChat(store, token, options);
+
+    llm.push(() => { throw makeTransportError('ETIMEDOUT'); });
+    await expect(
+      say(store, started.sessionId, { text: '大学认识的' }, options),
+    ).rejects.toThrow('interview_generation_failed');
+  });
+
+  it('say fails with 503, client retries same text → user text exactly once in history', async () => {
+    const store = newStore();
+    const { token } = createSubjectAndInvite(store);
+    const llm = new FakeLLM([VALID_OPENING]);
+    const options = makeOptions(llm);
+    const started = await startChat(store, token, options);
+
+    // First say attempt: transport error
+    llm.push(() => { throw makeTransportError(); });
+    await expect(
+      say(store, started.sessionId, { text: '大学认识的' }, options),
+    ).rejects.toThrow('interview_generation_failed');
+
+    // Client retries with the same text: should succeed, user text appears once
+    llm.push(VALID_ACK_QUESTION);
+    const result = await say(store, started.sessionId, { text: '大学认识的' }, options);
+    expect(result.message?.text).toBe(VALID_ACK_QUESTION);
+
+    // Verify: user text '大学认识的' appears exactly once in history
+    const history = getChatHistory(store, started.sessionId, options);
+    const userTurns = history.turns.filter(
+      (t) => t.role === 'user' && t.text === '大学认识的',
+    );
+    expect(userTurns).toHaveLength(1);
+  });
+
+  it('non-transport errors are NOT mapped (rethrown as-is)', async () => {
+    const store = newStore();
+    const { token } = createSubjectAndInvite(store);
+    const llm = new FakeLLM([VALID_OPENING]);
+    const options = makeOptions(llm);
+    const started = await startChat(store, token, options);
+
+    llm.push(() => { throw new Error('something else entirely'); });
+    await expect(
+      say(store, started.sessionId, { text: '大学认识的' }, options),
+    ).rejects.toThrow('something else entirely');
   });
 });
 
