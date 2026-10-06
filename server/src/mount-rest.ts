@@ -197,7 +197,9 @@ export const mountRestPlugin: Plugin<MountRestConfig> = {
       enforceSubject(context);
       const subject = store.getSubject(context.params.id ?? '');
       if (!subject) throw new HttpError(404, 'subject_not_found', 'Subject not found');
-      const invite = collector.createInvite(subject.id);
+      const body = (context.body ?? {}) as Record<string, unknown>;
+      const inviteMode = body.mode === 'self' ? 'self' as const : undefined;
+      const invite = collector.createInvite(subject.id, inviteMode ? { mode: inviteMode } : {});
       const invitePath = `/i/${invite.token}`;
       return {
         status: 201,
@@ -227,7 +229,11 @@ export const mountRestPlugin: Plugin<MountRestConfig> = {
       if (!subject) throw new HttpError(404, 'subject_not_found', 'Subject not found');
       return {
         status: 200,
-        body: { subjectDisplayName: subject.displayName, questionnaire: resolved.questionnaire },
+        body: {
+          subjectDisplayName: subject.displayName,
+          questionnaire: resolved.questionnaire,
+          ...(resolved.mode ? { mode: resolved.mode } : {}),
+        },
       };
     }, { open: true });
 

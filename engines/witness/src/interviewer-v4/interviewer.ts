@@ -58,6 +58,7 @@ export interface ChatInterviewOptions {
 export interface StartChatResult {
   sessionId: string;
   message: { id: string; text: string };
+  mode: 'informant' | 'self';
 }
 
 export interface SayResult {
@@ -218,7 +219,7 @@ export async function startChat(
   const subject = store.getSubject(resolved.subjectId);
   if (!subject) throw new InterviewStateError('当事人不存在');
 
-  const effectiveMode = mode ?? 'informant';
+  const effectiveMode = mode ?? resolved.mode ?? 'informant';
   const sessionId = newId(options);
 
   const state = createChatSession({
@@ -265,13 +266,13 @@ export async function startChat(
     const turnId = newId(options);
     const updated = addAssistantTurn(state, turnId, repairSanitised, now);
     saveChatSession(store, sessionId, updated);
-    return { sessionId, message: { id: turnId, text: repairSanitised } };
+    return { sessionId, message: { id: turnId, text: repairSanitised }, mode: effectiveMode };
   }
 
   const turnId = newId(options);
   const updated = addAssistantTurn(state, turnId, sanitised, now);
   saveChatSession(store, sessionId, updated);
-  return { sessionId, message: { id: turnId, text: sanitised } };
+  return { sessionId, message: { id: turnId, text: sanitised }, mode: effectiveMode };
 }
 
 /**

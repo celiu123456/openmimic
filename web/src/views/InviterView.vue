@@ -38,6 +38,7 @@ const relationAdvice = ref('');
 const busy = ref(false);
 const copied = ref(false);
 const copiedShort = ref(false);
+const inviteMode = ref<'informant' | 'self'>('informant');
 const error = ref('');
 const demoBusy = ref(false);
 const demoNote = ref('');
@@ -148,7 +149,7 @@ async function create(): Promise<void> {
   error.value = '';
   try {
     const subject = await api.createSubject(name);
-    const invite = await api.createInvite(subject.id);
+    const invite = await api.createInvite(subject.id, inviteMode.value !== 'informant' ? inviteMode.value : undefined);
     subjectId.value = subject.id;
     subjectName.value = name;
     token.value = invite.token;
@@ -345,6 +346,27 @@ onBeforeUnmount(stopPolling);
           placeholder="比如：林小满"
           @keyup.enter="create"
         />
+      </div>
+      <div style="margin-top: 0.6rem">
+        <span class="label">采访模式</span>
+        <div class="relations">
+          <button
+            type="button"
+            class="chip"
+            :class="{ active: inviteMode === 'informant' }"
+            @click="inviteMode = 'informant'"
+          >
+            他人访谈
+          </button>
+          <button
+            type="button"
+            class="chip"
+            :class="{ active: inviteMode === 'self' }"
+            @click="inviteMode = 'self'"
+          >
+            自我访谈
+          </button>
+        </div>
       </div>
       <div class="row">
         <button type="button" class="btn primary" :disabled="busy" @click="create">

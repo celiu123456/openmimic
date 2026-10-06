@@ -147,6 +147,74 @@ describe('v4 chat API routes', () => {
   });
 });
 
+describe('self-interview mode (server-level)', () => {
+  let store: Store;
+  let server: RunningServer;
+  let base: string;
+  let llm: FakeLLM;
+
+  beforeEach(async () => {
+    store = new Store();
+    llm = new FakeLLM([]);
+    server = await startServer({
+      port: 0,
+      store,
+      asr: { apiKey: undefined },
+      llm,
+      webDistDir: '',
+    });
+    base = server.url;
+  });
+
+  afterEach(async () => {
+    await server.close();
+    store.close();
+  });
+
+  it('invite creation route persists mode', async () => {
+    const subject = await api(base, 'POST', '/api/subjects', { displayName: '张三' });
+    const subjectId = subject.body.id as string;
+    const invite = await api(base, 'POST', `/api/subjects/${subjectId}/invites`, { mode: 'self' });
+    expect(invite.status).toBe(201);
+
+    const token = invite.body.token as string;
+    const resolved = await api(base, 'GET', `/api/invites/${token}`);
+    expect(resolved.body.mode).toBe('self');
+  });
+
+  it('startChat uses invite mode and returns it', async () => {
+    const subject = await api(base, 'POST', '/api/subjects', { displayName: '张三' });
+    const subjectId = subject.body.id as string;
+    const invite = await api(base, 'POST', `/api/subjects/${subjectId}/invites`, { mode: 'self' });
+    const token = invite.body.token as string;
+
+    llm.push('你好，这段对话用来更完整地理解你自己，随时可以停。最近过得怎么样？');
+    const opened = await api(base, 'POST', `/api/invites/${token}/chat`);
+    expect(opened.status).toBe(201);
+    expect(opened.body.mode).toBe('self');
+
+    // getChatHistory should also report mode
+    const sid = opened.body.sessionId as string;
+    const history = await api(base, 'GET', `/api/chat/${sid}`);
+    expect(history.body.mode).toBe('self');
+  });
+
+  it('invite without mode defaults to informant', async () => {
+    const subject = await api(base, 'POST', '/api/subjects', { displayName: '李四' });
+    const subjectId = subject.body.id as string;
+    const invite = await api(base, 'POST', `/api/subjects/${subjectId}/invites`);
+    const token = invite.body.token as string;
+
+    const resolved = await api(base, 'GET', `/api/invites/${token}`);
+    // mode should be absent or undefined for informant
+    expect(resolved.body.mode).toBeUndefined();
+
+    llm.push('你好，我是访谈员。你们是怎么认识的？');
+    const opened = await api(base, 'POST', `/api/invites/${token}/chat`);
+    expect(opened.body.mode).toBe('informant');
+  });
+});
+
 describe('chat routes without LLM', () => {
   let store: Store;
   let server: RunningServer;

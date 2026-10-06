@@ -78,11 +78,17 @@ export type Witness = z.infer<typeof WitnessSchema>;
  * several people may answer it. The token is the only secret; it is a
  * URL-safe random string and carries no embedded data.
  */
+/** Interview mode: informant (third-party) or self (subject describes themselves). */
+export const InterviewModeSchema = z.enum(['informant', 'self']);
+export type InterviewMode = z.infer<typeof InterviewModeSchema>;
+
 export const InviteSchema = z.object({
   token: z.string().min(1),
   subjectId: z.string().min(1),
   createdAt: z.string().min(1),
   expiresAt: z.string().min(1),
+  /** Interview mode; absent on old invites, treated as 'informant'. */
+  mode: InterviewModeSchema.optional(),
 });
 export type Invite = z.infer<typeof InviteSchema>;
 

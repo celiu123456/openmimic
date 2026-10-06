@@ -640,3 +640,73 @@ describe('session state', () => {
     expect(state.cautiousTopics).toEqual(['topic2']);
   });
 });
+
+/* ------------------------------------------------------------------ */
+/* Self-interview mode                                                 */
+/* ------------------------------------------------------------------ */
+
+describe('self-interview mode', () => {
+  let store: Store;
+
+  beforeEach(() => {
+    store = newStore();
+    idCounter = 0;
+  });
+  afterEach(() => store.close());
+
+  function createSelfInvite(s: Store): { subjectId: string; token: string } {
+    const subjectId = 'subject-self';
+    s.putSubject({ id: subjectId, displayName: '张三' });
+    const invite = createInvite(s, subjectId, { mode: 'self' });
+    return { subjectId, token: invite.token };
+  }
+
+  it('invite schema defaults missing mode to informant', () => {
+    const subjectId = 'subject-default';
+    store.putSubject({ id: subjectId, displayName: '李四' });
+    const invite = createInvite(store, subjectId);
+    const resolved = store.getInvite(invite.token);
+    // mode is absent or undefined for informant
+    expect(resolved?.mode ?? 'informant').toBe('informant');
+  });
+
+  it('invite persists self mode and resolves it', () => {
+    const { token } = createSelfInvite(store);
+    const invite = store.getInvite(token);
+    expect(invite?.mode).toBe('self');
+  });
+
+  it('startChat picks invite mode when no explicit mode given', async () => {
+    const { token } = createSelfInvite(store);
+    const llm = new FakeLLM(['你好，这段对话用来更完整地理解你自己，随时可以停。最近过得怎么样？']);
+    const options = makeOptions(llm);
+    const result = await startChat(store, token, options);
+    expect(result.mode).toBe('self');
+  });
+
+  it('self system prompt uses "如何理解自己" and opening says "你自己"', () => {
+    const ctx: PromptContext = {
+      mode: 'self',
+      respondentName: '张三',
+      relatedName: '张三',
+      relation: '自己',
+      uncoveredAspects: [],
+      isOpening: true,
+    };
+    const prompt = buildSystemPrompt(ctx);
+    expect(prompt).toContain('张三如何理解自己');
+    expect(prompt).toContain('理解你自己');
+    expect(prompt).not.toContain('理解张三');
+  });
+
+  it('old invites without mode column still produce informant chat', async () => {
+    const subjectId = 'subject-old';
+    store.putSubject({ id: subjectId, displayName: '老王' });
+    // createInvite with no mode option — simulates old invite
+    const invite = createInvite(store, subjectId);
+    const llm = new FakeLLM([VALID_OPENING.replace('林小满', '老王')]);
+    const options = makeOptions(llm);
+    const result = await startChat(store, invite.token, options);
+    expect(result.mode).toBe('informant');
+  });
+});

@@ -49,7 +49,7 @@ import {
 export interface WitnessCollector {
   /** The questionnaire every invite currently hands out. */
   readonly questionnaire: Questionnaire;
-  createInvite(subjectId: string, options?: CreateInviteOptions): CreatedInvite;
+  createInvite(subjectId: string, options?: CreateInviteOptions & { mode?: 'informant' | 'self' }): CreatedInvite;
   resolveInvite(token: string, options?: ResolveInviteOptions): ResolvedInvite;
   submitTestimony(
     token: string,

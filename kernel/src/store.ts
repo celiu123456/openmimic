@@ -155,6 +155,7 @@ interface InviteRow {
   created_at: string;
   expires_at: string;
   short_code: string | null;
+  mode: string | null;
 }
 
 interface RoomRow {
@@ -452,6 +453,9 @@ export class Store {
         'CREATE UNIQUE INDEX IF NOT EXISTS idx_invites_short_code ON invites (short_code)',
       );
     }
+    if (!inviteColumns.includes('mode')) {
+      this.db.exec("ALTER TABLE invites ADD COLUMN mode TEXT DEFAULT 'informant'");
+    }
   }
 
   /* ---------------------------------------------------------------- */
@@ -551,15 +555,16 @@ export class Store {
   putInvite(invite: Invite): Invite {
     const parsed = InviteSchema.parse(invite);
     this.db
-      .prepare<[string, string, string, string]>(
-        `INSERT INTO invites (token, subject_id, created_at, expires_at)
-         VALUES (?, ?, ?, ?)
+      .prepare<[string, string, string, string, string | null]>(
+        `INSERT INTO invites (token, subject_id, created_at, expires_at, mode)
+         VALUES (?, ?, ?, ?, ?)
          ON CONFLICT(token) DO UPDATE SET
            subject_id = excluded.subject_id,
            created_at = excluded.created_at,
-           expires_at = excluded.expires_at`,
+           expires_at = excluded.expires_at,
+           mode       = excluded.mode`,
       )
-      .run(parsed.token, parsed.subjectId, parsed.createdAt, parsed.expiresAt);
+      .run(parsed.token, parsed.subjectId, parsed.createdAt, parsed.expiresAt, parsed.mode ?? null);
     return parsed;
   }
 
@@ -1255,6 +1260,7 @@ export class Store {
       subjectId: row.subject_id,
       createdAt: row.created_at,
       expiresAt: row.expires_at,
+      ...(row.mode && row.mode !== 'informant' ? { mode: row.mode } : {}),
     });
   }
 

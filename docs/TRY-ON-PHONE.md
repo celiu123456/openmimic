@@ -63,7 +63,16 @@ curl -s http://127.0.0.1:7860/api/subjects/$SUBJECT_ID/invites \
 
 ### 自述采访（当事人自己讲述自己）
 
-自述模式在打开邀请链接后、开始聊天时由前端传 `mode: "self"` 给 `POST /api/invites/:token/chat`。邀请创建方式相同，无需特殊参数——当事人打开链接后页面会自动检测。
+创建邀请时传 `mode: "self"`：
+
+```bash
+curl -s http://127.0.0.1:7860/api/subjects/$SUBJECT_ID/invites \
+  -H "Authorization: Bearer $TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"mode":"self"}'
+```
+
+当事人打开该链接后，对话式采访会自动使用自述模式（关系方向为"如何理解自己"，开场说"理解你自己"）。管理页面的"自我访谈"按钮也可直接生成自述邀请。
 
 ## 6. 手机打开
 

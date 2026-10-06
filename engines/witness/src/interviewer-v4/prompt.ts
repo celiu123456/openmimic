@@ -120,7 +120,8 @@ export function buildSystemPrompt(ctx: PromptContext): string {
   // Opening instruction (when history is empty)
   if (ctx.isOpening) {
     lines.push('');
-    lines.push(`这是开场。先用一句话说明你是谁、这段对话用来更完整地理解 ${ctx.relatedName}、对方随时可以停，然后问一个最轻松的问题。`);
+    const openingTarget = ctx.mode === 'self' ? '你自己' : ctx.relatedName;
+    lines.push(`这是开场。先用一句话说明你是谁、这段对话用来更完整地理解${openingTarget}、对方随时可以停，然后问一个最轻松的问题。`);
   }
 
   // Retreat boundary injection

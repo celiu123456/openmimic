@@ -1,5 +1,5 @@
 import { randomBytes } from 'node:crypto';
-import type { Invite } from '@openmimic/shared';
+import type { Invite, InterviewMode } from '@openmimic/shared';
 import type { Store } from '@openmimic/kernel';
 import { InviteInvalidError } from './errors';
 import { FRIEND_V1, type Questionnaire } from './questionnaires/friend-v1';
@@ -32,6 +32,8 @@ export interface CreatedInvite {
 export interface ResolvedInvite {
   subjectId: string;
   questionnaire: Questionnaire;
+  /** Interview mode stored on the invite; absent means informant. */
+  mode?: InterviewMode;
 }
 
 export interface CreateInviteOptions {
@@ -39,6 +41,8 @@ export interface CreateInviteOptions {
   ttlMs?: number;
   /** Injectable clock for deterministic tests. */
   now?: Date;
+  /** Interview mode; defaults to 'informant'. */
+  mode?: InterviewMode;
 }
 
 export interface ResolveInviteOptions {
@@ -65,11 +69,13 @@ export function createInvite(
 ): CreatedInvite {
   const now = options.now ?? new Date();
   const ttlMs = options.ttlMs ?? DEFAULT_INVITE_TTL_MS;
+  const mode = options.mode;
   const invite: Invite = {
     token: createInviteToken(),
     subjectId,
     createdAt: now.toISOString(),
     expiresAt: new Date(now.getTime() + ttlMs).toISOString(),
+    ...(mode && mode !== 'informant' ? { mode } : {}),
   };
   store.putInvite(invite);
 
@@ -109,7 +115,11 @@ export function resolveInvite(
   if (Date.parse(invite.expiresAt) <= now.getTime()) {
     throw new InviteInvalidError('邀请链接已过期');
   }
-  return { subjectId: invite.subjectId, questionnaire: FRIEND_V1 };
+  return {
+    subjectId: invite.subjectId,
+    questionnaire: FRIEND_V1,
+    ...(invite.mode ? { mode: invite.mode } : {}),
+  };
 }
 
 /**
@@ -135,5 +145,9 @@ export function resolveShortCode(
   if (Date.parse(invite.expiresAt) <= now.getTime()) {
     throw new InviteInvalidError('邀请码已过期');
   }
-  return { subjectId: invite.subjectId, questionnaire: FRIEND_V1 };
+  return {
+    subjectId: invite.subjectId,
+    questionnaire: FRIEND_V1,
+    ...(invite.mode ? { mode: invite.mode } : {}),
+  };
 }

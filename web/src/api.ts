@@ -141,6 +141,7 @@ export interface SubmitResult {
 export interface ChatStartPayload {
   sessionId: string;
   message: { id: string; text: string };
+  mode: 'informant' | 'self';
 }
 
 /** v4 chat turn result. */
@@ -224,7 +225,7 @@ export interface ApiClient {
   checkAsrAvailable(): Promise<boolean>;
   transcribe(blob: Blob): Promise<TranscriptionPayload>;
   createSubject(displayName: string): Promise<SubjectPayload>;
-  createInvite(subjectId: string): Promise<CreatedInvitePayload>;
+  createInvite(subjectId: string, mode?: 'informant' | 'self'): Promise<CreatedInvitePayload>;
   getProgress(subjectId: string): Promise<ProgressPayload>;
   /** Rooms for one subject, oldest first (the API's own order). */
   getSubjectRooms(subjectId: string): Promise<RoomPayload[]>;
@@ -342,10 +343,10 @@ export function createApiClient(options: ApiClientOptions = {}): ApiClient {
     createSubject: (displayName) =>
       request<SubjectPayload>('/api/subjects', jsonInit('POST', { displayName })),
 
-    createInvite: (subjectId) =>
+    createInvite: (subjectId, mode) =>
       request<CreatedInvitePayload>(
         `/api/subjects/${encodeURIComponent(subjectId)}/invites`,
-        { method: 'POST' },
+        jsonInit('POST', mode ? { mode } : {}),
       ),
 
     getProgress: (subjectId) =>

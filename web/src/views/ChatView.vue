@@ -23,6 +23,7 @@ const emit = defineEmits<{ (event: 'fallback'): void }>();
 
 const phase = ref<Phase>('loading');
 const sessionId = ref('');
+const chatMode = ref<'informant' | 'self'>('informant');
 const turns = ref<ChatTurnPayload[]>([]);
 const asrReady = ref(false);
 const busy = ref(false);
@@ -67,6 +68,7 @@ async function start(): Promise<void> {
   try {
     const result = await api.startChat(props.token);
     sessionId.value = result.sessionId;
+    chatMode.value = result.mode ?? 'informant';
     turns.value = [
       {
         id: result.message.id,
@@ -97,6 +99,7 @@ async function recover(): Promise<void> {
   try {
     const history = await api.getChatHistory(sessionId.value);
     turns.value = history.turns;
+    chatMode.value = (history.mode === 'self' ? 'self' : 'informant');
     phase.value = 'chat';
     scrollToBottom();
   } catch {
@@ -231,7 +234,7 @@ watch(sessionId, (sid) => {
   </main>
 
   <main v-else-if="phase === 'chat'" class="room chat-room">
-    <p class="eyebrow">聊聊 {{ displayName }}</p>
+    <p class="eyebrow">{{ chatMode === 'self' ? '聊聊你自己' : `聊聊 ${displayName}` }}</p>
 
     <div ref="historyEl" class="chat-history">
       <div
