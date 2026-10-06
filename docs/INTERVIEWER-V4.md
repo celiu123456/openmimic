@@ -86,8 +86,25 @@ Old `/api/invites/:token/interview` routes remain as deprecated compatibility.
 ## LLM Parameters
 
 - Temperature: 0.4
-- Max tokens: 260
+- Max tokens: 260 (first attempt); 1200 on retry when `finish_reason=length` and content is empty
 - Timeout: 15s
+- Thinking: `disabled` — sent as `{"thinking":{"type":"disabled"}}` in the request body
+
+### Thinking Model Gating (`LLM_THINKING_PARAM`)
+
+DeepSeek reasoning models (e.g. `deepseek-flash` / V4.1) emit `reasoning_content` before the actual `content`. With a small `max_tokens`, reasoning can consume the entire budget and leave `content` empty.
+
+The v4 interviewer always requests `thinking: 'disabled'`. Whether the wire field is actually sent is controlled by the `LLM_THINKING_PARAM` environment variable:
+
+| Value | Behaviour |
+|-------|-----------|
+| `off` | Never send the `thinking` field (for providers that reject unknown fields) |
+| `on` | Always send `thinking: {type: 'disabled'}` |
+| *(empty / unset)* | Send only when `LLM_BASE_URL` contains `deepseek` (default) |
+
+### Empty Content Retry
+
+When the LLM returns empty content with `finish_reason=length` (token budget exhausted by reasoning despite the disable flag, or simply too short), the interviewer retries **once** with `max_tokens=1200`. This retry is transparent to the guard chain and does not count as a repair attempt. The call-count invariant remains "exactly 1 LLM call per normal turn" for the happy path.
 
 ## Testimony Conversion
 

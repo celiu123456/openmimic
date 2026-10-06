@@ -248,6 +248,11 @@ async function handleRequest(
     } else if (caught instanceof HttpError) {
       sendJson(response, caught.status, errorBody(caught.code, caught.message), store);
     } else {
+      const method = request.method ?? '?';
+      const path = request.url ?? '?';
+      const errName = caught instanceof Error ? caught.name : 'UnknownError';
+      const errMsg = caught instanceof Error ? caught.message : String(caught);
+      console.error(`[500] ${method} ${path} ${errName}: ${errMsg}`);
       sendJson(response, 500, errorBody('internal_error', 'Internal server error'), store);
     }
   }

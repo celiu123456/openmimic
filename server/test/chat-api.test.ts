@@ -139,6 +139,19 @@ describe('v4 chat API routes', () => {
     expect((history.body.turns as unknown[]).length).toBeGreaterThan(0);
   });
 
+  it('POST /api/invites/:token/chat returns 503 on generation failure', async () => {
+    const { token } = await newInvite(base);
+    // Both opening attempts fail guards (no question mark)
+    llm.push('废话没有问号');
+    llm.push('还是废话没有问号');
+
+    const opened = await api(base, 'POST', `/api/invites/${token}/chat`);
+    expect(opened.status).toBe(503);
+    expect((opened.body.error as Record<string, unknown>).code).toBe(
+      'interview_generation_failed',
+    );
+  });
+
   it('old interview routes still work (deprecated)', async () => {
     const { token } = await newInvite(base);
     const opened = await api(base, 'POST', `/api/invites/${token}/interview`);

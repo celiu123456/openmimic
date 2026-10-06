@@ -90,6 +90,7 @@ async function start(): Promise<void> {
       phase.value = 'invalid';
       return;
     }
+    // 503 = generation failed — show error with retry, do NOT fall back
     phase.value = 'error';
   }
 }

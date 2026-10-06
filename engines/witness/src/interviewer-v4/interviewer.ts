@@ -94,6 +94,35 @@ const LLM_MAX_TOKENS = 260;
 const LLM_TIMEOUT_MS = 15_000;
 
 /* ------------------------------------------------------------------ */
+/* Observability                                                       */
+/* ------------------------------------------------------------------ */
+
+/**
+ * Emit a single log line when generation fails.
+ *
+ * Includes route context, session id, failure reason, finish_reason and
+ * output length — but NOT the user's text or the model's full output
+ * (at most the first 40 chars of the rejected output).
+ */
+function logGenerationFailure(opts: {
+  route: 'start' | 'say';
+  sessionId: string;
+  reason: string;
+  finishReason?: string;
+  outputLength: number;
+  outputHead?: string;
+}): void {
+  const head = opts.outputHead
+    ? ` output_head=${JSON.stringify(opts.outputHead.slice(0, 40))}`
+    : '';
+  console.error(
+    `[interview-v4] generation_failed route=${opts.route} session=${opts.sessionId}` +
+    ` reason=${opts.reason} finish_reason=${opts.finishReason ?? 'unknown'}` +
+    ` output_len=${opts.outputLength}${head}`,
+  );
+}
+
+/* ------------------------------------------------------------------ */
 /* Session plumbing                                                    */
 /* ------------------------------------------------------------------ */
 
@@ -155,10 +184,22 @@ function uncoveredAspects(store: Store, subjectId: string): string[] {
   return uncovered.slice(0, 6);
 }
 
+/** Max tokens for the retry when the first call returns empty + finish_reason=length. */
+const LLM_RETRY_MAX_TOKENS = 1200;
+
 /* ------------------------------------------------------------------ */
 /* LLM call                                                            */
 /* ------------------------------------------------------------------ */
 
+/**
+ * Call the LLM with thinking disabled and bounded tokens.
+ *
+ * When the provider returns empty content with `finish_reason === 'length'`
+ * (token budget exhausted), retries **once** with a larger budget before
+ * giving up.  The retry is transparent to the caller; the call-count
+ * invariant stays "1 call per normal turn" because the retry only fires
+ * on the degenerate empty-content path.
+ */
 async function callLLM(
   llm: LLMClient,
   system: string,
@@ -166,20 +207,32 @@ async function callLLM(
   state: ChatSessionState,
 ): Promise<string> {
   const messages = buildMessages(state, system, userText, INTERVIEW_HISTORY_CHAR_LIMIT);
-  // Build a single user string from all user messages (for the LLM client interface)
-  const userParts: string[] = [];
-  for (const msg of messages) {
-    if (msg.role === 'user') userParts.push(msg.content);
-    else if (msg.role === 'assistant') userParts.push(`[assistant]: ${msg.content}`);
-  }
   // The LLMClient interface expects {system, user} — we encode the full
   // conversation history in the user field with role markers.
   const request: LLMCompletionRequest = {
     system,
     user: buildConversationString(messages),
     purpose: 'interview-v4',
+    maxTokens: LLM_MAX_TOKENS,
+    thinking: 'disabled',
   };
-  return llm.complete(request);
+  const result = await llm.complete(request);
+
+  // Non-empty content — happy path
+  if (result.trim().length > 0) return result;
+
+  // Empty content with finish_reason=length: the token budget was too small.
+  // Retry once with a larger budget.
+  if (llm.lastFinishReason === 'length') {
+    const retryRequest: LLMCompletionRequest = {
+      ...request,
+      maxTokens: LLM_RETRY_MAX_TOKENS,
+    };
+    return llm.complete(retryRequest);
+  }
+
+  // Empty for some other reason — return as-is (guards will catch it)
+  return result;
 }
 
 /**
@@ -261,6 +314,14 @@ export async function startChat(
     const repairSanitised = sanitiseOutput(repairRaw);
     const repairFailure = checkGuards(repairSanitised, []);
     if (repairFailure) {
+      logGenerationFailure({
+        route: 'start',
+        sessionId,
+        reason: repairFailure,
+        finishReason: options.llm.lastFinishReason,
+        outputLength: repairSanitised.length,
+        outputHead: repairSanitised,
+      });
       throw new InterviewStateError('interview_generation_failed');
     }
     const turnId = newId(options);
@@ -372,6 +433,14 @@ export async function say(
   const rejectedId2 = newId(options);
   state = addAssistantTurn(state, rejectedId2, repairSanitised, now, true);
   saveChatSession(store, sessionId, state);
+  logGenerationFailure({
+    route: 'say',
+    sessionId,
+    reason: repairFailure,
+    finishReason: options.llm.lastFinishReason,
+    outputLength: repairSanitised.length,
+    outputHead: repairSanitised,
+  });
   throw new InterviewStateError('interview_generation_failed');
 }
 

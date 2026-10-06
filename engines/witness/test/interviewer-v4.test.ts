@@ -451,6 +451,40 @@ describe('call count', () => {
     await say(store, 'id-1', { text: '他人挺好的' }, options);
     expect(llm.calls).toHaveLength(2);
   });
+
+  it('empty content with finish_reason=length triggers exactly 1 retry (2 calls total for that turn)', async () => {
+    const store = newStore();
+    const { token } = createSubjectAndInvite(store);
+    const llm = new FakeLLM([VALID_OPENING]);
+    const options = makeOptions(llm);
+    await startChat(store, token, options);
+    expect(llm.calls).toHaveLength(1);
+
+    // First call returns empty string with finish_reason=length;
+    // retry returns a valid question.
+    llm.pushWithFinishReason('', 'length');
+    llm.push(VALID_QUESTION_2);
+
+    const result = await say(store, 'id-1', { text: '他人挺好的' }, options);
+    expect(result.message?.text).toBe(VALID_QUESTION_2);
+    // Opening = 1 call, say first attempt = 1, retry = 1 → 3 total
+    expect(llm.calls).toHaveLength(3);
+    // The retry request should have a larger maxTokens
+    const retryCall = llm.calls[2]!;
+    expect(retryCall.maxTokens).toBe(1200);
+  });
+
+  it('v4 calls pass thinking=disabled and maxTokens', async () => {
+    const store = newStore();
+    const { token } = createSubjectAndInvite(store);
+    const llm = new FakeLLM([VALID_OPENING]);
+    const options = makeOptions(llm);
+    await startChat(store, token, options);
+
+    const openingCall = llm.calls[0]!;
+    expect(openingCall.thinking).toBe('disabled');
+    expect(openingCall.maxTokens).toBe(260);
+  });
 });
 
 /* ------------------------------------------------------------------ */
@@ -708,5 +742,77 @@ describe('self-interview mode', () => {
     const options = makeOptions(llm);
     const result = await startChat(store, invite.token, options);
     expect(result.mode).toBe('informant');
+  });
+});
+
+/* ------------------------------------------------------------------ */
+/* 12. Observability logging                                           */
+/* ------------------------------------------------------------------ */
+
+describe('generation failure logging', () => {
+  it('emits a log line with route and reason but without user text', async () => {
+    const store = newStore();
+    const { token } = createSubjectAndInvite(store);
+    const llm = new FakeLLM([VALID_OPENING]);
+    const options = makeOptions(llm);
+    const started = await startChat(store, token, options);
+
+    // Both attempts fail
+    llm.push('没有问号的废话');
+    llm.push('还是没有问号');
+
+    const logged: string[] = [];
+    const origError = console.error;
+    console.error = (...args: unknown[]) => {
+      logged.push(args.map(String).join(' '));
+    };
+
+    try {
+      await expect(
+        say(store, started.sessionId, { text: '这是用户的私密文字不应出现在日志' }, options),
+      ).rejects.toThrow('interview_generation_failed');
+    } finally {
+      console.error = origError;
+    }
+
+    // At least one log line was emitted
+    expect(logged.length).toBeGreaterThan(0);
+    const logLine = logged.find((l) => l.includes('[interview-v4]'));
+    expect(logLine).toBeDefined();
+    // Contains the failure reason
+    expect(logLine).toContain('reason=not_single_question');
+    // Contains route and session info
+    expect(logLine).toContain('route=say');
+    expect(logLine).toContain('session=');
+    // Does NOT contain user text
+    expect(logLine).not.toContain('这是用户的私密文字不应出现在日志');
+    // Contains at most first 40 chars of rejected output
+    expect(logLine).toContain('output_head=');
+  });
+
+  it('emits log on start failure too', async () => {
+    const store = newStore();
+    const { token } = createSubjectAndInvite(store);
+    // Both opening attempts fail
+    const llm = new FakeLLM(['没有问号的废话', '还是没有问号']);
+    const options = makeOptions(llm);
+
+    const logged: string[] = [];
+    const origError = console.error;
+    console.error = (...args: unknown[]) => {
+      logged.push(args.map(String).join(' '));
+    };
+
+    try {
+      await expect(startChat(store, token, options)).rejects.toThrow(
+        'interview_generation_failed',
+      );
+    } finally {
+      console.error = origError;
+    }
+
+    const logLine = logged.find((l) => l.includes('[interview-v4]'));
+    expect(logLine).toBeDefined();
+    expect(logLine).toContain('route=start');
   });
 });

@@ -17,6 +17,12 @@ export interface LLMCompletionRequest {
    * Defaults to 'other' when omitted.
    */
   purpose?: string;
+  /**
+   * When set to `'disabled'`, asks the provider to turn off chain-of-thought
+   * reasoning so output tokens are not consumed by thinking content.
+   * Gated at the wire level by `LLM_THINKING_PARAM` and the base URL.
+   */
+  thinking?: 'disabled';
 }
 
 /** One chat message forwarded verbatim to an OpenAI-compatible upstream. */
@@ -59,6 +65,7 @@ const ChatCompletionResponseSchema = z.object({
           content: z.string().nullable().optional(),
           reasoning_content: z.string().nullable().optional(),
         }),
+        finish_reason: z.string().nullable().optional(),
       }),
     )
     .min(1),
@@ -85,6 +92,12 @@ export class OpenAICompatClient implements LLMClient {
   private readonly timeoutMs: number;
   private readonly disableThinking: boolean;
 
+  /**
+   * The `finish_reason` from the most recent `complete()` call.
+   * Undefined before the first call or when the provider does not surface it.
+   */
+  lastFinishReason?: string;
+
   constructor(options: OpenAICompatClientOptions = {}) {
     this.baseUrl = (options.baseUrl ?? process.env.LLM_BASE_URL ?? '').replace(/\/+$/, '');
     this.apiKey = options.apiKey ?? process.env.LLM_API_KEY ?? '';
@@ -94,6 +107,22 @@ export class OpenAICompatClient implements LLMClient {
     // Auto-detect DeepSeek endpoints to disable thinking by default
     this.disableThinking = options.disableThinking ??
       (/deepseek/i.test(this.baseUrl) || /deepseek/i.test(this.model));
+  }
+
+  /**
+   * Whether the `thinking` wire field should be sent for a given request.
+   *
+   * Gating rule (env `LLM_THINKING_PARAM`):
+   *   - `off`  → never send, regardless of provider
+   *   - `on`   → always send when thinking is requested
+   *   - absent → send only when the base URL host contains `deepseek`
+   */
+  private shouldSendThinking(wantDisable: boolean): boolean {
+    if (!wantDisable) return false;
+    const env = process.env.LLM_THINKING_PARAM ?? '';
+    if (env.toLowerCase() === 'off') return false;
+    if (env.toLowerCase() === 'on') return true;
+    return /deepseek/i.test(this.baseUrl);
   }
 
   /** Whether both a base URL and a model name are configured. */
@@ -137,7 +166,7 @@ export class OpenAICompatClient implements LLMClient {
     });
   }
 
-  async complete({ system, user, maxTokens, purpose }: LLMCompletionRequest): Promise<string> {
+  async complete({ system, user, maxTokens, purpose, thinking }: LLMCompletionRequest): Promise<string> {
     if (!this.baseUrl) throw new Error('LLM_BASE_URL is not configured');
     if (!this.model) throw new Error('LLM_MODEL is not configured');
 
@@ -157,9 +186,10 @@ export class OpenAICompatClient implements LLMClient {
       if (maxTokens !== undefined) {
         body.max_tokens = maxTokens;
       }
-      // Disable thinking/reasoning for DeepSeek models so output tokens
-      // are not consumed by chain-of-thought content
-      if (this.disableThinking) {
+      // Disable thinking/reasoning when requested per-call or per-client,
+      // gated by LLM_THINKING_PARAM and provider detection.
+      const wantDisable = thinking === 'disabled' || this.disableThinking;
+      if (this.shouldSendThinking(wantDisable)) {
         body.thinking = { type: 'disabled' };
       }
 
@@ -186,6 +216,10 @@ export class OpenAICompatClient implements LLMClient {
       const parsed = ChatCompletionResponseSchema.parse(await response.json());
       const content = parsed.choices[0]?.message.content ?? '';
       const reasoningContent = parsed.choices[0]?.message.reasoning_content ?? '';
+      const finishReason = parsed.choices[0]?.finish_reason ?? undefined;
+
+      // Surface finish_reason for callers that need it
+      this.lastFinishReason = finishReason ?? undefined;
 
       // Record usage from first attempt
       const tag = purpose ?? 'other';
@@ -235,9 +269,11 @@ export class OpenAICompatClient implements LLMClient {
           { role: 'system', content: system },
           { role: 'user', content: user },
         ],
-        thinking: { type: 'disabled' },
         max_tokens: Math.max(maxTokens ?? 4096, 4096),
       };
+      if (this.shouldSendThinking(true)) {
+        body.thinking = { type: 'disabled' };
+      }
 
       const response = await this.fetchImpl(`${this.baseUrl}/chat/completions`, {
         method: 'POST',

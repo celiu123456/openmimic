@@ -313,8 +313,15 @@ export const mountRestPlugin: Plugin<MountRestConfig> = {
       if (!hasChat()) throw new HttpError(404, 'chat_unavailable', 'Chat interviewer not available');
       const body = (context.body ?? {}) as Record<string, unknown>;
       const mode = body.mode === 'self' ? 'self' as const : undefined;
-      const result = await getChat().startChat(context.params.token ?? '', mode);
-      return { status: 201, body: result };
+      try {
+        const result = await getChat().startChat(context.params.token ?? '', mode);
+        return { status: 201, body: result };
+      } catch (caught) {
+        if (caught instanceof InterviewStateError && caught.message === 'interview_generation_failed') {
+          return { status: 503, body: errorBody('interview_generation_failed', '生成失败，请稍后重试') };
+        }
+        throw caught;
+      }
     }, { open: true });
 
     router.post('/api/chat/:sid/say', async (context) => {
