@@ -60,7 +60,7 @@ resp = client.chat.completions.create(
 ```
             ┌────────────────────────────────────────────────┐
   向内扩展   │  插件层(统一 manifest)                        │
-  (社区)   │  采集器: 问卷/聊天导入/访谈转写/游戏化测评      │
+  (社区)   │  采集器: 逐轮访谈/聊天导入/访谈转写/游戏化测评    │
             │  质询策略: 温和核对/激进对质/自定义审讯风格    │
             │  房间剧本: 评审会/相亲/同学会/自定义剧本        │
             │  桥接器: 衔枝Twig/MiroFish/OASIS/Mem0 适配      │
@@ -152,6 +152,8 @@ resp = client.chat.completions.create(
 
 论断配对(跨证人找语义相关论断,用 LLM / embedding / 关键词三级回落)是本项目自有机制,不是衔枝反证搜索的实现。
 
+v4 逐轮访谈方式(单模型每轮一次调用,无 planner)和守卫正则(单问题/去重/收尾语阻断)迁自作者此前的平台项目。提示约束借鉴动机式访谈(Miller & Rollnick, 2013)、关键事件法(Flanagan, 1954)和认知访谈(Fisher & Geiselman, 1992)文献(见 [docs/REFERENCES.md](docs/REFERENCES.md))。
+
 **计划借鉴(尚未实现):**
 
 - 反证搜索(对既有论断先生成反面假设、再检索反证并强制回应)、盲推导审计同源自衔枝设计文档。
@@ -165,7 +167,7 @@ resp = client.chat.completions.create(
 ### 已完成
 
 - 内核:证言账本(append-only + triggers)、授权门(synthesis_only 遮蔽)、插件装配 v1(inject/provide 依赖注入、topo sort、unload、Registry 扩展点、YAML config tree)、人格组装 v2(async, audience-grouped claims + episodes + divergences + corpus, 6000 char budget)
-- WitnessEngine:问卷采集、邀请链接、AI 追问访谈;v2 访谈策略(三关系变体问卷、意图分类、退缩检测、证据基础标注、质量门、反机械追问策略)迁自作者此前的平台项目
+- WitnessEngine:证言采集、邀请链接、v4 逐轮生成访谈(单模型每轮一次调用,system prompt + 完整历史 + 最新用户语句 → 一句承接 + 一个问题;informant / self 两种模式在创建邀请时选定;服务端零模型守卫:单问题校验、近 12 条去重、收尾语阻断、一次修复后 503;模型不决定终点);题库版(v3)保留兼容,标记 deprecated;v4 逐轮访谈方式(单模型每轮、无 planner)和守卫正则迁自作者此前的平台项目,提示约束借鉴动机式访谈、关键事件法和认知访谈文献(见 docs/REFERENCES.md)
 - CourtEngine v2:filing with episodes + embedding/keyword pairing + relation judgment + confrontation + divergence map + conviction computation(纯函数)
 - RoomEngine:背后/当面双模式 + 危机词拒绝 + 诊断词重写/降级 + 跨证人泄密保护(高代价 no-talk list + 部分泄露检测 + guided rewrite + 25% 舞台上限)
 - 对外挂载:OpenAI 兼容端点、MCP Server(stdio)、纯库 import(`@openmimic/core` createOpenMimic)
@@ -191,7 +193,7 @@ resp = client.chat.completions.create(
 - 证言集(output-biography):逐章引语验证 + 保密内容过滤 + 无据细节检查 + 主体否决
 - 带权限范围的令牌(scoped tokens):omk_ 前缀;9 种 scope;显式白名单(禁通配符);SHA-256 加盐;fail-closed
 - 能力目录:机器可读能力清单(含 scope 要求),GET /api/capabilities
-- 话题覆盖调度(coverage):逐维度状态(untouched/shallow/covered/cautious);缺失关系推荐
+- 话题覆盖(coverage):computeCoverage 逐维度状态(untouched/shallow/covered/cautious)和缺失关系推荐。在 v4 访谈中仅作为 system prompt 内一行"尚未聊到的方面"可选提示,不是调度器;planQuestions / session fixation 仅用于题库版(v3)路径
 - 邀请短码:8 字符不混淆字母表(29 字符);已接入邀请链接
 - 提示词隔离:所有用户文本入 LLM 前包裹数据块 + 注入检测(flag, don't reject) + 守卫扫描
 - 说话风格画像(style-stats):消息力量画像 + 言语行为模板(10 类) + 常用语;已接入 persona 组装

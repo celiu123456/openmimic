@@ -147,7 +147,7 @@ All evaluation data to date uses **Lin Mo**, a fictional demo character with **h
 ```
             ┌────────────────────────────────────────────────┐
   Extend    │  Plugin layer (unified manifest)               │
-  inward    │  Collectors: questionnaire / freetext / import │
+  inward    │  Collectors: per-turn interview / freetext / import │
   (community│  Scenarios: review meeting / custom scripts    │
    plugins) │  Bridges: webhook / external system sync       │
             ├────────────────────────────────────────────────┤
@@ -211,6 +211,8 @@ These measures reduce risk but do not eliminate it. See [docs/ARCHITECTURE.md](d
 - The **DEPLOY-FOR-AI** onboarding format is modeled after Twig's.
 
 Claim pairing (finding semantically related claims across witnesses via LLM, embedding cosine, or keyword overlap) is OpenMimic's own mechanism for cross-witness comparison. It is not an implementation of Twig's counter-evidence search.
+
+The v4 per-turn interviewing approach (single model per turn, no planner) and the guard regexes (single-question, dedup, closing-phrase block) were carried over from the author's earlier platform. The prompt constraints draw on motivational interviewing (Miller & Rollnick, 2013), critical incident technique (Flanagan, 1954), and cognitive interview (Fisher & Geiselman, 1992) literature (see [docs/REFERENCES.md](docs/REFERENCES.md)).
 
 ### Planned adaptations (not yet implemented)
 

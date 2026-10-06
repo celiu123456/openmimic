@@ -314,7 +314,7 @@ match). Claims are classified as retained, merged, added, or retired.
 
 ## Interview subsystem
 
-### Coverage-aware scheduling (engines/witness/src/coverage.ts)
+### Coverage (engines/witness/src/coverage.ts)
 
 Cross-witness topic coverage tracking, migrated from the author's earlier
 elder-life-topic platform and rewritten as "one subject x ten observer
@@ -337,7 +337,15 @@ dimensions x multiple witnesses".
 - **adviseRelationGaps()**: recommends which relation types (friend/family/
   colleague) are underrepresented in the current witness pool.
 
-### Session fixation
+**Role in v4 vs legacy path:** In the v4 per-turn interviewer, `computeCoverage`
+provides at most 6 uncovered dimension names as an optional one-line hint inside
+the system prompt ("尚未聊到的方面"), not a scheduler. `planQuestions()` and
+session fixation are used only by the legacy questionnaire-based (v3) path.
+
+### Session fixation -- legacy path only
+
+Used only by the legacy questionnaire-based (v3) interview path; the v4
+per-turn interviewer has no question ordering mechanism.
 
 When `InterviewOptions.adaptiveCoverage` is true, `startInterview()` calls
 the planner and stores the resulting qid order in `state.questionOrder`.
@@ -345,12 +353,14 @@ All subsequent steps (answer, followup, finish) follow this fixed order.
 When the option is false (default), the questionnaire's natural order is
 used and existing behaviour is unchanged.
 
-### Navigator memo (engines/witness/src/navigator.ts)
+### Navigator memo (engines/witness/src/navigator.ts) -- legacy path only
 
 Asynchronous evidence stocktake generated every N answers (default 3, configurable
-via `InterviewOptions.navigatorInterval`). Migrated from the author's earlier
-platform (`interview-navigator.service.ts`) and rewritten as pure functions +
-a single LLM call (no MySQL, no lease, no retry loop).
+via `InterviewOptions.navigatorInterval`). Used only by the legacy questionnaire-based
+(v3) interview path; **not wired into the v4 per-turn interviewer** (v4 source
+explicitly states "No navigator"). Migrated from the author's earlier platform
+(`interview-navigator.service.ts`) and rewritten as pure functions + a single LLM
+call (no MySQL, no lease, no retry loop).
 
 - **NavigatorMemoSchema**: zod-validated JSON with `evidenceBacked`,
   `tentativeInferences`, `liveThreads`, `avoid`, `interviewFeedback`,
@@ -383,7 +393,13 @@ edit the text before it enters the answer.
 - **API contract**: `POST /api/asr` now returns `{ text, lowConfidence,
   confidence }` instead of `{ text }`.
 
-### Graceful closing and pacing
+### Graceful closing and pacing -- legacy path only
+
+These mechanisms apply only to the legacy questionnaire-based (v3) interview
+path. The v4 per-turn interviewer has no model-decided endpoint; the
+interview ends only when the user explicitly finishes in the product UI.
+`interview-state.ts`'s follow-up gate and `MAX_FOLLOWUPS_PER_SESSION` (5)
+also apply only to the legacy path.
 
 - **Opening expectation**: `startInterview()` returns an `opening` string
   telling the witness approximately how long, that they can skip, and that
@@ -400,30 +416,52 @@ edit the text before it enters the answer.
   parts are submitted normally; remaining questions are not marked as
   avoided (they were simply not reached).
 
-### v4 per-turn interviewer (engines/witness/src/interviewer-v4/)
+### v4 per-turn interviewer (engines/witness/src/interviewer-v4/) -- main path
 
-Replaces the fixed questionnaire with single-model per-turn generation.
-Each turn sends the complete conversation history to the LLM, which
-decides what to ask next. No fixed questions, no navigator, no planning.
+The main interview path. Replaces the fixed questionnaire with single-model
+per-turn generation. One LLM call per turn: system prompt + full conversation
+history + latest user utterance produces at most one acknowledgement sentence
+and one question. No fixed questions, no navigator, no planning.
+
+Two modes, chosen at invite creation (`invite.ts:36`):
+- **informant**: witness describes someone else.
+- **self**: subject describes themselves.
+
+The same module handles both; only the objective sentence and relationship
+binding differ (`objective.ts`).
 
 - **prompt.ts**: builds a Chinese system prompt with identity, role binding,
-  objective, method rules, optional uncovered aspects, and opening/retreat/
-  repair injections.
+  objective, method rules, optional uncovered aspects (at most 6 dimension
+  names as a non-binding reference, not a scheduler), and opening/retreat/
+  repair injections. The prompt explicitly states the model does not decide
+  when to end the interview.
 - **guards.ts**: server-side zero-model guards reusing `interview-state.ts`
-  (single question, dedup, closing regex, acknowledgement check). One repair
-  retry on failure; second failure returns `interview_generation_failed`.
+  utilities (single question via `isAcknowledgementPlusQuestion`, dedup via
+  `isDuplicateFollowup` against last 12 questions, closing-phrase block via
+  `containsPrematureEnding`, acknowledgement-part check). One repair retry
+  on failure; second failure returns 503 `interview_generation_failed` and
+  the history stays unchanged -- never a fake question.
 - **session.ts**: chat session state with Zod schemas. Rejected outputs
   stay in turns with `rejected: true` for audit but are excluded from
   history sent to the LLM.
 - **interviewer.ts**: `startChat`, `say`, `finishChat`, `getChatHistory`.
   Converts turns to `TestimonyAnswer[]` via existing `submitTestimony`.
-- **Plugin**: registered as `collector:chat` alongside `collector:interview`.
-  Requires LLM; when unavailable, chat routes return 404 while questionnaire
-  routes continue working.
+- **Plugin**: registered as `collector:chat` alongside the legacy
+  `collector:interview`. Requires LLM; when unavailable, chat routes return
+  404 while questionnaire routes continue working.
+- **Chat page** (`web/src/views/ChatView.vue`): voice input first when ASR
+  is configured (`MicButton` shown when `asrReady`), text input as fallback.
+  ASR confidence below 0.72 triggers a confirmation prompt before the text
+  enters history.
 
-Two scenarios share the same module with different objective sentences:
-- **informant**: witness describes someone else.
-- **self**: subject describes themselves.
+The v4 approach (single-model per-turn, no planner) and the guard regexes
+were carried over from the author's earlier platform. The prompt constraints
+draw on motivational-interviewing, critical-incident, and cognitive-interview
+literature (see `docs/REFERENCES.md` section G).
+
+The legacy fixed-questionnaire interviewer (`collector:interview`, routes
+`/api/invites/:token/interview` etc.) is kept for compatibility and marked
+deprecated in `mount-rest.ts`.
 
 See [docs/INTERVIEWER-V4.md](INTERVIEWER-V4.md) for full details.
 

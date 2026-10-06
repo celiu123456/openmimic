@@ -82,6 +82,14 @@
 
 32. **[unverified]** Luft, J., & Ingham, H. (1955). The Johari Window: A Graphic Model of Interpersonal Awareness. *Proceedings of the Western Training Laboratory in Group Development*.
 
+## G. Interview Methodology (v4 prompt constraints)
+
+33. **[unverified]** Miller, W. R., & Rollnick, S. (2013). *Motivational Interviewing: Helping People Change* (3rd ed.). Guilford Press. (Open questions, reflective listening, resisting the righting reflex, rolling with resistance. Source for v4 prompt rules on acknowledgement-before-question, no evaluation, boundary respect.)
+
+34. **[unverified]** Flanagan, J. C. (1954). The Critical Incident Technique. *Psychological Bulletin*, 51(4), 327--358. (Anchoring on concrete episodes rather than abstract traits. Source for v4's preference for specific moments over general characterizations.)
+
+35. **[unverified]** Fisher, R. P., & Geiselman, R. E. (1992). *Memory-Enhancing Techniques for Investigative Interviewing: The Cognitive Interview*. Charles C Thomas. (Context reinstatement, open-ended retrieval, witness-compatible questioning. Source for v4's "help them recall where they were, what they were doing" method rule.)
+
 ---
 
 ## Maintenance
